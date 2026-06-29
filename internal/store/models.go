@@ -28,6 +28,11 @@ const (
 )
 
 // Agent is Podium's durable definition of a named colleague.
+//
+// MCPConfig is treated as sensitive (it may embed server commands, local URLs,
+// tokens, or credentials) and is never serialized to clients or logs — the
+// `json:"-"` tag redacts it at every JSON boundary, REST and WebSocket alike
+// (R8.29). It is read/written only through the store's column mapping.
 type Agent struct {
 	Name           string
 	Provider       config.Provider
@@ -36,7 +41,7 @@ type Agent struct {
 	Effort         string
 	PermissionMode config.PermissionMode
 	Fallback       []string
-	MCPConfig      string
+	MCPConfig      string `json:"-"`
 	CreatedAt      string
 	UpdatedAt      string
 }

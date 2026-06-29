@@ -5,6 +5,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,6 +25,8 @@ type Options struct {
 	Adapter  adapter.Adapter
 	Global   config.Global
 	Profiles []config.Profile
+	// Logger receives structured run logging (R11.5). Defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 // Core coordinates typed persistence, filesystem scaffolding, instruction
@@ -36,6 +39,7 @@ type Core struct {
 	profiles map[string]config.Profile
 	composer InstructionComposer
 	ledger   *projects.Ledger
+	log      *slog.Logger
 }
 
 // New creates a Core service.
@@ -57,6 +61,10 @@ func New(opts Options) (*Core, error) {
 	if global.PermissionMode == "" {
 		global.PermissionMode = config.PermissionApprove
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	c := &Core{
 		paths:    opts.Paths,
 		store:    opts.Store,
@@ -65,6 +73,7 @@ func New(opts Options) (*Core, error) {
 		profiles: map[string]config.Profile{},
 		composer: NewFileComposer(opts.Paths),
 		ledger:   projects.New(opts.Paths.ProjectsDir),
+		log:      logger,
 	}
 	for _, profile := range opts.Profiles {
 		c.profiles[profile.Name] = profile

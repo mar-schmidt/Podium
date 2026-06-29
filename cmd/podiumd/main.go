@@ -119,6 +119,7 @@ func run() error {
 		Adapter:  adapter.NewRouter(adapters),
 		Global:   cfg.Global,
 		Profiles: cfg.Profiles,
+		Logger:   log,
 	})
 	if err != nil {
 		return err

@@ -83,6 +83,10 @@ podium agents create builder --provider claude --model sonnet --effort medium --
 | `--effort level` | Default effort (`low`, `medium`, `high`, `xhigh`, `max`). |
 | `--permission approve|yolo` | Agent permission default. |
 
+Choosing `--permission yolo` prints a whole-machine-access warning: in `yolo`
+every tool call is auto-approved and the workspace is **not** a sandbox (R8.31).
+See [Security & logging](security.md) for the full permission model.
+
 ### `podium chat`
 
 Send one chat turn through the daemon. Use `--agent` to create a new CLI-origin

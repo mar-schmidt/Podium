@@ -51,7 +51,11 @@ func (c *Core) HandleSlashCommand(ctx context.Context, sessionID, input string) 
 			return SlashResult{Handled: true, Session: sess, Notice: "Usage: /permission approve|yolo"}, nil
 		}
 		updated, err := c.store.UpdateSessionSettings(ctx, sess.ID, sess.Model, sess.Effort, mode)
-		return SlashResult{Handled: true, Session: updated, Notice: fmt.Sprintf("Permission mode set to %s", mode)}, err
+		notice := fmt.Sprintf("Permission mode set to %s", mode)
+		if mode == config.PermissionYolo {
+			notice = "Permission mode set to yolo — whole-machine access, every tool call auto-approved. The workspace is NOT a sandbox (R8.31). Switch back with /permission approve."
+		}
+		return SlashResult{Handled: true, Session: updated, Notice: notice}, err
 	case "profile":
 		if arg == "" {
 			return SlashResult{Handled: true, Session: sess, Notice: "Usage: /profile <name|default>"}, nil

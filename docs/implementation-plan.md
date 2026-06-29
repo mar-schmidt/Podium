@@ -174,6 +174,37 @@
     task create → assign → start → roadmap session with provenance, plus the
     nav/pages. New Go tests cover the projects ledger round-trip, task CRUD, and
     StartTask provenance/in_progress transition.
+- **Phase 9 — Cross-platform hardening, packaging, security & logging polish: ✅
+  COMPLETE (2026-06-29).** Final v1 phase. **Cross-platform:** replaced the
+  Windows process-kill stub with a real `taskkill /T /F` tree sweep (parity with
+  the Unix negative-PID group kill, so npm-shim → node → worker trees die
+  together — R10.4); `ResolveHome` now anchors a relative/`~` `PODIUM_HOME` to an
+  absolute path at startup so a daemon `chdir` or relative override can't relocate
+  the storage root (R10.2). Verified clean cross-compiles (`windows/linux/darwin`
+  × `amd64/arm64`, pure-Go, SPA embedded) and the configurable bind +
+  `PODIUM_HOME` override (Principle 7). **Security review pass:** `Agent.MCPConfig`
+  is now `json:"-"` so the sensitive MCP config is redacted at *every* JSON
+  boundary — REST and WebSocket alike — in one place (R8.29); confirmed composed
+  system prompts/instructions are an internal `[]byte` never present in any client
+  DTO or log (R8.30); confirmed profile/auth isolation unsets `CLAUDE_CONFIG_DIR`/
+  `CODEX_HOME` when no profile (R8.32); added explicit `yolo` whole-machine opt-in
+  warnings on the `/permission yolo` slash notice and CLI `agents create` (R8.31).
+  **Logging (R11.5):** added an optional `slog.Logger` to `core` (daemon wires its
+  logger in) and structured interactive-run records (`event=run`: turn
+  started/finished/fallback/aborted/failed with session/agent/origin/provider/
+  outcome, identifiers-not-payloads) to match the scheduler's existing run logs.
+  **Docs:** new `docs/security.md` (permission modes, redaction, isolation, run
+  logging, process control), finalized `docs/integrations/*` as the shipped
+  contract, tightened the README quickstart (correct `bin/` paths, `make cross`,
+  HA-packaging note).
+  - *Verification:* `go build ./...`, `go vet ./...`, `go test ./...` (incl.
+    `-race` on `core`/`store`/`config`/`exec`) green; `make build` succeeds;
+    `windows/amd64` + `linux/arm64` cross-builds compile. New tests: agent-JSON
+    MCP-config redaction guard, relative-`PODIUM_HOME`→absolute, and the `yolo`
+    opt-in warning notice. *Note:* the Windows `taskkill` path and full
+    cross-OS end-to-end runbook are compile-verified here; live execution on
+    Windows/Linux hosts is the packaging follow-up (the only OS-specific code is
+    isolated to `internal/exec`).
 
 ## Context
 

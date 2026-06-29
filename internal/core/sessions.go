@@ -155,31 +155,52 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 
 		current := sess
 		tried := map[string]bool{}
+		runLog := c.log.With(
+			"event", "run",
+			"session", sess.ID,
+			"agent", sess.AgentName,
+			"origin", string(sess.Origin),
+			"unattended", opts.Unattended,
+		)
+		runLog.Info("turn started",
+			"provider", string(current.Provider),
+			"profile", current.Profile,
+			"permission", string(current.PermissionMode),
+		)
 		for {
 			tried[targetKey(current.Provider, current.Profile)] = true
 			if err := c.ensureSessionInstructions(ctx, current); err != nil {
+				runLog.Warn("turn failed", "stage", "compose", "error", err)
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 				return
 			}
 			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, userMessage, opts))
 			if err != nil {
+				runLog.Warn("turn failed", "stage", "dispatch", "provider", string(current.Provider), "error", err)
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 				return
 			}
 			assistant, rateLimited, ok := c.consumeAdapterEvents(ctx, streamOut, sessionID, events)
 			if !ok {
+				runLog.Info("turn aborted", "provider", string(current.Provider))
 				return
 			}
 			if rateLimited {
 				next, err := c.nextFallbackSession(ctx, current, tried)
 				if err != nil {
+					runLog.Warn("turn failed", "stage", "fallback", "from", targetLabel(current.Provider, current.Profile), "error", err)
 					_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 					return
 				}
+				runLog.Info("turn fallback",
+					"from", targetLabel(current.Provider, current.Profile),
+					"to", targetLabel(next.Provider, next.Profile),
+				)
 				current = next
 				continue
 			}
 			if assistant.Len() == 0 {
+				runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", 0)
 				return
 			}
 			assistantMessages, err := c.store.AppendMessages(ctx, sessionID, []store.Message{{
@@ -187,6 +208,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				Content: assistant.String(),
 			}})
 			if err != nil {
+				runLog.Warn("turn failed", "stage", "persist", "error", err)
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 				return
 			}
@@ -198,6 +220,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 			}
 			go c.autoNameSessionBackground(sessionID)
 			go c.refreshRollingSummaryBackground(sessionID)
+			runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", assistant.Len())
 			_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: adapter.EventTurnDone})
 			return
 		}

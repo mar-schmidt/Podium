@@ -185,6 +185,10 @@ func TestSlashCommandsUpdateSessionSettingsAndMetadata(t *testing.T) {
 	if result.Session.PermissionMode != config.PermissionYolo {
 		t.Fatalf("permission slash did not update session: %+v", result.Session)
 	}
+	// Switching to yolo must carry an explicit whole-machine opt-in warning (R8.31).
+	if !strings.Contains(strings.ToLower(result.Notice), "whole-machine") {
+		t.Fatalf("yolo slash missing opt-in warning: %q", result.Notice)
+	}
 	result, err = c.HandleSlashCommand(ctx, session.ID, "/name Launch Plan")
 	if err != nil {
 		t.Fatalf("name slash: %v", err)

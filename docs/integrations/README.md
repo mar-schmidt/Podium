@@ -6,8 +6,14 @@ layer implements against (requirements §8).
 
 | Provider | Contract | Status |
 | --- | --- | --- |
-| Claude | [`claude.md`](claude.md) | implemented in Phase 2 |
-| Codex | [`codex.md`](codex.md) | implemented in Phase 5 |
+| Claude | [`claude.md`](claude.md) | implemented (final v1 contract) |
+| Codex | [`codex.md`](codex.md) | implemented (final v1 contract) |
+
+These pages describe the contract **as implemented and shipped** in v1 — the
+flags, protocol messages, and permission flow above match the `internal/adapter`
+code. Security behaviour common to both providers (permission modes, profile
+isolation, MCP-config and credential redaction, run logging) is documented in
+[`../security.md`](../security.md).
 
 The grounding reference (process model, CLI parameters, app-server protocol, and
 the OpenClaw policy values Podium deliberately inverts) is captured in

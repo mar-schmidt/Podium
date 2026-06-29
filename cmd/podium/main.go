@@ -214,6 +214,10 @@ func newAgentsCreateCmd(addr *string) *cobra.Command {
 				return err
 			}
 			fmt.Printf("created agent %s (%s)\n", agent.Name, agent.Provider)
+			if agent.PermissionMode == config.PermissionYolo {
+				fmt.Println("  ⚠ yolo: whole-machine access — every tool call is auto-approved and the")
+				fmt.Println("    workspace is NOT a sandbox (R8.31). Use approve mode unless you mean it.")
+			}
 			return nil
 		},
 	}

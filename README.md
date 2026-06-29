@@ -7,36 +7,53 @@ chat sessions, a canonical history that replays onto a fresh backing CLI session
 on any profile/provider switch, an embedded scheduler, and a shared project
 ledger. It ships as a single Go binary with an embedded Svelte web UI.
 
-> **Status:** under active development. Phases 0-8 are implemented: the daemon,
-> durable agents/sessions, Claude and Codex adapters, CLI chat, WebSocket API,
-> the full browser UI (Chat, Roadmap kanban, Agents, Schedules, Projects),
-> slash controls, permission relay, auto-naming, profile switching, history
-> replay, rolling summaries, fallback, the embedded scheduler, and the shared
-> project ledger + roadmap tasks (start-on-demand and scheduled pickup) are in
-> place. See [the implementation plan](#implementation-plan) for what's coming.
+> **Status:** v1 feature-complete (Phases 0–9). The daemon, durable
+> agents/sessions, Claude and Codex adapters, CLI chat, WebSocket API, the full
+> browser UI (Chat, Roadmap kanban, Agents, Schedules, Projects), slash controls,
+> permission relay, auto-naming, profile switching, history replay, rolling
+> summaries, fallback, the embedded scheduler, and the shared project ledger +
+> roadmap tasks (start-on-demand and scheduled pickup) are all in place, with
+> cross-platform hardening and a security/logging review pass complete. See
+> [the implementation plan](docs/implementation-plan.md) for the phase log.
 
 ## Quick start (dev)
 
 Prerequisites: Go 1.26+, Node 20+ (for building the web UI).
 
 ```sh
-# 1. Build the web UI (embedded into the daemon).
-cd web && npm install && npm run build && cd ..
+# Build the web UI (vite) and both binaries into bin/ with a version stamp.
+make build
 
-# 2. Build the binaries.
-make build          # or: go build ./cmd/podiumd && go build ./cmd/podium
+# Run the daemon (foreground). It scaffolds ~/.podium on first run.
+./bin/podiumd
 
-# 3. Run the daemon (foreground). It scaffolds ~/.podium on first run.
-./podiumd
-
-# 4. In another shell, check it's live.
-./podium status
+# In another shell, check it's live.
+./bin/podium status
 ```
 
 Open http://127.0.0.1:8787 for the web UI.
 
 To develop the frontend with hot reload, run `npm run dev` in `web/` (it proxies
 API/WebSocket traffic to a running `podiumd`).
+
+### Cross-platform builds & packaging
+
+`podiumd` is a single static binary with the SPA embedded — no external assets,
+no cgo (pure-Go SQLite via `modernc.org/sqlite`), so it cross-compiles cleanly:
+
+```sh
+make cross    # linux/darwin/windows × amd64/arm64 → bin/<os>-<arch>/
+```
+
+All runtime state lives under one overridable root, so running Podium as a Home
+Assistant add-on or in a container is a packaging step, not a rewrite:
+
+```sh
+PODIUM_HOME=/data/podium ./bin/podiumd   # relative values are anchored absolute
+```
+
+The web bind is configurable in `config.yaml` (`server.bind` / `server.port`,
+default `127.0.0.1:8787`); see [Configuration](docs/configuration.md).
 
 ## Layout
 
@@ -59,6 +76,7 @@ All runtime state lives under `$PODIUM_HOME` (default `~/.podium/`).
 - [Configuration](docs/configuration.md)
 - [Scheduling](docs/scheduling.md)
 - [Projects & Roadmap](docs/projects.md)
+- [Security & logging](docs/security.md) — permission modes, redaction, run logs
 - [Integration contracts](docs/integrations/README.md)
 
 ## Implementation plan

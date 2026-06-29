@@ -33,9 +33,17 @@ type Paths struct {
 // ResolveHome returns the absolute storage root. Precedence:
 //  1. $PODIUM_HOME if set (with ~ expansion),
 //  2. ~/.podium otherwise.
+//
+// The result is always absolute: a daemon may chdir (or be launched from an
+// arbitrary cwd), so a relative PODIUM_HOME like "podium-data" must be anchored
+// at resolution time rather than re-interpreted later (R10.2).
 func ResolveHome() (string, error) {
 	if v := strings.TrimSpace(os.Getenv(EnvHome)); v != "" {
-		return expandTilde(v)
+		expanded, err := expandTilde(v)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Abs(expanded)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

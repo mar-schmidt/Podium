@@ -1,0 +1,76 @@
+# WebSocket Contract
+
+Phase 3 adds a browser-native WebSocket endpoint at:
+
+```text
+GET /api/ws
+```
+
+The browser sends JSON client messages and receives JSON server messages. The
+TypeScript mirror lives in `web/src/lib/types.ts`; the Go source of truth lives
+in `internal/server/ws_contract.go`.
+
+## Client Messages
+
+```json
+{"type":"list"}
+```
+
+Refresh agents and sessions.
+
+```json
+{"type":"create_session","request_id":"...","agent_name":"jared"}
+```
+
+Create a web-origin session.
+
+```json
+{"type":"send_turn","request_id":"...","agent_name":"jared","message":"Hello"}
+{"type":"send_turn","request_id":"...","session_id":"...","message":"Continue"}
+```
+
+Send a turn to a new or existing session.
+
+```json
+{
+  "type": "permission_decision",
+  "request_id": "<permission request id>",
+  "decision": {"behavior":"allow","updatedInput":{}}
+}
+```
+
+Answer an inline permission request. Denies use:
+
+```json
+{"behavior":"deny","message":"Denied from web"}
+```
+
+## Server Messages
+
+| Type | Payload |
+| --- | --- |
+| `hello` | Connection acknowledgement. |
+| `state` | `agents`, `sessions`. |
+| `session` | Active/created session. |
+| `history` | Ordered stored messages. |
+| `message` | One stored user or assistant message. |
+| `delta` | Incremental assistant text. |
+| `assistant` | Final assistant text fallback. |
+| `permission_request` | Tool approval request. |
+| `done` | Turn complete. |
+| `error` | Error string. |
+
+## REST Support
+
+The web UI also uses REST for initial CRUD and history fetches:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/agents` | List agents. |
+| `POST /api/agents` | Create an agent. |
+| `GET /api/agents/{name}` | Get one agent. |
+| `GET /api/sessions` | List sessions. |
+| `POST /api/sessions` | Create a session. |
+| `GET /api/sessions/{id}` | Get one session and ordered history. |
+
+The older Phase 2 NDJSON `POST /api/chat` endpoint remains for the CLI.

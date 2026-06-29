@@ -75,6 +75,24 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
+	if s.core == nil {
+		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/api/agents/")
+	if name == "" {
+		http.Error(w, "agent name is required", http.StatusBadRequest)
+		return
+	}
+	agent, err := s.core.GetAgent(r.Context(), name)
+	writeJSON(w, agent, err)
+}
+
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if s.core == nil {
 		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
@@ -101,6 +119,38 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+type sessionDetail struct {
+	Session store.Session   `json:"session"`
+	History []store.Message `json:"history"`
+}
+
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if s.core == nil {
+		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	if id == "" {
+		http.Error(w, "session id is required", http.StatusBadRequest)
+		return
+	}
+	session, err := s.core.GetSession(r.Context(), id)
+	if err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	history, err := s.core.History(r.Context(), id)
+	if err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	writeJSON(w, sessionDetail{Session: session, History: history}, nil)
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0
+	nhooyr.io/websocket v1.8.17
 )
 
 require (

@@ -1,0 +1,40 @@
+package server
+
+import (
+	"encoding/json"
+
+	"github.com/mar-schmidt/Podium/internal/adapter"
+	"github.com/mar-schmidt/Podium/internal/store"
+)
+
+// ClientMessage is the browser-to-daemon WebSocket contract.
+type ClientMessage struct {
+	Type      string                      `json:"type"`
+	RequestID string                      `json:"request_id,omitempty"`
+	AgentName string                      `json:"agent_name,omitempty"`
+	SessionID string                      `json:"session_id,omitempty"`
+	Message   string                      `json:"message,omitempty"`
+	Decision  *adapter.PermissionDecision `json:"decision,omitempty"`
+}
+
+// ServerMessage is the daemon-to-browser WebSocket contract.
+type ServerMessage struct {
+	Type      string                     `json:"type"`
+	RequestID string                     `json:"request_id,omitempty"`
+	Agents    []store.Agent              `json:"agents,omitempty"`
+	Sessions  []store.Session            `json:"sessions,omitempty"`
+	Session   *store.Session             `json:"session,omitempty"`
+	History   []store.Message            `json:"history,omitempty"`
+	Message   *store.Message             `json:"message,omitempty"`
+	Delta     string                     `json:"delta,omitempty"`
+	Request   *adapter.PermissionRequest `json:"request,omitempty"`
+	Error     string                     `json:"error,omitempty"`
+}
+
+func decodeClientMessage(data []byte) (ClientMessage, error) {
+	var msg ClientMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return ClientMessage{}, err
+	}
+	return msg, nil
+}

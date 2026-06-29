@@ -1,10 +1,5 @@
 @import "tailwindcss";
 
-/*
-  Podium theme tokens. The full warm/soft palette (terracotta accent, soft cards)
-  from the Claude design is fleshed out in Phase 4. This seeds the base so the
-  skeleton renders on-brand.
-*/
 @theme {
   --color-bg: #efe9e1;
   --color-surface: #faf7f2;
@@ -23,4 +18,157 @@ body {
     -apple-system,
     "Segoe UI",
     sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.field {
+  min-height: 40px;
+  width: 100%;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 70%);
+  padding: 0 12px;
+  outline: none;
+}
+
+.field:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(196 99 63 / 16%);
+}
+
+.button {
+  min-height: 40px;
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  background: var(--color-accent);
+  color: white;
+  padding: 0 14px;
+  font-weight: 650;
+}
+
+.button.secondary {
+  border-color: rgb(0 0 0 / 14%);
+  background: rgb(255 255 255 / 62%);
+  color: var(--color-ink);
+}
+
+.list-button {
+  display: flex;
+  min-height: 48px;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.list-button:hover,
+.list-button.selected {
+  border-color: rgb(196 99 63 / 28%);
+  background: rgb(196 99 63 / 10%);
+}
+
+.list-button small {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.status-dot {
+  height: 10px;
+  width: 10px;
+  border-radius: 999px;
+  background: #b54b3c;
+}
+
+.status-dot.live {
+  background: #2f9b68;
+}
+
+.bubble {
+  max-width: min(720px, 82%);
+  align-self: flex-end;
+  border-radius: 8px;
+  background: white;
+  padding: 12px 14px;
+  box-shadow: 0 1px 8px rgb(0 0 0 / 5%);
+  white-space: pre-wrap;
+}
+
+.bubble.assistant {
+  align-self: flex-start;
+  background: #fff9f4;
+}
+
+.bubble p {
+  margin: 0;
+}
+
+.role {
+  margin-bottom: 5px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.permission {
+  display: flex;
+  max-width: min(720px, 92%);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgb(196 99 63 / 35%);
+  border-radius: 8px;
+  background: #fff3ec;
+  padding: 14px;
+}
+
+.permission pre {
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+.error {
+  border-radius: 6px;
+  background: #ffe5e0;
+  color: #7d2419;
+  padding: 10px 12px;
+}
+
+@media (max-width: 760px) {
+  main {
+    grid-template-columns: 1fr !important;
+  }
+
+  aside {
+    max-height: 42vh;
+    overflow: auto;
+    border-right: 0 !important;
+    border-bottom: 1px solid rgb(0 0 0 / 10%);
+  }
+
+  .bubble,
+  .permission {
+    max-width: 100%;
+  }
 }

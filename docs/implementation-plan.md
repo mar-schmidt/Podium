@@ -54,6 +54,17 @@
     5. The Claude permission MCP response shape was adjusted during live testing
     to match Claude Code's validator: a single MCP text block containing the JSON
     decision.
+- **Phase 3 — WebSocket server contract + browser slice: ✅ COMPLETE
+  (2026-06-29).** Added typed WebSocket endpoint `/api/ws` with Go contract
+  structs and mirrored TypeScript types, REST get/list support for agents and
+  sessions, and a minimal Svelte browser chat surface that can create agents,
+  start web-origin sessions, stream turns, list/select sessions, and answer
+  permission requests inline. The Phase 2 NDJSON endpoint remains for the CLI.
+  Docs added in `docs/websocket.md`. Verified with fake-adapter WebSocket tests
+  plus frontend build.
+  - *Notes:* this is a functional contract slice, not the Phase 4 polished chat
+    MVP; visual refinement, slash chips, auto-naming, and richer session filters
+    remain deferred.
 
 ## Context
 

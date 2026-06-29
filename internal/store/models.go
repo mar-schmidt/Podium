@@ -71,3 +71,39 @@ type Message struct {
 	Content   string
 	CreatedAt string
 }
+
+// RunTrigger records what caused a scheduled run.
+type RunTrigger string
+
+const (
+	// TriggerCron marks a run fired by the embedded cron scheduler.
+	TriggerCron RunTrigger = "cron"
+	// TriggerManual marks a run started by an explicit "Run now".
+	TriggerManual RunTrigger = "manual"
+)
+
+// RunStatus is the lifecycle state of a scheduled run.
+type RunStatus string
+
+const (
+	// RunRunning marks an in-flight scheduled run.
+	RunRunning RunStatus = "running"
+	// RunSuccess marks a scheduled run that completed without error.
+	RunSuccess RunStatus = "success"
+	// RunError marks a scheduled run that failed.
+	RunError RunStatus = "error"
+)
+
+// ScheduleRun records one execution of a schedule. It links the schedule to the
+// durable session it produced (R7.9 / R4.12) so the run can be revisited and
+// continued manually.
+type ScheduleRun struct {
+	ID           string
+	ScheduleName string
+	SessionID    string
+	Trigger      RunTrigger
+	Status       RunStatus
+	Error        string
+	StartedAt    string
+	FinishedAt   string
+}

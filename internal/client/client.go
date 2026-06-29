@@ -17,6 +17,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
@@ -164,6 +165,40 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent,
 // request.
 func (c *Client) DecidePermission(ctx context.Context, id string, decision adapter.PermissionDecision) error {
 	return c.postJSON(ctx, "/api/permission-decisions/"+id, decision, nil)
+}
+
+// ListSchedules fetches schedule status (next run + recent run history) from the
+// daemon.
+func (c *Client) ListSchedules(ctx context.Context) ([]schedule.Status, error) {
+	var statuses []schedule.Status
+	if err := c.getJSON(ctx, "/api/schedules", &statuses); err != nil {
+		return nil, err
+	}
+	return statuses, nil
+}
+
+// RunSchedule triggers a manual run and returns the recorded run. The run
+// executes a full agent turn, so this uses a client without the short default
+// timeout.
+func (c *Client) RunSchedule(ctx context.Context, name string) (store.ScheduleRun, error) {
+	var run store.ScheduleRun
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/schedules/"+name+"/run", nil)
+	if err != nil {
+		return run, err
+	}
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return run, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return run, fmt.Errorf("run schedule %q status %d: %s", name, resp.StatusCode, bytes.TrimSpace(body))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&run); err != nil {
+		return run, err
+	}
+	return run, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

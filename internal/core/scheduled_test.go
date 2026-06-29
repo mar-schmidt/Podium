@@ -1,0 +1,157 @@
+package core
+
+import (
+	"context"
+	"os"
+	"testing"
+
+	"github.com/mar-schmidt/Podium/internal/adapter"
+	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/store"
+)
+
+// newScheduledTestCore builds a core backed by a fake adapter and returns the
+// fake so tests can script permission behavior.
+func newScheduledTestCore(t *testing.T) (*Core, *adapter.Fake, func()) {
+	t.Helper()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	fake := adapter.NewFake()
+	c, err := New(Options{Paths: paths, Store: db, Adapter: fake})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	return c, fake, func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	}
+}
+
+func TestRunScheduledCreatesProvenancedSession(t *testing.T) {
+	ctx := context.Background()
+	c, fake, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+	fake.Responses = []string{"did the thing"}
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "jared", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	sess, err := c.RunScheduled(ctx, ScheduledRunRequest{
+		ScheduleName: "morning-calendar",
+		RunID:        "run-1",
+		AgentName:    "jared",
+		Task:         "Summarise the calendar.",
+	})
+	if err != nil {
+		t.Fatalf("run scheduled: %v", err)
+	}
+	if sess.Origin != store.OriginSchedule {
+		t.Fatalf("origin = %q, want schedule", sess.Origin)
+	}
+	if sess.ScheduleID != "morning-calendar" || sess.RunID != "run-1" {
+		t.Fatalf("missing schedule/run linkage: %+v", sess)
+	}
+
+	history, err := c.History(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(history) != 2 || history[0].Role != store.RoleUser || history[1].Content != "did the thing" {
+		t.Fatalf("unexpected scheduled history: %+v", history)
+	}
+
+	// The session is discoverable by schedule for "revisit and continue manually".
+	bySchedule, err := c.store.ListSessionsBySchedule(ctx, "morning-calendar")
+	if err != nil {
+		t.Fatalf("list by schedule: %v", err)
+	}
+	if len(bySchedule) != 1 || bySchedule[0].ID != sess.ID {
+		t.Fatalf("schedule session not linked for revisit: %+v", bySchedule)
+	}
+}
+
+func TestRunScheduledPreapprovedDeniesUnlistedTool(t *testing.T) {
+	ctx := context.Background()
+	c, fake, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+	fake.PermissionTool = "Bash"
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "router", Provider: config.ProviderCodex}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := c.RunScheduled(ctx, ScheduledRunRequest{
+		ScheduleName: "nightly",
+		RunID:        "run-deny",
+		AgentName:    "router",
+		Task:         "Try to run a command.",
+		// preapproved with empty allow-list: deny all side effects.
+	}); err != nil {
+		t.Fatalf("run scheduled: %v", err)
+	}
+
+	decisions := fake.RecordedDecisions()
+	if len(decisions) == 0 {
+		t.Fatal("expected a permission decision to be recorded")
+	}
+	if decisions[0].Behavior != "deny" {
+		t.Fatalf("preapproved empty allow-list should deny, got %q", decisions[0].Behavior)
+	}
+}
+
+func TestRunScheduledPreapprovedAllowsListedTool(t *testing.T) {
+	ctx := context.Background()
+	c, fake, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+	fake.PermissionTool = "Bash"
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "router", Provider: config.ProviderCodex}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := c.RunScheduled(ctx, ScheduledRunRequest{
+		ScheduleName: "nightly",
+		RunID:        "run-allow",
+		AgentName:    "router",
+		AllowedTools: []string{"Bash"},
+		Task:         "Run an allow-listed command.",
+	}); err != nil {
+		t.Fatalf("run scheduled: %v", err)
+	}
+
+	decisions := fake.RecordedDecisions()
+	if len(decisions) == 0 {
+		t.Fatal("expected a permission decision to be recorded")
+	}
+	if decisions[0].Behavior != "allow" {
+		t.Fatalf("allow-listed tool should be allowed, got %q", decisions[0].Behavior)
+	}
+}
+
+func TestAllowListRelayDecisions(t *testing.T) {
+	relay := NewAllowListRelay([]string{"Read", "LS"})
+	allow, _ := relay.RequestPermission(context.Background(), adapter.PermissionRequest{ToolName: "Read"}, 0)
+	if allow.Behavior != "allow" {
+		t.Fatalf("Read should be allowed, got %q", allow.Behavior)
+	}
+	deny, _ := relay.RequestPermission(context.Background(), adapter.PermissionRequest{ToolName: "Bash"}, 0)
+	if deny.Behavior != "deny" {
+		t.Fatalf("Bash should be denied, got %q", deny.Behavior)
+	}
+
+	empty := NewAllowListRelay(nil)
+	d, _ := empty.RequestPermission(context.Background(), adapter.PermissionRequest{ToolName: "Read"}, 0)
+	if d.Behavior != "deny" {
+		t.Fatalf("empty allow-list should deny all, got %q", d.Behavior)
+	}
+}

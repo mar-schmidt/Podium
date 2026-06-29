@@ -61,6 +61,14 @@ type TurnSettings struct {
 	PermissionMode   config.PermissionMode
 	WorkspaceDir     string
 	PermissionTurnID string
+	// Unattended marks a run with no human at the keyboard (a scheduled run).
+	// In approve mode this selects the "preapproved" policy (§7.7): permission
+	// requests are resolved without a human — via AllowedTools natively on
+	// Claude, and via the in-process Relay on Codex — never queued for a person.
+	Unattended bool
+	// AllowedTools is the preapproved allow-list for an unattended run. Tools not
+	// listed are auto-denied. Empty means deny all side-effecting actions.
+	AllowedTools []string
 }
 
 // RateStatus reports provider-exposed rate-limit utilization when available.

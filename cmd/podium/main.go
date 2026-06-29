@@ -45,6 +45,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newStatusCmd(&addr))
 	root.AddCommand(newAgentsCmd(&addr))
 	root.AddCommand(newChatCmd(&addr))
+	root.AddCommand(newSchedulesCmd(&addr))
 	return root
 }
 
@@ -210,6 +211,91 @@ func newChatCmd(addr *string) *cobra.Command {
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent name for a new session")
 	cmd.Flags().StringVar(&sessionID, "session", "", "existing session ID to continue")
 	return cmd
+}
+
+func newSchedulesCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "schedules",
+		Short: "Inspect and trigger scheduled routines",
+		Long: "Schedules are self-describing markdown files under ~/.podium/schedules/.\n" +
+			"List their next-run times and run history, or trigger a run on demand.",
+		Example: "  podium schedules list\n  podium schedules run morning-calendar",
+	}
+	cmd.AddCommand(newSchedulesListCmd(addr))
+	cmd.AddCommand(newSchedulesRunCmd(addr))
+	return cmd
+}
+
+func newSchedulesListCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Short:   "List schedules with next-run time and recent runs",
+		Long:    "Fetches every schedule file's state from podiumd: timing, agent, permission policy, next run, and recent run history.",
+		Example: "  podium schedules list",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			statuses, err := c.ListSchedules(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if len(statuses) == 0 {
+				fmt.Println("no schedules (drop a *.md file in ~/.podium/schedules/)")
+				return nil
+			}
+			for _, s := range statuses {
+				if s.ParseError != "" {
+					fmt.Printf("%s\t[invalid] %s\n", s.Name, s.ParseError)
+					continue
+				}
+				timing := s.Cron
+				if s.Every != "" {
+					timing = "every " + s.Every
+				}
+				state := "enabled"
+				if !s.Enabled {
+					state = "disabled"
+				}
+				next := "-"
+				if s.NextRun != nil {
+					next = s.NextRun.Local().Format("Mon 15:04")
+				}
+				fmt.Printf("%s\t%s\tagent=%s\t%s\t%s\tnext=%s\truns=%d\n",
+					s.Name, state, s.Agent, timing, s.RunPermission, next, len(s.Runs))
+			}
+			return nil
+		},
+	}
+}
+
+func newSchedulesRunCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "run <name>",
+		Short:   "Trigger a schedule immediately",
+		Long:    "Runs a schedule on demand through podiumd. The run creates a durable schedule-origin session you can revisit and continue manually.",
+		Example: "  podium schedules run morning-calendar",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			run, err := c.RunSchedule(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("run %s: %s\n", run.ID, run.Status)
+			if run.SessionID != "" {
+				fmt.Printf("  session: %s\n", run.SessionID)
+			}
+			if run.Error != "" {
+				fmt.Printf("  error: %s\n", run.Error)
+			}
+			return nil
+		},
+	}
 }
 
 func promptPermission(ctx context.Context, c *client.Client, req adapter.PermissionRequest) error {

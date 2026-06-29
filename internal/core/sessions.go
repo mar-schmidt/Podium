@@ -90,6 +90,10 @@ func (c *Core) GetSession(ctx context.Context, id string) (store.Session, error)
 type TurnOptions struct {
 	PermissionTurnID string
 	PermissionRelay  adapter.PermissionRelay
+	// Unattended marks a turn with no human approver (a scheduled run). It and
+	// AllowedTools select the provider's preapproved policy (§7.7).
+	Unattended   bool
+	AllowedTools []string
 }
 
 // TurnEvent is streamed by core while an adapter turn is running.
@@ -217,6 +221,8 @@ func (c *Core) turnRequest(sess store.Session, history []store.Message, userMess
 			PermissionMode:   sess.PermissionMode,
 			WorkspaceDir:     c.AgentPaths(sess.AgentName).Workspace,
 			PermissionTurnID: firstNonEmpty(opts.PermissionTurnID, fmt.Sprintf("%s-%d", sess.ID, time.Now().UnixNano())),
+			Unattended:       opts.Unattended,
+			AllowedTools:     opts.AllowedTools,
 		},
 		Relay: opts.PermissionRelay,
 	}

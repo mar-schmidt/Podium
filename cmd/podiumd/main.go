@@ -20,6 +20,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/buildinfo"
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
+	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
 	"github.com/mar-schmidt/Podium/internal/store"
 	"github.com/spf13/cobra"
@@ -126,6 +127,16 @@ func run() error {
 		return err
 	}
 
+	scheduler := schedule.New(schedule.Options{
+		Dir:    paths.SchedulesDir,
+		Core:   coreSvc,
+		Store:  db,
+		Logger: log,
+	})
+	scheduler.Start()
+	defer scheduler.Stop()
+	log.Info("scheduler started", "dir", paths.SchedulesDir)
+
 	srv := server.New(server.Options{
 		Bind: cfg.Server.Bind,
 		Port: cfg.Server.Port,
@@ -133,7 +144,8 @@ func run() error {
 			Version: buildinfo.Version,
 			Commit:  buildinfo.Commit,
 		},
-		Core: coreSvc,
+		Core:      coreSvc,
+		Scheduler: scheduler,
 	})
 
 	// Serve until a termination signal arrives, then shut down gracefully.

@@ -169,6 +169,15 @@ func (c *Claude) args(req TurnRequest) ([]string, func(), error) {
 	case config.PermissionYolo:
 		args = append(args, "--permission-mode", "bypassPermissions")
 	default:
+		// Unattended (scheduled) preapproved run: there is no human to answer a
+		// prompt, so use Claude's native allow-list and rely on `claude -p`
+		// auto-denying anything not pre-approved — no permission MCP relay (§7.7).
+		if req.Settings.Unattended {
+			if allowed := nonEmptyTools(req.Settings.AllowedTools); len(allowed) > 0 {
+				args = append(args, "--allowedTools", strings.Join(allowed, ","))
+			}
+			break
+		}
 		if c.daemonAddr == "" || c.mcpCommand == "" {
 			return nil, cleanup, errors.New("claude approve mode needs daemon address and MCP command")
 		}
@@ -401,6 +410,16 @@ func unsetEnv(env []string, key string) []string {
 	for _, value := range env {
 		if !strings.HasPrefix(value, prefix) {
 			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func nonEmptyTools(tools []string) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if trimmed := strings.TrimSpace(t); trimmed != "" {
+			out = append(out, trimmed)
 		}
 	}
 	return out

@@ -35,7 +35,42 @@ export interface Session {
   Effort: string;
   PermissionMode: PermissionMode;
   Origin: SessionOrigin;
+  ScheduleID: string;
+  RunID: string;
   ProviderHandle: string;
+}
+
+export type RunPermission = "preapproved" | "yolo";
+export type RunTrigger = "cron" | "manual";
+export type RunStatus = "running" | "success" | "error";
+
+// ScheduleRun mirrors store.ScheduleRun (Go-exported field names, no json tags).
+export interface ScheduleRun {
+  ID: string;
+  ScheduleName: string;
+  SessionID: string;
+  Trigger: RunTrigger;
+  Status: RunStatus;
+  Error: string;
+  StartedAt: string;
+  FinishedAt: string;
+}
+
+// ScheduleStatus mirrors schedule.Status (json-tagged, snake_case).
+export interface ScheduleStatus {
+  name: string;
+  path: string;
+  agent: string;
+  model: string;
+  effort: string;
+  cron: string;
+  every: string;
+  run_permission: RunPermission;
+  allowed_tools: string[];
+  enabled: boolean;
+  next_run?: string;
+  parse_error?: string;
+  runs: ScheduleRun[];
 }
 
 export interface Message {

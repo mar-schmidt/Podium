@@ -109,7 +109,33 @@ Slash commands can be sent as the message body:
 | `/describe <text>` | Set the session description. |
 | `/help` | Print command help. |
 
+### `podium schedules list`
+
+List every schedule file with its timing, agent, permission policy, next-run
+time, and recent run count. See [scheduling.md](scheduling.md) for the file
+format.
+
+```
+podium schedules list
+```
+
+Invalid files are shown with an `[invalid]` marker and the parse error rather
+than being silently skipped.
+
+### `podium schedules run`
+
+Trigger a schedule immediately ("Run now"). The run executes a full agent turn
+and creates a durable schedule-origin session you can revisit and continue
+manually; the command prints the run id, status, and session id.
+
+```
+podium schedules run morning-calendar
+```
+
+A disabled schedule can still be run manually; only automatic firing is
+suppressed while it is disabled.
+
 ---
 
-*More commands and flags (schedules, projects, richer chat controls)
-are added as later phases land; each gets an entry here when it ships.*
+*More commands and flags (projects, richer chat controls) are added as later
+phases land; each gets an entry here when it ships.*

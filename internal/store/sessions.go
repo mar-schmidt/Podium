@@ -78,6 +78,29 @@ func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
 	return sessions, rows.Err()
 }
 
+// ListSessionsBySchedule returns sessions produced by a given schedule, newest
+// first, so the user can review "all runs of <schedule>" (R7.9).
+func (s *Store) ListSessionsBySchedule(ctx context.Context, scheduleName string) ([]Session, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		FROM sessions WHERE schedule_id = ? ORDER BY created_at DESC, id DESC`, scheduleName)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions for schedule %q: %w", scheduleName, err)
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		sess, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, rows.Err()
+}
+
 // UpdateSessionSettings stores mutable per-session provider settings.
 func (s *Store) UpdateSessionSettings(ctx context.Context, id, model, effort string, permissionMode config.PermissionMode) (Session, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE sessions

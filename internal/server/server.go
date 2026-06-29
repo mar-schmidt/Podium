@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/core"
+	"github.com/mar-schmidt/Podium/internal/schedule"
 )
 
 // BuildInfo is surfaced on /healthz so clients can see what they're talking to.
@@ -22,20 +23,22 @@ type BuildInfo struct {
 
 // Server wraps the HTTP server and its dependencies.
 type Server struct {
-	httpSrv *http.Server
-	addr    string
-	build   BuildInfo
-	started time.Time
-	core    *core.Core
-	broker  *permissionBroker
+	httpSrv   *http.Server
+	addr      string
+	build     BuildInfo
+	started   time.Time
+	core      *core.Core
+	scheduler *schedule.Scheduler
+	broker    *permissionBroker
 }
 
 // Options configures the server.
 type Options struct {
-	Bind  string // e.g. "127.0.0.1"
-	Port  int    // e.g. 8787
-	Build BuildInfo
-	Core  *core.Core
+	Bind      string // e.g. "127.0.0.1"
+	Port      int    // e.g. 8787
+	Build     BuildInfo
+	Core      *core.Core
+	Scheduler *schedule.Scheduler
 }
 
 // New constructs a Server bound to the given address. It does not start
@@ -43,11 +46,12 @@ type Options struct {
 func New(opts Options) *Server {
 	addr := net.JoinHostPort(opts.Bind, fmt.Sprintf("%d", opts.Port))
 	s := &Server{
-		addr:    addr,
-		build:   opts.Build,
-		started: time.Now(),
-		core:    opts.Core,
-		broker:  newPermissionBroker(),
+		addr:      addr,
+		build:     opts.Build,
+		started:   time.Now(),
+		core:      opts.Core,
+		scheduler: opts.Scheduler,
+		broker:    newPermissionBroker(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -57,6 +61,8 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/sessions/", s.handleSession)
 	mux.HandleFunc("/api/chat", s.handleChat)
 	mux.HandleFunc("/api/ws", s.handleWebSocket)
+	mux.HandleFunc("/api/schedules", s.handleSchedules)
+	mux.HandleFunc("/api/schedules/", s.handleSchedule)
 	mux.HandleFunc("/api/permission-decisions/", s.handlePermissionDecision)
 	mux.HandleFunc("/api/permissions/", s.handlePermissionRequest)
 	mux.Handle("/", spaHandler())

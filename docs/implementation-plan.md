@@ -111,6 +111,37 @@
   - *Verification:* `go test ./...` green, including fake-adapter tests for
     cross-provider fallback with intact history, `/profile` handle clearing, and
     summary-bounded replay.
+- **Phase 7 — Embedded scheduler, run history, provenance: ✅ COMPLETE
+  (2026-06-29).** Added `internal/schedule`: frontmatter parsing of
+  `~/.podium/schedules/*.md` (agent/model/effort, `cron` or `every`,
+  `run_permission`, `allowed_tools`, `enabled`) and a `robfig/cron` scheduler
+  inside `podiumd` that reconciles cron jobs on a 15s resync so dropped/edited/
+  removed files take effect without a restart. Each fire (and manual "Run now")
+  executes as a normal Podium session via new `core.RunScheduled` — origin
+  `schedule`, persisted `schedule_id`/`run_id`, full composed identity in the
+  agent workspace — so runs are revisitable and continuable. Added store
+  migration v4 (`schedule_runs` table + `idx_sessions_schedule_id`), run CRUD,
+  and `ListSessionsBySchedule`. Unattended permissions (§7.7): `yolo` (native
+  bypass) or stricter default `preapproved` via a new `core.AllowListRelay`
+  (allow-listed tools allowed, everything else auto-denied; empty ⇒ deny all),
+  threaded through `TurnOptions`/`TurnSettings` (`Unattended`+`AllowedTools`).
+  Claude enforces the allow-list natively (`--allowedTools`, no human MCP relay);
+  Codex/fake consult the in-process relay. Surface: `GET /api/schedules`,
+  `POST /api/schedules/<name>/run`, CLI `podium schedules list|run`, web contract
+  types, and `docs/scheduling.md`.
+  - *Decisions/notes:* (1) `enabled` defaults to **false** when omitted (opt-in
+    firing, matching the stricter-default posture); (2) disabled files never
+    register a cron entry (tested deterministically via next-run, avoiding cron
+    time-waits) and are also guarded at fire time; (3) manual "Run now" is allowed
+    even when disabled — only automatic firing is suppressed; (4) the native
+    `--allowedTools` path for Claude and the read-only Codex sandbox were used
+    rather than building bespoke granular plumbing, keeping to existing
+    mechanisms. The Schedules **UI page** (cards/sparkline) remains Phase 8; the
+    API + CLI satisfy Phase 7.
+  - *Verification:* `go test ./...` + `go vet ./...` green; `make build` succeeds.
+    New fake-adapter tests cover scheduled-run creation/provenance (origin +
+    schedule/run linkage + run record), preapproved allow/deny permission
+    behavior, disabled-does-not-register, and frontmatter parse validation.
 
 ## Context
 

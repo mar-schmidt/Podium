@@ -1,0 +1,116 @@
+package schedule
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func writeSchedule(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write schedule: %v", err)
+	}
+	return path
+}
+
+func TestParseValidCronSchedule(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSchedule(t, dir, "morning.md", `---
+agent: jared
+model: sonnet
+effort: low
+cron: "0 7 * * *"
+run_permission: preapproved
+allowed_tools: [Read]
+enabled: true
+---
+
+Summarise today's calendar.
+`)
+	sched, err := Parse(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if sched.Name != "morning" || sched.Agent != "jared" {
+		t.Fatalf("unexpected schedule: %+v", sched)
+	}
+	if sched.CronSpec() != "0 7 * * *" {
+		t.Fatalf("cron spec = %q", sched.CronSpec())
+	}
+	if sched.Body != "Summarise today's calendar." {
+		t.Fatalf("body = %q", sched.Body)
+	}
+	if !sched.Enabled || sched.RunPermission != PermissionPreapproved {
+		t.Fatalf("flags wrong: %+v", sched)
+	}
+}
+
+func TestParseEveryMapsToDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSchedule(t, dir, "freq.md", `---
+agent: jared
+every: 6h
+enabled: true
+---
+Do a thing.
+`)
+	sched, err := Parse(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if sched.CronSpec() != "@every 6h" {
+		t.Fatalf("every spec = %q", sched.CronSpec())
+	}
+	// run_permission defaults to the stricter preapproved.
+	if sched.RunPermission != PermissionPreapproved {
+		t.Fatalf("default permission = %q", sched.RunPermission)
+	}
+}
+
+func TestParseRejectsInvalidSchedules(t *testing.T) {
+	dir := t.TempDir()
+	cases := map[string]string{
+		"no-front.md": "just a body, no frontmatter\n",
+		"no-agent.md": "---\ncron: \"0 7 * * *\"\nenabled: true\n---\nbody\n",
+		"no-timing.md": "---\nagent: jared\nenabled: true\n---\nbody\n",
+		"both-timing.md": "---\nagent: jared\ncron: \"0 7 * * *\"\nevery: 6h\nenabled: true\n---\nbody\n",
+		"bad-perm.md": "---\nagent: jared\ncron: \"0 7 * * *\"\nrun_permission: sometimes\nenabled: true\n---\nbody\n",
+		"empty-body.md": "---\nagent: jared\ncron: \"0 7 * * *\"\nenabled: true\n---\n",
+	}
+	for name, content := range cases {
+		path := writeSchedule(t, dir, name, content)
+		if _, err := Parse(path); err == nil {
+			t.Errorf("expected parse error for %s, got nil", name)
+		}
+	}
+}
+
+func TestScanDirSeparatesValidAndInvalid(t *testing.T) {
+	dir := t.TempDir()
+	writeSchedule(t, dir, "good.md", "---\nagent: jared\nevery: 1h\nenabled: true\n---\nwork\n")
+	writeSchedule(t, dir, "bad.md", "---\nagent: jared\n---\nno timing\n")
+	writeSchedule(t, dir, "notes.txt", "ignored")
+
+	schedules, parseErrs, err := ScanDir(dir)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(schedules) != 1 || schedules[0].Name != "good" {
+		t.Fatalf("unexpected valid schedules: %+v", schedules)
+	}
+	if _, ok := parseErrs["bad"]; !ok {
+		t.Fatalf("expected parse error for bad, got %+v", parseErrs)
+	}
+}
+
+func TestScanDirMissingDirIsEmpty(t *testing.T) {
+	schedules, parseErrs, err := ScanDir(filepath.Join(t.TempDir(), "does-not-exist"))
+	if err != nil {
+		t.Fatalf("scan missing dir: %v", err)
+	}
+	if len(schedules) != 0 || len(parseErrs) != 0 {
+		t.Fatalf("expected empty results, got %d schedules / %d errs", len(schedules), len(parseErrs))
+	}
+}

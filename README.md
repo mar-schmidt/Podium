@@ -7,11 +7,12 @@ chat sessions, a canonical history that replays onto a fresh backing CLI session
 on any profile/provider switch, an embedded scheduler, and a shared project
 ledger. It ships as a single Go binary with an embedded Svelte web UI.
 
-> **Status:** under active development. Phases 0-6 are implemented: the daemon,
+> **Status:** under active development. Phases 0-7 are implemented: the daemon,
 > durable agents/sessions, Claude and Codex adapters, CLI chat, WebSocket API,
 > browser chat MVP, slash controls, permission relay, auto-naming, profile
-> switching, history replay, rolling summaries, and fallback are in place. See
-> [the implementation plan](#implementation-plan) for what's coming.
+> switching, history replay, rolling summaries, fallback, and the embedded
+> scheduler (recurring routines with run history and provenance) are in place.
+> See [the implementation plan](#implementation-plan) for what's coming.
 
 ## Quick start (dev)
 
@@ -55,6 +56,7 @@ All runtime state lives under `$PODIUM_HOME` (default `~/.podium/`).
 - [Requirements](docs/requirements.md) — the authoritative spec (v1.6).
 - [CLI reference](docs/cli.md)
 - [Configuration](docs/configuration.md)
+- [Scheduling](docs/scheduling.md)
 - [Integration contracts](docs/integrations/README.md)
 
 ## Implementation plan

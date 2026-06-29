@@ -2,8 +2,10 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Fake is a deterministic in-memory adapter for tests and local core
@@ -14,6 +16,12 @@ type Fake struct {
 	Responses        []string
 	Requests         []TurnRequest
 	RateLimitedTurns int
+	// PermissionTool, when set, makes each turn request approval for this tool
+	// name through the turn's PermissionRelay before responding. It models the
+	// unattended preapproved policy (§7.7) so tests can assert allow/deny.
+	PermissionTool string
+	// Decisions records each permission decision the relay returned, in order.
+	Decisions []PermissionDecision
 }
 
 // NewFake returns a fake adapter with the default echo-style response script.
@@ -72,6 +80,12 @@ func (f *Fake) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, err
 			}
 			return
 		}
+		if f.PermissionTool != "" {
+			decision := f.requestPermission(ctx, req)
+			if decision.Behavior != "allow" {
+				response = fmt.Sprintf("denied %s: %s", f.PermissionTool, decision.Message)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -99,6 +113,37 @@ func (f *Fake) Teardown(ctx context.Context, handle Handle) error {
 		}
 	}
 	return nil
+}
+
+// requestPermission asks the turn's relay to approve PermissionTool. A missing
+// relay denies (matching real adapters: no relay means no approver).
+func (f *Fake) requestPermission(ctx context.Context, req TurnRequest) PermissionDecision {
+	decision := PermissionDecision{Behavior: "deny", Message: "no relay"}
+	if req.Relay != nil {
+		got, err := req.Relay.RequestPermission(ctx, PermissionRequest{
+			ID:       "fake-perm",
+			TurnID:   req.Settings.PermissionTurnID,
+			ToolName: f.PermissionTool,
+			Input:    json.RawMessage(`{}`),
+		}, time.Minute)
+		if err == nil && got.Behavior != "" {
+			decision = got
+		}
+	}
+	f.mu.Lock()
+	f.Decisions = append(f.Decisions, decision)
+	f.mu.Unlock()
+	return decision
+}
+
+// RecordedDecisions returns a copy of the permission decisions made so far,
+// safe to read while background turns may still be appending.
+func (f *Fake) RecordedDecisions() []PermissionDecision {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]PermissionDecision, len(f.Decisions))
+	copy(out, f.Decisions)
+	return out
 }
 
 func (f *Fake) nextResult(req TurnRequest) (bool, string) {

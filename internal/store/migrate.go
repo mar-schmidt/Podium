@@ -83,6 +83,23 @@ var migrations = []migration{
 		ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT '';
 		ALTER TABLE sessions ADD COLUMN auto_named INTEGER NOT NULL DEFAULT 0;`,
 	},
+	{
+		version: 4,
+		name:    "schedule_runs",
+		sql: `CREATE TABLE schedule_runs (
+			id            TEXT PRIMARY KEY,
+			schedule_name TEXT NOT NULL,
+			session_id    TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+			trigger       TEXT NOT NULL CHECK (trigger IN ('cron', 'manual')),
+			status        TEXT NOT NULL CHECK (status IN ('running', 'success', 'error')),
+			error         TEXT NOT NULL DEFAULT '',
+			started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+			finished_at   TEXT
+		);
+
+		CREATE INDEX idx_schedule_runs_name ON schedule_runs(schedule_name, started_at DESC);
+		CREATE INDEX idx_sessions_schedule_id ON sessions(schedule_id);`,
+	},
 }
 
 // migrate applies every migration whose version has not yet been recorded. Each

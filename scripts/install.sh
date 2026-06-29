@@ -201,9 +201,15 @@ case ":$PATH:" in
 esac
 
 if [ "$RUN_ONBOARD" = "yes" ]; then
-  if [ -r /dev/tty ]; then
-    PATH="$INSTALL_DIR:$PATH" run "$INSTALL_DIR/podium" onboard < /dev/tty
+  # Launch onboarding automatically so the one-liner is the only command a user
+  # needs. `podium onboard` attaches to the controlling terminal itself, so it
+  # works even under `curl | bash` (where stdin is the script pipe). We still
+  # require a terminal to exist — with none (e.g. CI) we defer instead, to avoid
+  # a wizard with no way to answer its prompts.
+  if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+    PATH="$INSTALL_DIR:$PATH" run "$INSTALL_DIR/podium" onboard
   else
-    say "Non-interactive install: skipping onboarding. Run 'podium onboard' when ready."
+    say ""
+    say "Next step: run 'podium onboard' to check your agent CLIs and create your first agent."
   fi
 fi

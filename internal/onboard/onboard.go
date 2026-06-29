@@ -56,6 +56,16 @@ func Run(ctx context.Context, opts Options) error {
 	if errOut == nil {
 		errOut = os.Stderr
 	}
+	// When input isn't an interactive terminal — for example when the wizard is
+	// launched from `curl | bash`, where stdin is the installer's script pipe —
+	// attach to the controlling terminal so keystrokes register and Ctrl-C works.
+	// Reassigning os.Stdin means nested flows (provider login, $EDITOR) inherit
+	// the terminal too, not just our prompts.
+	if tty := controllingTTY(in); tty != nil {
+		defer tty.Close()
+		in = tty
+		os.Stdin = tty
+	}
 	p := prompter{in: bufio.NewReader(in), out: out}
 	fmt.Fprintln(out, "Welcome to Podium.")
 	fmt.Fprintln(out, "Let's wake the stage, check your agent CLIs, and shape your first agent together.")
@@ -240,7 +250,7 @@ func chooseProvider(p prompter, providers []config.Provider) config.Provider {
 	for _, provider := range providers {
 		labels = append(labels, string(provider))
 	}
-	choice := p.choice("Which provider should generate the first SOUL.md?", labels, labels[0])
+	choice := p.choice("Which provider do you want to start using?", labels, labels[0])
 	return config.Provider(choice)
 }
 
@@ -494,6 +504,25 @@ func editText(initial string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// controllingTTY returns the process's controlling terminal when in is not an
+// interactive terminal (for example, when onboarding is launched from
+// `curl | bash`, where stdin is the installer's script pipe). It returns nil
+// when in is already a terminal or no controlling terminal is available (such
+// as CI), so the caller keeps the original reader and prompts fall back to
+// their defaults rather than hanging.
+func controllingTTY(in io.Reader) *os.File {
+	if f, ok := in.(*os.File); ok {
+		if info, err := f.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+			return nil
+		}
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil
+	}
+	return tty
 }
 
 func titleProvider(provider config.Provider) string {

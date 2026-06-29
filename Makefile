@@ -10,7 +10,7 @@ LDFLAGS := -X github.com/mar-schmidt/Podium/internal/buildinfo.Version=$(VERSION
 GO      ?= go
 BINDIR  ?= bin
 
-.PHONY: all build web go-build podium podiumd check test tidy clean cross help
+.PHONY: all build web go-build podium podiumd check test tidy clean cross package help
 
 all: build ## Build the web UI and both binaries (default)
 
@@ -49,8 +49,24 @@ cross: ## Cross-compile podiumd/podium for linux, darwin, windows (amd64+arm64)
 	  done; \
 	done
 
+package: web cross ## Archive release binaries and emit SHA256SUMS in dist/
+	@set -e; \
+	rm -rf dist; mkdir -p dist; \
+	for os in linux darwin windows; do \
+	  for arch in amd64 arm64; do \
+	    name="podium_$(VERSION)_$${os}_$${arch}"; \
+	    src="$(BINDIR)/$${os}-$${arch}"; \
+	    if [ "$$os" = "windows" ]; then \
+	      (cd "$$src" && zip -q "../../dist/$${name}.zip" podium.exe podiumd.exe); \
+	    else \
+	      tar -C "$$src" -czf "dist/$${name}.tar.gz" podium podiumd; \
+	    fi; \
+	  done; \
+	done; \
+	(cd dist && { command -v sha256sum >/dev/null 2>&1 && sha256sum podium_* || shasum -a 256 podium_*; } > SHA256SUMS)
+
 clean: ## Remove build artifacts
-	rm -rf $(BINDIR) web/dist/assets
+	rm -rf $(BINDIR) dist web/dist/assets
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \

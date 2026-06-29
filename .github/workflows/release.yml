@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Test
+        run: |
+          go test ./...
+          go vet ./...
+          npm run check --prefix web
+
+      - name: Compute release version
+        id: version
+        run: |
+          version="v0.1.${GITHUB_RUN_NUMBER}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Package cross-platform binaries
+        run: make package VERSION="${{ steps.version.outputs.version }}" COMMIT="${{ steps.version.outputs.commit }}"
+
+      - name: Add latest-compatible asset names
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          for os in linux darwin; do
+            for arch in amd64 arm64; do
+              cp "dist/podium_${version}_${os}_${arch}.tar.gz" "dist/podium_${os}_${arch}.tar.gz"
+            done
+          done
+          for arch in amd64 arm64; do
+            cp "dist/podium_${version}_windows_${arch}.zip" "dist/podium_windows_${arch}.zip"
+          done
+          cp scripts/install.sh dist/install.sh
+          cp scripts/install.ps1 dist/install.ps1
+          (cd dist && sha256sum podium_* install.sh install.ps1 > SHA256SUMS)
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          set -euo pipefail
+          gh release delete "$VERSION" --yes --cleanup-tag || true
+          gh release create "$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --latest \
+            --title "$VERSION" \
+            --notes "Automated Podium release for ${GITHUB_SHA} (${COMMIT})."

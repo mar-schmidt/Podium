@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -68,6 +69,12 @@ func Parse(path string) (Schedule, error) {
 	if err != nil {
 		return Schedule{}, err
 	}
+	return parseBytes(path, raw)
+}
+
+// parseBytes validates schedule content already in memory. `path` is only used
+// to derive the schedule name and error context.
+func parseBytes(path string, raw []byte) (Schedule, error) {
 	fm, body, err := splitFrontmatter(raw)
 	if err != nil {
 		return Schedule{}, fmt.Errorf("%s: %w", filepath.Base(path), err)
@@ -125,6 +132,49 @@ func (s Schedule) validate() error {
 		return fmt.Errorf("task body is empty")
 	}
 	return nil
+}
+
+var slugStrip = regexp.MustCompile(`[^a-z0-9]+`)
+
+// Slug normalizes a schedule name into a safe file stem (lowercase, dashes).
+func Slug(name string) string {
+	s := slugStrip.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "-")
+	return strings.Trim(s, "-")
+}
+
+// Render produces the markdown file content (frontmatter + body) for a new
+// schedule. Empty optional fields are omitted from the frontmatter.
+func Render(p CreateParams) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("agent: " + p.Agent + "\n")
+	if p.Model != "" {
+		b.WriteString("model: " + p.Model + "\n")
+	}
+	if p.Effort != "" {
+		b.WriteString("effort: " + p.Effort + "\n")
+	}
+	if p.Every != "" {
+		b.WriteString("every: " + p.Every + "\n")
+	} else {
+		b.WriteString("cron: " + p.Cron + "\n")
+	}
+	perm := p.RunPermission
+	if perm == "" {
+		perm = PermissionPreapproved
+	}
+	b.WriteString("run_permission: " + string(perm) + "\n")
+	if len(p.AllowedTools) > 0 {
+		b.WriteString("allowed_tools:\n")
+		for _, t := range p.AllowedTools {
+			b.WriteString("  - " + t + "\n")
+		}
+	}
+	b.WriteString("enabled: true\n")
+	b.WriteString("---\n\n")
+	b.WriteString(strings.TrimSpace(p.Body))
+	b.WriteString("\n")
+	return b.String()
 }
 
 // splitFrontmatter separates a leading `---` delimited YAML block from the body.

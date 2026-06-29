@@ -11,7 +11,7 @@ export interface Health {
 
 export type Provider = "claude" | "codex";
 export type PermissionMode = "approve" | "yolo";
-export type SessionOrigin = "web" | "cli" | "schedule" | "roadmap";
+export type SessionOrigin = "web" | "cli" | "onboarding" | "schedule" | "roadmap";
 export type MessageRole = "user" | "assistant";
 
 export interface Agent {
@@ -37,6 +37,8 @@ export interface Session {
   Origin: SessionOrigin;
   ScheduleID: string;
   RunID: string;
+  TaskID: string;
+  ProjectID: string;
   ProviderHandle: string;
 }
 
@@ -46,6 +48,7 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  color: string;
   path: string;
   status: string;
   stack: string[];
@@ -53,6 +56,12 @@ export interface Project {
   backlog: string[];
   roadmap: string[];
   notes: string;
+}
+
+// AgentDetail is the GET /api/agents/<name> response: durable defaults plus the
+// editable SOUL.md body.
+export interface AgentDetail extends Agent {
+  Soul: string;
 }
 
 // Task mirrors store.Task (Go-exported field names, no json tags).

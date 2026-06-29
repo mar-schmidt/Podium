@@ -1,23 +1,57 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/mar-schmidt/Podium/internal/schedule"
 )
 
-// handleSchedules lists all schedules with their next-run times and recent run
-// history (R7.5).
+type scheduleCreateRequest struct {
+	Name          string   `json:"name"`
+	Agent         string   `json:"agent"`
+	Model         string   `json:"model"`
+	Effort        string   `json:"effort"`
+	Cron          string   `json:"cron"`
+	Every         string   `json:"every"`
+	RunPermission string   `json:"run_permission"`
+	AllowedTools  []string `json:"allowed_tools"`
+	Body          string   `json:"body"`
+}
+
+// handleSchedules lists all schedules (GET) and creates a new schedule file
+// (POST) under ~/.podium/schedules (R7.5 / R7.2).
 func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	if s.scheduler == nil {
 		http.Error(w, "scheduler unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		statuses, err := s.scheduler.List(r.Context())
+		writeJSON(w, statuses, err)
+	case http.MethodPost:
+		var req scheduleCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		status, err := s.scheduler.Create(r.Context(), schedule.CreateParams{
+			Name:          req.Name,
+			Agent:         strings.TrimSpace(req.Agent),
+			Model:         strings.TrimSpace(req.Model),
+			Effort:        strings.TrimSpace(req.Effort),
+			Cron:          strings.TrimSpace(req.Cron),
+			Every:         strings.TrimSpace(req.Every),
+			RunPermission: schedule.RunPermission(strings.TrimSpace(req.RunPermission)),
+			AllowedTools:  req.AllowedTools,
+			Body:          req.Body,
+		})
+		writeJSON(w, status, err)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	statuses, err := s.scheduler.List(r.Context())
-	writeJSON(w, statuses, err)
 }
 
 // handleSchedule handles per-schedule actions under /api/schedules/<name>/...

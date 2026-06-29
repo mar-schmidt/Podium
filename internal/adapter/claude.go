@@ -19,6 +19,7 @@ import (
 )
 
 const defaultPermissionTimeout = 2 * time.Minute
+const claudeStderrTailLimit = 16 * 1024
 
 // ClaudeOptions configures the Claude Code adapter.
 type ClaudeOptions struct {
@@ -120,11 +121,13 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 	go func() {
 		defer cleanup()
 		defer close(out)
-		errc := make(chan error, 2)
-		go func() { errc <- parseClaudeStream(ctx, stdout, out) }()
-		go func() { errc <- logStderr(stderr) }()
-		parseErr := <-errc
+		parsec := make(chan error, 1)
+		stderrc := make(chan stderrResult, 1)
+		go func() { parsec <- parseClaudeStream(ctx, stdout, out) }()
+		go func() { stderrc <- collectStderr(stderr, claudeStderrTailLimit) }()
 		waitErr := cmd.Wait()
+		parseErr := <-parsec
+		stderrResult := <-stderrc
 		if ctx.Err() != nil {
 			return
 		}
@@ -132,8 +135,20 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: fmt.Sprintf("claude stream error: %v", parseErr)})
 			return
 		}
+		if stderrResult.err != nil {
+			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: fmt.Sprintf("claude stderr error: %v", stderrResult.err)})
+			return
+		}
 		if waitErr != nil {
-			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: fmt.Sprintf("claude exited with error: %v", waitErr)})
+			if claudeRateLimitedText(stderrResult.text) {
+				sendAdapterEvent(ctx, out, Event{Kind: EventRateLimited, Content: stderrResult.text})
+				return
+			}
+			message := fmt.Sprintf("claude exited with error: %v", waitErr)
+			if stderrResult.text != "" {
+				message += ": " + stderrResult.text
+			}
+			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: message})
 			return
 		}
 		sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
@@ -325,6 +340,13 @@ func parseClaudeLine(line []byte) ([]Event, error) {
 		if claudeRateLimited(raw) {
 			events = append(events, Event{Kind: EventRateLimited, Content: "claude rate limited"})
 		}
+	case "error":
+		message := claudeErrorMessage(raw)
+		if claudeRateLimitedText(message) {
+			events = append(events, Event{Kind: EventRateLimited, Content: message})
+		} else if message != "" {
+			events = append(events, Event{Kind: EventAssistantMessage, Content: "claude error: " + message})
+		}
 	}
 	return events, nil
 }
@@ -342,8 +364,32 @@ func claudeRateLimited(raw map[string]any) bool {
 			}
 		}
 	}
-	message := strings.ToLower(firstString(raw, "message", "error", "reason"))
-	return strings.Contains(message, "rate limit") || strings.Contains(message, "rate_limit")
+	return claudeRateLimitedText(claudeErrorMessage(raw))
+}
+
+func claudeRateLimitedText(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "rate_limit") ||
+		strings.Contains(message, "usage limit") ||
+		strings.Contains(message, "usage_limit") ||
+		strings.Contains(message, "too many requests") ||
+		strings.Contains(message, "429")
+}
+
+func claudeErrorMessage(raw map[string]any) string {
+	if message := firstString(raw, "message", "error", "reason"); message != "" {
+		return message
+	}
+	if errObj, ok := raw["error"].(map[string]any); ok {
+		if message := firstString(errObj, "message", "error", "reason", "type", "code"); message != "" {
+			return message
+		}
+	}
+	if nested, ok := raw["event"].(map[string]any); ok {
+		return claudeErrorMessage(nested)
+	}
+	return ""
 }
 
 func extractText(raw map[string]any) string {
@@ -399,9 +445,41 @@ func firstString(raw map[string]any, keys ...string) string {
 	return ""
 }
 
-func logStderr(r io.Reader) error {
-	_, err := io.Copy(io.Discard, r)
-	return err
+type stderrResult struct {
+	text string
+	err  error
+}
+
+func collectStderr(r io.Reader, limit int) stderrResult {
+	tail := &limitedTail{limit: limit}
+	_, err := io.Copy(tail, r)
+	return stderrResult{text: strings.TrimSpace(tail.String()), err: err}
+}
+
+type limitedTail struct {
+	limit int
+	data  []byte
+}
+
+func (b *limitedTail) Write(p []byte) (int, error) {
+	written := len(p)
+	if b.limit <= 0 {
+		return written, nil
+	}
+	if len(p) >= b.limit {
+		b.data = append(b.data[:0], p[len(p)-b.limit:]...)
+		return written, nil
+	}
+	b.data = append(b.data, p...)
+	if overflow := len(b.data) - b.limit; overflow > 0 {
+		copy(b.data, b.data[overflow:])
+		b.data = b.data[:b.limit]
+	}
+	return written, nil
+}
+
+func (b *limitedTail) String() string {
+	return string(b.data)
 }
 
 func unsetEnv(env []string, key string) []string {

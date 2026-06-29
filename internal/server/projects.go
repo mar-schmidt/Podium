@@ -46,6 +46,80 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type projectUpdateRequest struct {
+	Name        *string   `json:"name,omitempty"`
+	Description *string   `json:"description,omitempty"`
+	Color       *string   `json:"color,omitempty"`
+	Status      *string   `json:"status,omitempty"`
+	Stack       *[]string `json:"stack,omitempty"`
+	Notes       *string   `json:"notes,omitempty"`
+}
+
+type describeRequest struct {
+	Agent string `json:"agent"`
+}
+
+// handleProject handles /api/projects/<id> (GET one, PATCH update) and
+// /api/projects/<id>/describe (POST: draft a description with an agent's engine).
+func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
+	if s.core == nil {
+		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/projects/")
+	id, action, _ := strings.Cut(rest, "/")
+	if id == "" {
+		http.Error(w, "project id is required", http.StatusBadRequest)
+		return
+	}
+
+	if action == "describe" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req describeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Agent) == "" {
+			http.Error(w, "agent is required", http.StatusBadRequest)
+			return
+		}
+		text, err := s.core.DescribeProject(r.Context(), id, req.Agent)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, map[string]string{"description": text}, nil)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		project, err := s.core.GetProject(r.Context(), id)
+		writeJSON(w, project, err)
+	case http.MethodPatch, http.MethodPut:
+		var req projectUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		updated, err := s.core.UpdateProject(r.Context(), id, projects.ProjectPatch{
+			Name:        req.Name,
+			Description: req.Description,
+			Color:       req.Color,
+			Status:      req.Status,
+			Stack:       req.Stack,
+			Notes:       req.Notes,
+		})
+		writeJSON(w, updated, err)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 type taskCreateRequest struct {
 	ProjectID     string `json:"project_id"`
 	Title         string `json:"title"`

@@ -46,6 +46,35 @@ Global flags:
 | `--addr host:port` | Daemon address. Precedence: `--addr` → `PODIUM_ADDR` → `config.yaml` → `127.0.0.1:8787`. |
 | `--version` | Print version and commit. |
 
+### Install scripts
+
+Public copy-paste installers:
+
+```
+curl -fsSL https://podium.ai/install.sh | bash
+irm https://podium.ai/install.ps1 | iex
+```
+
+The scripts download release archives, verify `SHA256SUMS`, install `podium` and
+`podiumd`, optionally configure user-level autostart, then run `podium onboard`.
+By default they download from GitHub Releases (`latest/download` for the default
+install, or `download/<version>` when a version is specified).
+
+CI publishes every commit to `master` as `v0.1.<github-run-number>`. This is a
+monotonic pre-1.0 series: no calendar cadence is implied, and release bursts are
+fine.
+
+Common script options:
+
+| Option | Description |
+| --- | --- |
+| `--version VERSION` / `-Version VERSION` | Release version, default `latest`. |
+| `--install-dir DIR` / `-InstallDir DIR` | Binary install directory. |
+| `--podium-home DIR` / `-PodiumHome DIR` | Set `PODIUM_HOME` for this install/autostart. |
+| `--autostart ask|yes|no` / `-Autostart ask|yes|no` | Whether to start `podiumd` at login. |
+| `--no-onboard` / `-NoOnboard` | Install only; skip first-run wizard. |
+| `--source-fallback` / `-SourceFallback` | Build from source if release download fails. |
+
 ### `podium status`
 
 Report whether the daemon is running, plus its version and uptime.
@@ -57,6 +86,32 @@ podium --addr 127.0.0.1:8787 status
 
 Exits non-zero with a "start it with: podiumd" hint when the daemon is
 unreachable.
+
+### `podium doctor`
+
+Check daemon reachability and native provider readiness.
+
+```
+podium doctor
+```
+
+The command never reads credentials. It locates `claude` and `codex`, prints
+versions when available, and gives install/login hints when a provider is not
+ready.
+
+### `podium onboard` / `podium setup`
+
+Run the first-use wizard.
+
+```
+podium onboard
+podium setup
+```
+
+The wizard starts `podiumd` if needed, helps get Claude and/or Codex available,
+asks personality/workstyle questions, creates the first agent, then asks a
+working provider to draft the agent's `SOUL.md`. The generated soul is previewed
+before saving, with regenerate and edit options.
 
 ### `podium agents list`
 

@@ -18,6 +18,31 @@ ledger. It ships as a single Go binary with an embedded Svelte web UI.
 
 ## Quick start (dev)
 
+### Install
+
+macOS/Linux:
+
+```sh
+curl -fsSL https://podium.ai/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://podium.ai/install.ps1 | iex
+```
+
+The installer downloads the matching release binary, verifies checksums, can set
+up user-level autostart, and launches `podium onboard` to check Claude/Codex and
+create your first agent.
+
+Every commit to `master` publishes a GitHub Release using the automatic
+`v0.1.<run-number>` series. That series is intentionally monotonic rather than
+calendar-based, so bursts of work can produce many releases without implying a
+monthly cadence.
+
+### Development
+
 Prerequisites: Go 1.26+, Node 20+ (for building the web UI).
 
 ```sh
@@ -43,6 +68,7 @@ no cgo (pure-Go SQLite via `modernc.org/sqlite`), so it cross-compiles cleanly:
 
 ```sh
 make cross    # linux/darwin/windows × amd64/arm64 → bin/<os>-<arch>/
+make package  # archives release artifacts into dist/ and writes SHA256SUMS
 ```
 
 All runtime state lives under one overridable root, so running Podium as a Home

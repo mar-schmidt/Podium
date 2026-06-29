@@ -11,6 +11,9 @@ const (
 	OriginWeb SessionOrigin = "web"
 	// OriginCLI marks a session created from the CLI.
 	OriginCLI SessionOrigin = "cli"
+	// OriginOnboarding marks the first-run birth session that helps shape an
+	// agent's SOUL.md.
+	OriginOnboarding SessionOrigin = "onboarding"
 	// OriginSchedule marks a session created by a scheduled run.
 	OriginSchedule SessionOrigin = "schedule"
 	// OriginRoadmap marks a session created from a roadmap task.
@@ -66,6 +69,10 @@ type Session struct {
 	ProviderHandle string
 	CreatedAt      string
 	UpdatedAt      string
+	// ProjectID is derived (not a stored column): for roadmap sessions it is the
+	// assigned project of the originating task. Populated by core.ListSessions so
+	// clients can filter sessions by project.
+	ProjectID string `json:"ProjectID,omitempty"`
 }
 
 // Message is one ordered entry in a session's canonical history.

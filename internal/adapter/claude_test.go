@@ -118,6 +118,46 @@ func TestParseClaudeStream(t *testing.T) {
 	}
 }
 
+func TestParseClaudeRateLimitErrorEvent(t *testing.T) {
+	input := strings.NewReader(`{"type":"error","error":{"message":"Claude usage limit reached. Try again later."}}
+`)
+	out := make(chan Event, 1)
+	if err := parseClaudeStream(context.Background(), input, out); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	close(out)
+	event := <-out
+	if event.Kind != EventRateLimited {
+		t.Fatalf("expected rate limit event, got %+v", event)
+	}
+}
+
+func TestClaudeRateLimitedText(t *testing.T) {
+	for _, message := range []string{
+		"rate limit exceeded",
+		"usage_limit_exceeded",
+		"too many requests",
+		"HTTP 429 from upstream",
+	} {
+		if !claudeRateLimitedText(message) {
+			t.Fatalf("expected %q to be classified as a rate limit", message)
+		}
+	}
+	if claudeRateLimitedText("authentication failed") {
+		t.Fatal("auth failure should not be classified as a rate limit")
+	}
+}
+
+func TestCollectStderrKeepsTail(t *testing.T) {
+	got := collectStderr(strings.NewReader("0123456789abcdef"), 6)
+	if got.err != nil {
+		t.Fatalf("collect stderr: %v", got.err)
+	}
+	if got.text != "abcdef" {
+		t.Fatalf("expected stderr tail, got %q", got.text)
+	}
+}
+
 func indexOf(values []string, want string) int {
 	for i, value := range values {
 		if value == want {

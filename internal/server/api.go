@@ -76,13 +76,29 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// agentDetail bundles an agent's durable defaults with its editable SOUL.md
+// body so the web edit modal can load and save them together. MCPConfig stays
+// redacted via the store.Agent json:"-" tag.
+type agentDetail struct {
+	store.Agent
+	Soul string `json:"Soul"`
+}
+
+// agentUpdateRequest is the PUT body for editing an agent. Nil/empty engine
+// fields fall back to the agent's current values; Soul, when non-nil, replaces
+// the agent's SOUL.md.
+type agentUpdateRequest struct {
+	Provider       config.Provider       `json:"provider,omitempty"`
+	Profile        *string               `json:"profile,omitempty"`
+	Model          *string               `json:"model,omitempty"`
+	Effort         *string               `json:"effort,omitempty"`
+	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	Soul           *string               `json:"soul,omitempty"`
+}
+
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if s.core == nil {
 		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/api/agents/")
@@ -90,8 +106,66 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent name is required", http.StatusBadRequest)
 		return
 	}
-	agent, err := s.core.GetAgent(r.Context(), name)
-	writeJSON(w, agent, err)
+
+	switch r.Method {
+	case http.MethodGet:
+		agent, err := s.core.GetAgent(r.Context(), name)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		soul, err := s.core.ReadAgentSoul(name)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, agentDetail{Agent: agent, Soul: soul}, nil)
+	case http.MethodPut, http.MethodPatch:
+		agent, err := s.core.GetAgent(r.Context(), name)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		var req agentUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Provider != "" {
+			agent.Provider = req.Provider
+		}
+		if req.Profile != nil {
+			agent.Profile = *req.Profile
+		}
+		if req.Model != nil {
+			agent.Model = *req.Model
+		}
+		if req.Effort != nil {
+			agent.Effort = *req.Effort
+		}
+		if req.PermissionMode != "" {
+			agent.PermissionMode = req.PermissionMode
+		}
+		updated, err := s.core.UpdateAgent(r.Context(), agent)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		if req.Soul != nil {
+			if err := s.core.WriteAgentSoul(name, *req.Soul); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+		}
+		soul, err := s.core.ReadAgentSoul(name)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, agentDetail{Agent: updated, Soul: soul}, nil)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {

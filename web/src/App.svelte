@@ -8,7 +8,7 @@
   import Schedules from "./pages/Schedules.svelte";
   import Projects from "./pages/Projects.svelte";
 
-  type Route = "chat" | "roadmap" | "agents" | "schedules" | "projects";
+  type Route = "chat" | "roadmap" | "projects" | "agents" | "schedules";
 
   interface ChatTarget {
     sessionId?: string;
@@ -16,12 +16,32 @@
     seed?: string;
   }
 
-  const nav: { key: Route; label: string; icon: string }[] = [
-    { key: "chat", label: "Chat", icon: "💬" },
-    { key: "roadmap", label: "Roadmap", icon: "🗂" },
-    { key: "agents", label: "Agents", icon: "👥" },
-    { key: "schedules", label: "Schedules", icon: "⏰" },
-    { key: "projects", label: "Projects", icon: "📁" },
+  const NAV: { key: Route; label: string; icon: string }[] = [
+    {
+      key: "chat",
+      label: "Chat",
+      icon: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    },
+    {
+      key: "roadmap",
+      label: "Roadmap",
+      icon: '<rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10.5" y="3" width="6" height="11" rx="1.5"/><rect x="18" y="3" width="3" height="7" rx="1.5"/>',
+    },
+    {
+      key: "projects",
+      label: "Projects",
+      icon: '<path d="M3 8a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="8.5" cy="13" r="1.4"/>',
+    },
+    {
+      key: "agents",
+      label: "Agents",
+      icon: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6"/><path d="M17.5 20a5.5 5.5 0 0 0-2.5-4.6"/>',
+    },
+    {
+      key: "schedules",
+      label: "Schedules",
+      icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    },
   ];
 
   let route = $state<Route>("chat");
@@ -32,11 +52,9 @@
 
   // Hire modal.
   let hireOpen = $state(false);
-  let hireName = $state("jared");
+  let hireName = $state("");
   let hireProvider = $state<Provider>("claude");
   let hirePermission = $state<PermissionMode>("approve");
-  let hireModel = $state("");
-  let hireEffort = $state("medium");
   let hireError = $state<string | null>(null);
 
   onMount(async () => {
@@ -61,112 +79,315 @@
     route = "chat";
   }
 
+  function openHire() {
+    hireName = "";
+    hireProvider = "claude";
+    hirePermission = "approve";
+    hireError = null;
+    hireOpen = true;
+  }
+
   async function submitHire() {
     hireError = null;
     try {
       const agent = await hireAgent({
         name: hireName.trim(),
         provider: hireProvider,
-        model: hireModel.trim(),
-        effort: hireEffort,
+        model: "",
+        effort: "high",
         permission_mode: hirePermission,
       });
       agents = [agent, ...agents.filter((a) => a.Name !== agent.Name)];
       hireOpen = false;
+      route = "agents";
     } catch (e) {
       hireError = e instanceof Error ? e.message : String(e);
     }
   }
+
+  const daemonLabel = $derived(chatStatus === "live" ? "podiumd live" : `podiumd ${chatStatus}`);
+  const daemonAddr = $derived(health ? `${health.version} · ${health.commit}` : "127.0.0.1:8787");
+
+  function seg(on: boolean): string {
+    return (
+      "flex:1;padding:11px;border-radius:11px;cursor:pointer;font:600 13.5px 'Hanken Grotesk';" +
+      (on
+        ? "border:1px solid #BFE0D6;background:#E3F1EC;color:#2F6E60"
+        : "border:1px solid #EAE0D4;background:#fff;color:#6F6459")
+    );
+  }
 </script>
 
-<main class="app-shell">
-  <aside class="nav">
+<div class="app-root">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
     <div class="brand">
-      <div class="logo">◆</div>
+      <div class="brand-logo"><span class="brand-glyph"></span></div>
       <div>
-        <h1>Podium</h1>
-        <p>conductor</p>
+        <div class="brand-name">Podium</div>
+        <div class="brand-tag mono">conductor</div>
       </div>
     </div>
 
     <nav class="nav-links">
-      {#each nav as item}
-        <button class:active={route === item.key} class="nav-link" onclick={() => (route = item.key)}>
-          <span class="nav-icon">{item.icon}</span>
+      {#each NAV as item}
+        <button class="nav-link" class:active={route === item.key} onclick={() => (route = item.key)}>
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round">{@html item.icon}</svg
+          >
           {item.label}
         </button>
       {/each}
     </nav>
 
     <div class="nav-foot">
-      <div class="daemon-status">
-        <span class:live={chatStatus === "live"} class="status-dot"></span>
-        <div>
-          <strong>podiumd {chatStatus === "live" ? "live" : chatStatus}</strong>
-          <small>{health ? `${health.version} (${health.commit})` : "—"}</small>
+      <div class="daemon">
+        <span class="daemon-dot" class:live={chatStatus === "live"}></span>
+        <div class="daemon-text mono">
+          {daemonLabel}<br /><span class="daemon-addr">{daemonAddr}</span>
         </div>
       </div>
-      <button class="button ghost" onclick={() => (hireOpen = true)}>+ Hire agent</button>
+      <button class="hire-btn" onclick={openHire}><span class="hire-plus">+</span> Hire agent</button>
     </div>
   </aside>
 
-  <section class="view">
+  <!-- ============ MAIN ============ -->
+  <div class="main">
     {#if route === "chat"}
-      <Chat
-        {agents}
-        target={chatTarget}
-        onConsumeTarget={() => (chatTarget = null)}
-        onStatus={(s) => (chatStatus = s)}
-      />
+      <Chat {agents} target={chatTarget} onConsumeTarget={() => (chatTarget = null)} onStatus={(s) => (chatStatus = s)} />
     {:else if route === "roadmap"}
       <Roadmap {agents} onOpenChat={openChat} />
-    {:else if route === "agents"}
-      <Agents {agents} onHire={() => (hireOpen = true)} />
-    {:else if route === "schedules"}
-      <Schedules />
     {:else if route === "projects"}
-      <Projects />
+      <Projects {agents} onOpenChat={openChat} />
+    {:else if route === "agents"}
+      <Agents {agents} onHire={openHire} onOpenChat={openChat} onChanged={refreshAgents} />
+    {:else if route === "schedules"}
+      <Schedules {agents} onOpenChat={openChat} />
     {/if}
-  </section>
+  </div>
 
+  <!-- ============ HIRE MODAL ============ -->
   {#if hireOpen}
     <div class="modal-backdrop" role="presentation" onclick={() => (hireOpen = false)}>
-      <div class="modal" role="dialog" aria-modal="true" aria-label="Hire agent" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-        <header>
-          <h2>Hire an agent</h2>
-          <button class="icon-button" onclick={() => (hireOpen = false)} title="Close">×</button>
-        </header>
-        {#if hireError}<div class="error">{hireError}</div>{/if}
-        <div class="modal-grid">
-          <label class="full">Name<input class="field" bind:value={hireName} placeholder="e.g. atlas" /></label>
-          <label>Backend
-            <select class="field" bind:value={hireProvider}>
-              <option value="claude">claude</option>
-              <option value="codex">codex</option>
-            </select>
-          </label>
-          <label>Permission
-            <select class="field" bind:value={hirePermission}>
-              <option value="approve">approve · safe</option>
-              <option value="yolo">yolo · full access</option>
-            </select>
-          </label>
-          <label>Effort
-            <select class="field" bind:value={hireEffort}>
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-              <option value="xhigh">xhigh</option>
-              <option value="max">max</option>
-            </select>
-          </label>
-          <label>Model<input class="field" bind:value={hireModel} placeholder="provider default" /></label>
+      <div class="modal-card hire-modal" role="dialog" aria-modal="true" aria-label="Hire agent" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+        <div class="modal-head">
+          <div class="modal-title">Hire an agent</div>
+          <div class="modal-sub">Give your new colleague a name and a backend. They'll get a workspace, a SOUL.md, and a seat on the bench.</div>
         </div>
-        <footer>
-          <button class="button secondary" onclick={() => (hireOpen = false)}>Cancel</button>
-          <button class="button primary" onclick={submitHire} disabled={!hireName.trim()}>Create agent</button>
-        </footer>
+        <div class="modal-body">
+          {#if hireError}<div class="error-banner" style="margin-bottom:14px">{hireError}</div>{/if}
+          <div class="label-mono" style="margin-bottom:8px">name</div>
+          <input class="field-input" bind:value={hireName} placeholder="e.g. atlas" />
+
+          <div class="label-mono" style="margin:18px 0 8px">backend</div>
+          <div style="display:flex;gap:9px">
+            <button style={seg(hireProvider === "claude")} onclick={() => (hireProvider = "claude")}>Claude</button>
+            <button style={seg(hireProvider === "codex")} onclick={() => (hireProvider = "codex")}>Codex</button>
+          </div>
+
+          <div class="label-mono" style="margin:18px 0 8px">permission mode</div>
+          <div style="display:flex;gap:9px">
+            <button style={seg(hirePermission === "approve")} onclick={() => (hirePermission = "approve")}>approve · safe</button>
+            <button style={seg(hirePermission === "yolo")} onclick={() => (hirePermission = "yolo")}>yolo · full access</button>
+          </div>
+
+          <button class="modal-cta" disabled={!hireName.trim()} onclick={submitHire}>Create agent</button>
+        </div>
       </div>
     </div>
   {/if}
-</main>
+</div>
+
+<style>
+  .sidebar {
+    width: 236px;
+    flex: none;
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    padding: 20px 16px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 4px 8px 18px;
+  }
+
+  .brand-logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+    background: linear-gradient(150deg, #46a08c, #2f6e60);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 6px 14px -6px rgba(47, 110, 96, 0.6);
+  }
+
+  .brand-glyph {
+    width: 11px;
+    height: 11px;
+    background: #fff;
+    border-radius: 3px;
+    transform: rotate(45deg);
+  }
+
+  .brand-name {
+    font: 800 18px "Hanken Grotesk";
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+
+  .brand-tag {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--faint);
+    letter-spacing: 0.08em;
+  }
+
+  .nav-links {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    padding: 10px 12px;
+    border-radius: 12px;
+    font: 600 14px "Hanken Grotesk";
+    background: transparent;
+    color: var(--muted);
+  }
+
+  .nav-link:hover {
+    background: #f6efe6;
+  }
+
+  .nav-link.active {
+    background: #e3f1ec;
+    color: var(--teal-deep);
+  }
+
+  .nav-foot {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .daemon {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--surface-3);
+    border: 1px solid var(--line-3);
+  }
+
+  .daemon-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 99px;
+    flex: none;
+    background: #c0492a;
+    box-shadow: 0 0 0 3px rgba(192, 73, 42, 0.18);
+  }
+
+  .daemon-dot.live {
+    background: #4f9e78;
+    box-shadow: 0 0 0 3px rgba(79, 158, 120, 0.18);
+  }
+
+  .daemon-text {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    line-height: 1.3;
+  }
+
+  .daemon-addr {
+    color: var(--faint);
+  }
+
+  .hire-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1.5px dashed #decfbe;
+    background: rgba(250, 246, 240, 0.6);
+    cursor: pointer;
+    padding: 10px;
+    border-radius: 12px;
+    font: 600 13px "Hanken Grotesk";
+    color: #a8825e;
+  }
+
+  .hire-plus {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+
+  /* Hire modal */
+  .hire-modal {
+    width: 460px;
+    max-width: 92vw;
+  }
+
+  .modal-head {
+    padding: 26px 26px 0;
+  }
+
+  .modal-title {
+    font: 800 22px "Hanken Grotesk";
+    letter-spacing: -0.01em;
+  }
+
+  .modal-sub {
+    font: 400 13.5px/1.5 "Hanken Grotesk";
+    color: var(--muted-2);
+    margin-top: 5px;
+  }
+
+  .modal-body {
+    padding: 22px 26px 26px;
+  }
+
+  .modal-cta {
+    width: 100%;
+    margin-top: 24px;
+    border: none;
+    border-radius: 13px;
+    padding: 13px;
+    background: var(--teal);
+    color: #fff;
+    font: 700 15px "Hanken Grotesk";
+    cursor: pointer;
+    box-shadow: 0 10px 22px -8px rgba(63, 143, 126, 0.7);
+  }
+</style>

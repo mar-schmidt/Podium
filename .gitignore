@@ -5,6 +5,7 @@
 *.exe
 *.test
 *.out
+*.prof
 /dist/
 
 # Web build artifacts (embedded at build time). The placeholder
@@ -14,13 +15,31 @@
 /web/dist/assets/
 /web/dist/vite.svg
 /web/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
 
 # Editor / OS
 .DS_Store
 *.swp
+.idea/
+.vscode/
 
 # Local runtime data (should live under ~/.podium, never in-repo)
 /.podium/
+/.claude/settings.local.json
+
+# Scratch / coverage output
+/tmp/
+/coverage/
+/coverage.html
 
 # Design source export (large binary; kept local, not in git history)
 /Podium frontend design.zip

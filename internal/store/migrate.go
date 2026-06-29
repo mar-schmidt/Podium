@@ -121,6 +121,57 @@ var migrations = []migration{
 		ALTER TABLE sessions ADD COLUMN task_id TEXT;
 		CREATE INDEX idx_sessions_task_id ON sessions(task_id);`,
 	},
+	{
+		version: 6,
+		name:    "onboarding_origin",
+		sql: `DROP TRIGGER IF EXISTS sessions_origin_immutable;
+
+		CREATE TABLE sessions_new (
+			id               TEXT PRIMARY KEY,
+			agent_name       TEXT NOT NULL REFERENCES agents(name) ON UPDATE CASCADE ON DELETE RESTRICT,
+			provider         TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+			profile          TEXT NOT NULL DEFAULT '',
+			model            TEXT NOT NULL DEFAULT '',
+			effort           TEXT NOT NULL DEFAULT '',
+			permission_mode  TEXT NOT NULL CHECK (permission_mode IN ('approve', 'yolo')),
+			origin           TEXT NOT NULL CHECK (origin IN ('web', 'cli', 'onboarding', 'schedule', 'roadmap')),
+			schedule_id      TEXT,
+			run_id           TEXT,
+			rolling_summary  TEXT NOT NULL DEFAULT '',
+			provider_handle  TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+			name             TEXT NOT NULL DEFAULT '',
+			description      TEXT NOT NULL DEFAULT '',
+			auto_named       INTEGER NOT NULL DEFAULT 0,
+			task_id          TEXT
+		);
+
+		INSERT INTO sessions_new (
+			id, agent_name, provider, profile, model, effort, permission_mode, origin,
+			schedule_id, run_id, rolling_summary, provider_handle, created_at, updated_at,
+			name, description, auto_named, task_id
+		)
+		SELECT
+			id, agent_name, provider, profile, model, effort, permission_mode, origin,
+			schedule_id, run_id, rolling_summary, provider_handle, created_at, updated_at,
+			name, description, auto_named, task_id
+		FROM sessions;
+
+		DROP TABLE sessions;
+		ALTER TABLE sessions_new RENAME TO sessions;
+
+		CREATE TRIGGER sessions_origin_immutable
+		BEFORE UPDATE OF origin ON sessions
+		BEGIN
+			SELECT RAISE(ABORT, 'session origin is immutable');
+		END;
+
+		CREATE INDEX idx_sessions_agent_name ON sessions(agent_name);
+		CREATE INDEX idx_sessions_origin ON sessions(origin);
+		CREATE INDEX idx_sessions_schedule_id ON sessions(schedule_id);
+		CREATE INDEX idx_sessions_task_id ON sessions(task_id);`,
+	},
 }
 
 // migrate applies every migration whose version has not yet been recorded. Each

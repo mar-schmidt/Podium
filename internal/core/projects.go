@@ -24,6 +24,47 @@ func (c *Core) CreateProject(ctx context.Context, p projects.Project) (projects.
 	return c.ledger.Create(p)
 }
 
+// UpdateProject applies a partial patch (name/description/colour/etc) to a
+// project in the shared ledger.
+func (c *Core) UpdateProject(ctx context.Context, id string, patch projects.ProjectPatch) (projects.Project, error) {
+	return c.ledger.Update(id, patch)
+}
+
+// DescribeProject asks an agent's engine to draft a one-sentence project
+// description. It borrows the named agent's provider/profile/model (its working
+// auth context) for a single unattended completion and returns the text. The
+// result is not persisted — the caller decides whether to save it.
+func (c *Core) DescribeProject(ctx context.Context, id, agentName string) (string, error) {
+	proj, err := c.ledger.Get(id)
+	if err != nil {
+		return "", err
+	}
+	agent, err := c.store.GetAgent(ctx, agentName)
+	if err != nil {
+		return "", err
+	}
+	title := proj.Name
+	if strings.TrimSpace(title) == "" {
+		title = proj.ID
+	}
+	draft := "There is no description yet."
+	if strings.TrimSpace(proj.Description) != "" {
+		draft = "Current draft to improve: \"" + proj.Description + "\"."
+	}
+	prompt := "You are helping write a short project description for a developer tool that orchestrates AI coding agents. " +
+		"The project is titled \"" + title + "\". " + draft + " " +
+		"Write a single polished sentence (max 18 words), concrete and free of marketing fluff. " +
+		"Return only the description text, with no quotes or preamble."
+
+	text := c.oneShotCompletion(ctx, agent, prompt)
+	text = strings.TrimSpace(text)
+	text = strings.Trim(text, "\"'")
+	if text == "" {
+		return "", fmt.Errorf("the model returned no description")
+	}
+	return text, nil
+}
+
 // ListTasks returns all roadmap tasks.
 func (c *Core) ListTasks(ctx context.Context) ([]store.Task, error) {
 	return c.store.ListTasks(ctx)

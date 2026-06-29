@@ -3,6 +3,7 @@
 
 import type {
   Agent,
+  AgentDetail,
   Health,
   Project,
   ScheduleStatus,
@@ -46,6 +47,29 @@ export async function hireAgent(req: HireRequest): Promise<Agent> {
   );
 }
 
+export async function getAgent(name: string): Promise<AgentDetail> {
+  return asJSON(await fetch(`/api/agents/${encodeURIComponent(name)}`));
+}
+
+export interface AgentUpdate {
+  provider?: string;
+  profile?: string;
+  model?: string;
+  effort?: string;
+  permission_mode?: string;
+  soul?: string;
+}
+
+export async function updateAgent(name: string, patch: AgentUpdate): Promise<AgentDetail> {
+  return asJSON(
+    await fetch(`/api/agents/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
 export async function listSessions(): Promise<Session[]> {
   return (await asJSON<Session[] | null>(await fetch("/api/sessions"))) ?? [];
 }
@@ -60,6 +84,28 @@ export async function listSchedules(): Promise<ScheduleStatus[]> {
 
 export async function runSchedule(name: string): Promise<unknown> {
   return asJSON(await fetch(`/api/schedules/${name}/run`, { method: "POST" }));
+}
+
+export interface NewScheduleRequest {
+  name: string;
+  agent: string;
+  model?: string;
+  effort?: string;
+  cron?: string;
+  every?: string;
+  run_permission: string;
+  allowed_tools?: string[];
+  body: string;
+}
+
+export async function createSchedule(req: NewScheduleRequest): Promise<ScheduleStatus> {
+  return asJSON(
+    await fetch("/api/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  );
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -82,6 +128,36 @@ export async function createProject(req: NewProjectRequest): Promise<Project> {
       body: JSON.stringify(req),
     }),
   );
+}
+
+export interface ProjectPatch {
+  name?: string;
+  description?: string;
+  color?: string;
+  status?: string;
+  stack?: string[];
+  notes?: string;
+}
+
+export async function updateProject(id: string, patch: ProjectPatch): Promise<Project> {
+  return asJSON(
+    await fetch(`/api/projects/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export async function describeProject(id: string, agent: string): Promise<string> {
+  const res = await asJSON<{ description: string }>(
+    await fetch(`/api/projects/${encodeURIComponent(id)}/describe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent }),
+    }),
+  );
+  return res.description;
 }
 
 export async function listTasks(): Promise<Task[]> {

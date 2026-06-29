@@ -17,6 +17,8 @@ import (
 	"github.com/mar-schmidt/Podium/internal/buildinfo"
 	"github.com/mar-schmidt/Podium/internal/client"
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/onboard"
+	"github.com/mar-schmidt/Podium/internal/providercheck"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +50,75 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newSchedulesCmd(&addr))
 	root.AddCommand(newProjectsCmd(&addr))
 	root.AddCommand(newTasksCmd(&addr))
+	root.AddCommand(newDoctorCmd(&addr))
+	root.AddCommand(newOnboardCmd(&addr))
 	return root
+}
+
+func newDoctorCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "doctor",
+		Short:   "Check Podium, Claude, and Codex readiness",
+		Example: "  podium doctor",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := resolveAddr(*addr)
+			if err != nil {
+				return err
+			}
+			c := client.New(resolved)
+			if h, err := c.Health(cmd.Context()); err == nil {
+				fmt.Printf("podiumd: ready at %s (%s %s)\n", resolved, h.Version, h.Commit)
+			} else {
+				fmt.Printf("podiumd: not reachable at %s (%v)\n", resolved, err)
+			}
+			for _, status := range providercheck.CheckAll(cmd.Context(), providercheck.Options{}) {
+				state := "missing"
+				if status.Ready {
+					state = "ready"
+				} else if status.Found {
+					state = "found"
+				}
+				fmt.Printf("%s: %s\n", status.Provider, state)
+				if status.Path != "" {
+					fmt.Printf("  path: %s\n", status.Path)
+				}
+				if status.Version != "" {
+					fmt.Printf("  version: %s\n", status.Version)
+				}
+				if !status.Ready && status.Error != "" {
+					fmt.Printf("  note: %s\n", status.Error)
+				}
+				if !status.Found && status.InstallHint != "" {
+					fmt.Printf("  install: %s\n", status.InstallHint)
+				}
+				if status.Found && !status.Ready && status.LoginHint != "" {
+					fmt.Printf("  login: %s\n", status.LoginHint)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func newOnboardCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "onboard",
+		Aliases: []string{"setup"},
+		Short:   "Run first-run setup and create your first agent",
+		Example: "  podium onboard",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := resolveAddr(*addr)
+			if err != nil {
+				return err
+			}
+			return onboard.Run(cmd.Context(), onboard.Options{
+				Addr: resolved,
+				In:   os.Stdin,
+				Out:  os.Stdout,
+				Err:  os.Stderr,
+			})
+		},
+	}
 }
 
 func newProjectsCmd(addr *string) *cobra.Command {

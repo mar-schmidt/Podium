@@ -98,6 +98,42 @@ func (c *Core) generateSummaryWithModel(ctx context.Context, sess store.Session,
 	return strings.TrimSpace(text.String())
 }
 
+// oneShotCompletion runs a single unattended turn against an agent's engine and
+// returns the assistant's plain-text reply. It borrows the agent's
+// provider/profile/model for working auth and uses low effort. It is used for
+// short helper completions (e.g. drafting a project description) that are not
+// tied to a durable session.
+func (c *Core) oneShotCompletion(ctx context.Context, agent store.Agent, prompt string) string {
+	events, err := c.adapter.SendTurn(ctx, adapter.TurnRequest{
+		SessionID: "oneshot-" + agent.Name,
+		Handle:    adapter.Handle{Provider: agent.Provider},
+		Message:   prompt,
+		Settings: adapter.TurnSettings{
+			AgentName:      agent.Name,
+			Profile:        agent.Profile,
+			ProfileDir:     c.profileDir(agent.Provider, agent.Profile),
+			Model:          agent.Model,
+			Effort:         "low",
+			PermissionMode: agent.PermissionMode,
+			WorkspaceDir:   c.AgentPaths(agent.Name).Workspace,
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	var text strings.Builder
+	for event := range events {
+		switch event.Kind {
+		case adapter.EventAssistantDelta:
+			text.WriteString(event.Content)
+		case adapter.EventAssistantMessage:
+			text.Reset()
+			text.WriteString(event.Content)
+		}
+	}
+	return strings.TrimSpace(text.String())
+}
+
 func deterministicSummary(history []store.Message) string {
 	var b strings.Builder
 	for _, msg := range history {

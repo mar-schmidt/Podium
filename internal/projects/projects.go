@@ -23,6 +23,7 @@ type Project struct {
 	ID          string   `yaml:"id" json:"id"`
 	Name        string   `yaml:"name" json:"name"`
 	Description string   `yaml:"description" json:"description"`
+	Color       string   `yaml:"color,omitempty" json:"color"`
 	Path        string   `yaml:"path" json:"path"`
 	Status      string   `yaml:"status" json:"status"`
 	Stack       []string `yaml:"stack" json:"stack"`
@@ -30,6 +31,18 @@ type Project struct {
 	Backlog     []string `yaml:"backlog" json:"backlog"`
 	Roadmap     []string `yaml:"roadmap" json:"roadmap"`
 	Notes       string   `yaml:"notes" json:"notes"`
+}
+
+// ProjectPatch carries the mutable fields a user can edit from the UI. Nil
+// pointers are left unchanged so partial updates are safe under the
+// last-write-wins ledger.
+type ProjectPatch struct {
+	Name        *string
+	Description *string
+	Color       *string
+	Status      *string
+	Stack       *[]string
+	Notes       *string
 }
 
 // ledgerFile is the on-disk shape of projects.yaml.
@@ -125,6 +138,50 @@ func (l *Ledger) Create(p Project) (Project, error) {
 		return Project{}, err
 	}
 	return p, nil
+}
+
+// Update applies a partial patch to an existing project and rewrites the
+// ledger. It errors if the id does not exist.
+func (l *Ledger) Update(id string, patch ProjectPatch) (Project, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	file, err := l.read()
+	if err != nil {
+		return Project{}, err
+	}
+	idx := -1
+	for i := range file.Projects {
+		if file.Projects[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return Project{}, fmt.Errorf("project %q not found", id)
+	}
+	p := &file.Projects[idx]
+	if patch.Name != nil {
+		p.Name = *patch.Name
+	}
+	if patch.Description != nil {
+		p.Description = *patch.Description
+	}
+	if patch.Color != nil {
+		p.Color = *patch.Color
+	}
+	if patch.Status != nil {
+		p.Status = *patch.Status
+	}
+	if patch.Stack != nil {
+		p.Stack = *patch.Stack
+	}
+	if patch.Notes != nil {
+		p.Notes = *patch.Notes
+	}
+	if err := l.write(file); err != nil {
+		return Project{}, err
+	}
+	return *p, nil
 }
 
 func (l *Ledger) read() (ledgerFile, error) {

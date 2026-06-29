@@ -78,9 +78,27 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 	return c.store.UpdateSessionProviderHandle(ctx, created.ID, handle.ID)
 }
 
-// ListSessions returns all durable sessions.
+// ListSessions returns all durable sessions, with each roadmap session's
+// ProjectID derived from its originating task so clients can filter by project.
 func (c *Core) ListSessions(ctx context.Context) ([]store.Session, error) {
-	return c.store.ListSessions(ctx)
+	sessions, err := c.store.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := c.store.ListTasks(ctx)
+	if err != nil {
+		return sessions, nil // sessions are still usable without project enrichment
+	}
+	projectByTask := make(map[string]string, len(tasks))
+	for _, t := range tasks {
+		projectByTask[t.ID] = t.ProjectID
+	}
+	for i := range sessions {
+		if sessions[i].TaskID != "" {
+			sessions[i].ProjectID = projectByTask[sessions[i].TaskID]
+		}
+	}
+	return sessions, nil
 }
 
 // GetSession fetches a durable session.

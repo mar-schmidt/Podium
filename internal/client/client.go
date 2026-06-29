@@ -13,6 +13,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
@@ -86,6 +88,40 @@ func (c *Client) CreateAgent(ctx context.Context, req AgentCreateRequest) (store
 	return agent, nil
 }
 
+// AgentDetail bundles an agent with its editable SOUL.md body.
+type AgentDetail struct {
+	store.Agent
+	Soul string `json:"Soul"`
+}
+
+// GetAgent fetches an agent and its SOUL.md body.
+func (c *Client) GetAgent(ctx context.Context, name string) (AgentDetail, error) {
+	var detail AgentDetail
+	if err := c.getJSON(ctx, "/api/agents/"+urlPathEscape(name), &detail); err != nil {
+		return detail, err
+	}
+	return detail, nil
+}
+
+// AgentUpdateRequest updates mutable agent defaults and optionally SOUL.md.
+type AgentUpdateRequest struct {
+	Provider       config.Provider       `json:"provider,omitempty"`
+	Profile        *string               `json:"profile,omitempty"`
+	Model          *string               `json:"model,omitempty"`
+	Effort         *string               `json:"effort,omitempty"`
+	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	Soul           *string               `json:"soul,omitempty"`
+}
+
+// UpdateAgent updates an agent through the daemon.
+func (c *Client) UpdateAgent(ctx context.Context, name string, req AgentUpdateRequest) (AgentDetail, error) {
+	var detail AgentDetail
+	if err := c.putJSON(ctx, "/api/agents/"+urlPathEscape(name), req, &detail); err != nil {
+		return detail, err
+	}
+	return detail, nil
+}
+
 // ListAgents lists agents from the daemon.
 func (c *Client) ListAgents(ctx context.Context) ([]store.Agent, error) {
 	var agents []store.Agent
@@ -93,6 +129,21 @@ func (c *Client) ListAgents(ctx context.Context) ([]store.Agent, error) {
 		return nil, err
 	}
 	return agents, nil
+}
+
+// SessionCreateRequest creates a session with explicit origin.
+type SessionCreateRequest struct {
+	AgentName string              `json:"agent_name"`
+	Origin    store.SessionOrigin `json:"origin"`
+}
+
+// CreateSession creates a durable session through the daemon.
+func (c *Client) CreateSession(ctx context.Context, req SessionCreateRequest) (store.Session, error) {
+	var session store.Session
+	if err := c.postJSON(ctx, "/api/sessions", req, &session); err != nil {
+		return session, err
+	}
+	return session, nil
 }
 
 // ChatRequest sends one message, either to an existing session or to a new
@@ -257,4 +308,30 @@ func (c *Client) postJSON(ctx context.Context, path string, in any, out any) err
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (c *Client) putJSON(ctx context.Context, path string, in any, out any) error {
+	raw, _ := json.Marshal(in)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("PUT %s status %d: %s", path, resp.StatusCode, bytes.TrimSpace(body))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func urlPathEscape(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }

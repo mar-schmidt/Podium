@@ -75,6 +75,38 @@ func (c *Core) DeleteAgent(ctx context.Context, name string) error {
 	return c.store.DeleteAgent(ctx, name)
 }
 
+// ReadAgentSoul returns the contents of an agent's SOUL.md, or empty string if
+// the file does not exist yet.
+func (c *Core) ReadAgentSoul(name string) (string, error) {
+	if err := validateAgentName(name); err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(c.AgentPaths(name).Soul)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read SOUL.md for agent %q: %w", name, err)
+	}
+	return string(data), nil
+}
+
+// WriteAgentSoul overwrites an agent's SOUL.md with the given content, creating
+// the agent directory if needed.
+func (c *Core) WriteAgentSoul(name, content string) error {
+	if err := validateAgentName(name); err != nil {
+		return err
+	}
+	paths := c.AgentPaths(name)
+	if err := os.MkdirAll(paths.Root, 0o755); err != nil {
+		return fmt.Errorf("create agent dir: %w", err)
+	}
+	if err := os.WriteFile(paths.Soul, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write SOUL.md for agent %q: %w", name, err)
+	}
+	return nil
+}
+
 func (c *Core) applyAgentDefaults(agent *store.Agent) {
 	if agent.Provider == "" {
 		agent.Provider = c.global.Provider

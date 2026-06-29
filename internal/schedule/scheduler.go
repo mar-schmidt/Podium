@@ -312,3 +312,58 @@ func (s *Scheduler) run(ctx context.Context, name string, trigger store.RunTrigg
 func (s *Scheduler) pathFor(name string) string {
 	return filepath.Join(s.dir, name+".md")
 }
+
+// CreateParams describes a new schedule file to author.
+type CreateParams struct {
+	Name          string
+	Agent         string
+	Model         string
+	Effort        string
+	Cron          string
+	Every         string
+	RunPermission RunPermission
+	AllowedTools  []string
+	Body          string
+}
+
+// Create authors a new schedule markdown file under the schedules directory,
+// validates it by parsing it back, registers it, and returns its status. It
+// errors if a schedule with the same name already exists.
+func (s *Scheduler) Create(ctx context.Context, p CreateParams) (Status, error) {
+	name := Slug(p.Name)
+	if name == "" {
+		return Status{}, fmt.Errorf("schedule name is required")
+	}
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return Status{}, fmt.Errorf("create schedules dir: %w", err)
+	}
+	path := s.pathFor(name)
+	if _, err := os.Stat(path); err == nil {
+		return Status{}, fmt.Errorf("schedule %q already exists", name)
+	}
+
+	if p.RunPermission == "" {
+		p.RunPermission = PermissionPreapproved
+	}
+	content := Render(p)
+	// Validate before committing the file to disk so we never leave an invalid
+	// schedule lying around.
+	if _, err := parseBytes(path, []byte(content)); err != nil {
+		return Status{}, err
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return Status{}, fmt.Errorf("write schedule %q: %w", name, err)
+	}
+
+	s.Sync()
+	statuses, err := s.List(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	for _, st := range statuses {
+		if st.Name == name {
+			return st, nil
+		}
+	}
+	return Status{Name: name, Path: path}, nil
+}

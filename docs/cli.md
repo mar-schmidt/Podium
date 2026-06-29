@@ -135,7 +135,27 @@ podium schedules run morning-calendar
 A disabled schedule can still be run manually; only automatic firing is
 suppressed while it is disabled.
 
+### `podium projects list`
+
+List the shared project ledger (`~/.podium/projects/projects.yaml`). See
+[projects.md](projects.md).
+
+```
+podium projects list
+```
+
+### `podium tasks list`
+
+List roadmap tasks with their status, assigned agent, and project.
+
+```
+podium tasks list
+```
+
+Tasks are created, assigned, moved, and started from the **Roadmap** page in the
+web UI.
+
 ---
 
-*More commands and flags (projects, richer chat controls) are added as later
-phases land; each gets an entry here when it ships.*
+*More commands and flags are added as later phases land; each gets an entry here
+when it ships.*

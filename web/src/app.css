@@ -491,3 +491,413 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* ───────────────────────── Phase 8: shell, nav, pages ───────────────────── */
+
+.app-shell {
+  height: 100vh;
+  overflow: hidden;
+  grid-template-columns: 232px minmax(0, 1fr);
+}
+
+.nav {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 18px;
+  border-right: 1px solid var(--color-line);
+  background: var(--color-surface);
+  padding: 18px 14px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 780;
+}
+
+.brand p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.logo {
+  display: grid;
+  height: 34px;
+  width: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(150deg, #2c9363, #1f7d52);
+  color: white;
+  font-size: 15px;
+}
+
+.nav-links {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  padding: 9px 11px;
+  color: var(--color-ink);
+  font-weight: 640;
+  text-align: left;
+}
+
+.nav-link:hover {
+  background: rgb(196 99 63 / 8%);
+}
+
+.nav-link.active {
+  border-color: rgb(196 99 63 / 26%);
+  background: rgb(196 99 63 / 12%);
+  color: #a44a29;
+}
+
+.nav-icon {
+  font-size: 15px;
+}
+
+.nav-foot {
+  display: grid;
+  gap: 10px;
+}
+
+.daemon-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 50%);
+  padding: 9px 11px;
+}
+
+.daemon-status div {
+  display: grid;
+}
+
+.daemon-status strong {
+  font-size: 13px;
+}
+
+.daemon-status small {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.button.ghost {
+  width: 100%;
+  border: 1px dashed rgb(47 42 38 / 22%);
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.view {
+  min-width: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Chat page lives inside the view as a two-column layout. */
+.chat-layout {
+  display: grid;
+  height: 100vh;
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.session-pane {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  border-right: 1px solid var(--color-line);
+  background: var(--color-surface);
+  padding: 14px;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.chat-layout .chat-shell {
+  min-height: 0;
+  height: 100vh;
+}
+
+.provenance {
+  margin: 5px 0 0;
+  color: #8a5a16;
+}
+
+.empty {
+  color: var(--color-muted);
+  font-size: 13px;
+  padding: 10px 4px;
+}
+
+/* Generic page chrome (Roadmap/Agents/Schedules/Projects). */
+.page {
+  height: 100vh;
+  overflow: auto;
+  padding: 26px 30px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 780;
+}
+
+.page-head p {
+  margin: 6px 0 0;
+  max-width: 640px;
+  color: var(--color-muted);
+}
+
+.head-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.stack {
+  display: grid;
+  gap: 14px;
+}
+
+.card {
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  background: var(--color-surface);
+  padding: 16px;
+  box-shadow: 0 1px 10px rgb(47 42 38 / 4%);
+}
+
+.card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+.small {
+  font-size: 11px;
+}
+
+.notes {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.meta-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.agent-card {
+  display: flex;
+  gap: 12px;
+}
+
+.avatar {
+  display: grid;
+  height: 40px;
+  width: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: white;
+  font-weight: 800;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chip {
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 60%);
+  padding: 2px 9px;
+  font-size: 12px;
+  font-weight: 640;
+}
+
+.chip.small {
+  font-size: 11px;
+  padding: 1px 7px;
+}
+
+/* Schedules */
+.schedule-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.schedule-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error.inline {
+  display: inline-block;
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.runs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.run-dot {
+  height: 12px;
+  width: 12px;
+  border-radius: 3px;
+  background: var(--color-line);
+}
+
+.run-dot.success {
+  background: #2c9363;
+}
+
+.run-dot.error {
+  background: #aa3d32;
+}
+
+.run-dot.running {
+  background: #d99a2b;
+}
+
+/* Roadmap kanban */
+.roadmap .board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(260px, 1fr);
+  gap: 14px;
+  align-items: start;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.column {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 35%);
+  padding: 12px;
+}
+
+.column-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 780;
+}
+
+.column-head .count {
+  color: var(--color-muted);
+  font-weight: 700;
+}
+
+.column-body {
+  display: grid;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.task-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  background: var(--color-surface);
+  padding: 11px;
+  box-shadow: 0 1px 8px rgb(47 42 38 / 4%);
+  cursor: grab;
+}
+
+.task-card h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.project-tag {
+  color: var(--color-accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.task-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-foot .assign {
+  max-width: 130px;
+}
+
+.task-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.button.tiny {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 860px) {
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+}

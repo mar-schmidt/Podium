@@ -22,6 +22,7 @@ type CreateSessionRequest struct {
 	PermissionMode config.PermissionMode
 	ScheduleID     string
 	RunID          string
+	TaskID         string
 }
 
 // CreateSession creates a durable session and starts a fake/provider backing
@@ -41,6 +42,7 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 		Origin:         req.Origin,
 		ScheduleID:     req.ScheduleID,
 		RunID:          req.RunID,
+		TaskID:         req.TaskID,
 	}
 	if req.PermissionMode != "" {
 		sess.PermissionMode = req.PermissionMode

@@ -56,6 +56,7 @@ type Session struct {
 	Origin         SessionOrigin
 	ScheduleID     string
 	RunID          string
+	TaskID         string
 	RollingSummary string
 	ProviderHandle string
 	CreatedAt      string
@@ -106,4 +107,33 @@ type ScheduleRun struct {
 	Error        string
 	StartedAt    string
 	FinishedAt   string
+}
+
+// TaskStatus is a roadmap task's kanban column.
+type TaskStatus string
+
+const (
+	// TaskBacklog is unstarted work.
+	TaskBacklog TaskStatus = "backlog"
+	// TaskInProgress is work an agent has been started on.
+	TaskInProgress TaskStatus = "in_progress"
+	// TaskReview is work awaiting review.
+	TaskReview TaskStatus = "review"
+	// TaskDone is completed work.
+	TaskDone TaskStatus = "done"
+)
+
+// Task is a roadmap item: a unit of work on a shared project, assignable to an
+// agent and startable on demand (origin=roadmap) or at a scheduled pickup time.
+// Tasks are independent in v1 — no inter-task dependencies (§2).
+type Task struct {
+	ID            string
+	ProjectID     string
+	Title         string
+	Body          string
+	AssignedAgent string
+	Status        TaskStatus
+	PickupAt      string // optional RFC3339 scheduled pickup time
+	CreatedAt     string
+	UpdatedAt     string
 }

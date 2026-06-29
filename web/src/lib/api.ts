@@ -1,0 +1,138 @@
+// Typed REST helpers for the Podium daemon. The chat stream uses the WebSocket
+// (see Chat.svelte); everything else is plain JSON over these helpers.
+
+import type {
+  Agent,
+  Health,
+  Project,
+  ScheduleStatus,
+  Session,
+  SessionDetail,
+  Task,
+  TaskStatus,
+} from "./types";
+
+async function asJSON<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as T;
+}
+
+export async function getHealth(): Promise<Health> {
+  return asJSON(await fetch("/healthz"));
+}
+
+export async function listAgents(): Promise<Agent[]> {
+  return (await asJSON<Agent[] | null>(await fetch("/api/agents"))) ?? [];
+}
+
+export interface HireRequest {
+  name: string;
+  provider: string;
+  model: string;
+  effort: string;
+  permission_mode: string;
+}
+
+export async function hireAgent(req: HireRequest): Promise<Agent> {
+  return asJSON(
+    await fetch("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+export async function listSessions(): Promise<Session[]> {
+  return (await asJSON<Session[] | null>(await fetch("/api/sessions"))) ?? [];
+}
+
+export async function getSession(id: string): Promise<SessionDetail> {
+  return asJSON(await fetch(`/api/sessions/${id}`));
+}
+
+export async function listSchedules(): Promise<ScheduleStatus[]> {
+  return (await asJSON<ScheduleStatus[] | null>(await fetch("/api/schedules"))) ?? [];
+}
+
+export async function runSchedule(name: string): Promise<unknown> {
+  return asJSON(await fetch(`/api/schedules/${name}/run`, { method: "POST" }));
+}
+
+export async function listProjects(): Promise<Project[]> {
+  return (await asJSON<Project[] | null>(await fetch("/api/projects"))) ?? [];
+}
+
+export interface NewProjectRequest {
+  id: string;
+  name: string;
+  description: string;
+  stack: string[];
+  notes: string;
+}
+
+export async function createProject(req: NewProjectRequest): Promise<Project> {
+  return asJSON(
+    await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+export async function listTasks(): Promise<Task[]> {
+  return (await asJSON<Task[] | null>(await fetch("/api/tasks"))) ?? [];
+}
+
+export interface NewTaskRequest {
+  project_id: string;
+  title: string;
+  body: string;
+  assigned_agent: string;
+  status?: TaskStatus;
+  pickup_at?: string;
+}
+
+export async function createTask(req: NewTaskRequest): Promise<Task> {
+  return asJSON(
+    await fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+export interface TaskPatch {
+  project_id?: string;
+  title?: string;
+  body?: string;
+  assigned_agent?: string;
+  status?: TaskStatus;
+  pickup_at?: string;
+}
+
+export async function updateTask(id: string, patch: TaskPatch): Promise<Task> {
+  return asJSON(
+    await fetch(`/api/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export async function startTask(id: string): Promise<Session> {
+  return asJSON(await fetch(`/api/tasks/${id}/start`, { method: "POST" }));
+}
+
+// taskSession returns the latest session for a started task, or null if none.
+export async function taskSession(id: string): Promise<Session | null> {
+  const res = await fetch(`/api/tasks/${id}/session`);
+  if (res.status === 404) return null;
+  return asJSON(res);
+}

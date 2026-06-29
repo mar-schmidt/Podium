@@ -96,7 +96,28 @@ func (s *Scheduler) resyncLoop() {
 			return
 		case <-ticker.C:
 			s.Sync()
+			s.pickupDueTasks(s.ctx)
 		}
+	}
+}
+
+// pickupDueTasks starts any backlog task whose scheduled pickup time has passed,
+// running it unattended under the preapproved policy. Starting a task moves it to
+// in_progress, so it is not picked up twice.
+func (s *Scheduler) pickupDueTasks(ctx context.Context) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	due, err := s.store.ListDueTasks(ctx, now)
+	if err != nil {
+		s.log.Warn("list due tasks", "error", err)
+		return
+	}
+	for _, task := range due {
+		sess, err := s.core.StartTask(ctx, core.StartTaskRequest{TaskID: task.ID, Unattended: true})
+		if err != nil {
+			s.log.Warn("task pickup failed", "task", task.ID, "error", err)
+			continue
+		}
+		s.log.Info("task picked up", "task", task.ID, "session", sess.ID)
 	}
 }
 

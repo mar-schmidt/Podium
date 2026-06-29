@@ -11,6 +11,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -34,6 +35,7 @@ type Core struct {
 	global   config.Global
 	profiles map[string]config.Profile
 	composer InstructionComposer
+	ledger   *projects.Ledger
 }
 
 // New creates a Core service.
@@ -62,6 +64,7 @@ func New(opts Options) (*Core, error) {
 		global:   global,
 		profiles: map[string]config.Profile{},
 		composer: NewFileComposer(opts.Paths),
+		ledger:   projects.New(opts.Paths.ProjectsDir),
 	}
 	for _, profile := range opts.Profiles {
 		c.profiles[profile.Name] = profile

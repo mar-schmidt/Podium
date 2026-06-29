@@ -16,8 +16,8 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 		sess.ID = uuid.NewString()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions
-		(id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin, schedule_id, run_id, rolling_summary, provider_handle)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+		(id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin, schedule_id, run_id, task_id, rolling_summary, provider_handle)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
 		sess.ID,
 		sess.AgentName,
 		sess.Name,
@@ -31,6 +31,7 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 		sess.Origin,
 		sess.ScheduleID,
 		sess.RunID,
+		sess.TaskID,
 		sess.RollingSummary,
 		sess.ProviderHandle,
 	)
@@ -44,7 +45,7 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT
 		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
-		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), COALESCE(task_id, ''), rolling_summary, provider_handle, created_at, updated_at
 		FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
 	if err != nil {
@@ -60,7 +61,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
 		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
-		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), COALESCE(task_id, ''), rolling_summary, provider_handle, created_at, updated_at
 		FROM sessions ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
@@ -83,10 +84,32 @@ func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
 func (s *Store) ListSessionsBySchedule(ctx context.Context, scheduleName string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
 		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
-		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), COALESCE(task_id, ''), rolling_summary, provider_handle, created_at, updated_at
 		FROM sessions WHERE schedule_id = ? ORDER BY created_at DESC, id DESC`, scheduleName)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions for schedule %q: %w", scheduleName, err)
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		sess, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, rows.Err()
+}
+
+// ListSessionsByTask returns sessions started from a roadmap task, newest first.
+func (s *Store) ListSessionsByTask(ctx context.Context, taskID string) ([]Session, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), COALESCE(task_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		FROM sessions WHERE task_id = ? ORDER BY created_at DESC, id DESC`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions for task %q: %w", taskID, err)
 	}
 	defer rows.Close()
 
@@ -279,6 +302,7 @@ func scanSession(row scanner) (Session, error) {
 		&sess.Origin,
 		&sess.ScheduleID,
 		&sess.RunID,
+		&sess.TaskID,
 		&sess.RollingSummary,
 		&sess.ProviderHandle,
 		&sess.CreatedAt,

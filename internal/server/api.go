@@ -123,8 +123,11 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 type sessionDetail struct {
-	Session store.Session   `json:"session"`
-	History []store.Message `json:"history"`
+	Session     store.Session   `json:"session"`
+	History     []store.Message `json:"history"`
+	Task        *store.Task     `json:"task,omitempty"`
+	ProjectID   string          `json:"project_id,omitempty"`
+	ProjectName string          `json:"project_name,omitempty"`
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +154,20 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nil, err)
 		return
 	}
-	writeJSON(w, sessionDetail{Session: session, History: history}, nil)
+	detail := sessionDetail{Session: session, History: history}
+	// Attach roadmap provenance so the chat can show "part of <project>".
+	if session.TaskID != "" {
+		if task, err := s.core.GetTask(r.Context(), session.TaskID); err == nil {
+			detail.Task = &task
+			detail.ProjectID = task.ProjectID
+			if task.ProjectID != "" {
+				if project, err := s.core.GetProject(r.Context(), task.ProjectID); err == nil {
+					detail.ProjectName = project.Name
+				}
+			}
+		}
+	}
+	writeJSON(w, detail, nil)
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {

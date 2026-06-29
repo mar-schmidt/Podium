@@ -46,7 +46,80 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newAgentsCmd(&addr))
 	root.AddCommand(newChatCmd(&addr))
 	root.AddCommand(newSchedulesCmd(&addr))
+	root.AddCommand(newProjectsCmd(&addr))
+	root.AddCommand(newTasksCmd(&addr))
 	return root
+}
+
+func newProjectsCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "projects",
+		Short:   "Inspect the shared project ledger",
+		Long:    "Projects are shared, agent-independent resources tracked in ~/.podium/projects/projects.yaml.",
+		Example: "  podium projects list",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:     "list",
+		Short:   "List projects",
+		Example: "  podium projects list",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			list, err := c.ListProjects(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if len(list) == 0 {
+				fmt.Println("no projects yet")
+				return nil
+			}
+			for _, p := range list {
+				fmt.Printf("%s\t%s\tstatus=%s\t%s\n", p.ID, p.Name, p.Status, p.Description)
+			}
+			return nil
+		},
+	})
+	return cmd
+}
+
+func newTasksCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "tasks",
+		Short:   "Inspect roadmap tasks",
+		Long:    "Roadmap tasks are units of work on shared projects, assignable to agents and startable on demand.",
+		Example: "  podium tasks list",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:     "list",
+		Short:   "List roadmap tasks",
+		Example: "  podium tasks list",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			tasks, err := c.ListTasks(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if len(tasks) == 0 {
+				fmt.Println("no tasks yet")
+				return nil
+			}
+			for _, t := range tasks {
+				agent := t.AssignedAgent
+				if agent == "" {
+					agent = "-"
+				}
+				fmt.Printf("%s\t[%s]\t%s\tagent=%s\tproject=%s\n",
+					t.ID[:8], t.Status, t.Title, agent, t.ProjectID)
+			}
+			return nil
+		},
+	})
+	return cmd
 }
 
 func newStatusCmd(addr *string) *cobra.Command {

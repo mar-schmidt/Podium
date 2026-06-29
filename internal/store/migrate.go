@@ -100,6 +100,27 @@ var migrations = []migration{
 		CREATE INDEX idx_schedule_runs_name ON schedule_runs(schedule_name, started_at DESC);
 		CREATE INDEX idx_sessions_schedule_id ON sessions(schedule_id);`,
 	},
+	{
+		version: 5,
+		name:    "tasks",
+		sql: `CREATE TABLE tasks (
+			id             TEXT PRIMARY KEY,
+			project_id     TEXT NOT NULL DEFAULT '',
+			title          TEXT NOT NULL,
+			body           TEXT NOT NULL DEFAULT '',
+			assigned_agent TEXT NOT NULL DEFAULT '',
+			status         TEXT NOT NULL CHECK (status IN ('backlog', 'in_progress', 'review', 'done')),
+			pickup_at      TEXT,
+			created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE INDEX idx_tasks_project ON tasks(project_id);
+		CREATE INDEX idx_tasks_status ON tasks(status);
+
+		ALTER TABLE sessions ADD COLUMN task_id TEXT;
+		CREATE INDEX idx_sessions_task_id ON sessions(task_id);`,
+	},
 }
 
 // migrate applies every migration whose version has not yet been recorded. Each

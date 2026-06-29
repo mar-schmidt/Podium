@@ -142,6 +142,38 @@
     New fake-adapter tests cover scheduled-run creation/provenance (origin +
     schedule/run linkage + run record), preapproved allow/deny permission
     behavior, disabled-does-not-register, and frontmatter parse validation.
+- **Phase 8 — Projects ledger, Roadmap kanban (tasks), remaining UI pages: ✅
+  COMPLETE (2026-06-29).** Backend: `internal/projects` (shared `projects.yaml`
+  ledger — List/Get/Create with project-dir scaffolding, last-write-wins);
+  store migration v5 (`tasks` table + `sessions.task_id` + indexes), Task CRUD,
+  `ListDueTasks`, and `ListSessionsByTask`; core methods for projects/tasks plus
+  `StartTask` (creates a roadmap-origin session bound to the task's agent, moves
+  the task to in_progress; unattended variant runs the first turn under the §7.7
+  preapproved relay). Session detail now carries task + project provenance. The
+  scheduler's resync loop also **picks up due tasks** (pickup_at ≤ now, UTC) and
+  starts them unattended. API: `/api/projects`, `/api/tasks` (+`/<id>` PATCH,
+  `/<id>/start`, `/<id>/session`). CLI: `podium projects list`, `podium tasks
+  list`. Frontend: refactored the monolithic chat into a **nav shell + client-
+  side router** (`App.svelte`) with five pages — `Chat` (WS extracted, now with a
+  roadmap "part of <project>" banner + seed-message support), `Roadmap`
+  (drag-drop kanban, assign, Start / Open-in-chat, + New task with optional
+  scheduled pickup), `Agents`, `Schedules` (cards + Run now + run-history dots),
+  `Projects` (ledger + New project). Added `lib/api.ts` typed REST helpers and
+  Project/Task/SessionDetail contract types. Docs: `docs/projects.md`, cli.md,
+  README, plan.
+  - *Decisions/notes:* (1) tasks are a Podium-managed SQLite entity (the spec
+    extension confirmed at planning), kept independent — no DAG; (2) "Start on
+    demand" seeds the first turn from the **web client** so the human approve
+    relay applies, while scheduled pickup runs server-side unattended; (3)
+    pickup_at is treated as UTC and compared lexically as RFC3339; (4) project
+    ledger writes are serialized in-process but remain last-write-wins across
+    agent processes (R5.12); (5) per-agent workspace **file browsing** was scoped
+    to the projects ledger view for v1 (filesystem browser deferred).
+  - *Verification:* `go test ./...` + `go vet ./...` green; `svelte-check` 0
+    errors; `make build` succeeds; daemon smoke test exercised project create →
+    task create → assign → start → roadmap session with provenance, plus the
+    nav/pages. New Go tests cover the projects ledger round-trip, task CRUD, and
+    StartTask provenance/in_progress transition.
 
 ## Context
 

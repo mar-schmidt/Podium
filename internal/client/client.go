@@ -17,6 +17,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
 	"github.com/mar-schmidt/Podium/internal/store"
@@ -199,6 +200,24 @@ func (c *Client) RunSchedule(ctx context.Context, name string) (store.ScheduleRu
 		return run, err
 	}
 	return run, nil
+}
+
+// ListProjects fetches the shared project ledger from the daemon.
+func (c *Client) ListProjects(ctx context.Context) ([]projects.Project, error) {
+	var list []projects.Project
+	if err := c.getJSON(ctx, "/api/projects", &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// ListTasks fetches all roadmap tasks from the daemon.
+func (c *Client) ListTasks(ctx context.Context) ([]store.Task, error) {
+	var tasks []store.Task
+	if err := c.getJSON(ctx, "/api/tasks", &tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

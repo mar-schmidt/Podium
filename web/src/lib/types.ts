@@ -40,6 +40,44 @@ export interface Session {
   ProviderHandle: string;
 }
 
+export type TaskStatus = "backlog" | "in_progress" | "review" | "done";
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  status: string;
+  stack: string[];
+  repo: string;
+  backlog: string[];
+  roadmap: string[];
+  notes: string;
+}
+
+// Task mirrors store.Task (Go-exported field names, no json tags).
+export interface Task {
+  ID: string;
+  ProjectID: string;
+  Title: string;
+  Body: string;
+  AssignedAgent: string;
+  Status: TaskStatus;
+  PickupAt: string;
+  CreatedAt: string;
+  UpdatedAt: string;
+}
+
+// SessionDetail is the GET /api/sessions/<id> response, including roadmap
+// provenance when the session was started from a task.
+export interface SessionDetail {
+  session: Session;
+  history: Message[];
+  task?: Task;
+  project_id?: string;
+  project_name?: string;
+}
+
 export type RunPermission = "preapproved" | "yolo";
 export type RunTrigger = "cron" | "manual";
 export type RunStatus = "running" | "success" | "error";

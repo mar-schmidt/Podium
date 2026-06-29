@@ -1,0 +1,1012 @@
+package adapter
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mar-schmidt/Podium/internal/config"
+	podiumexec "github.com/mar-schmidt/Podium/internal/exec"
+)
+
+var errCodexTransport = errors.New("codex app-server transport failed")
+
+// CodexOptions configures the OpenAI Codex adapter.
+type CodexOptions struct {
+	Discovery         podiumexec.Discovery
+	PermissionTimeout time.Duration
+}
+
+// Codex drives a long-lived `codex app-server --listen stdio://` process. A
+// separate app-server is maintained for each CODEX_HOME profile.
+type Codex struct {
+	bin               string
+	permissionTimeout time.Duration
+
+	mu      sync.Mutex
+	clients map[string]*codexClient
+}
+
+// NewCodex discovers the Codex CLI and returns an adapter.
+func NewCodex(opts CodexOptions) (*Codex, error) {
+	found, err := opts.Discovery.Find("codex")
+	if err != nil {
+		return nil, err
+	}
+	timeout := opts.PermissionTimeout
+	if timeout == 0 {
+		timeout = defaultPermissionTimeout
+	}
+	return &Codex{
+		bin:               found.Path,
+		permissionTimeout: timeout,
+		clients:           map[string]*codexClient{},
+	}, nil
+}
+
+// Start creates a new Codex thread and returns its threadId.
+func (c *Codex) Start(ctx context.Context, req StartRequest) (Handle, error) {
+	if req.WorkspaceDir == "" {
+		return Handle{}, errors.New("codex workspace dir is required")
+	}
+	client := c.client(req.ProfileDir)
+	result, err := client.call(ctx, "thread/start", codexThreadStartParams(req))
+	if err != nil {
+		return Handle{}, err
+	}
+	if err := codexDoubleLoadGuard(result, req.WorkspaceDir); err != nil {
+		return Handle{}, err
+	}
+	threadID, err := codexThreadID(result)
+	if err != nil {
+		return Handle{}, err
+	}
+	client.markLoaded(threadID)
+	return Handle{Provider: config.ProviderCodex, ID: threadID}, nil
+}
+
+// Resume rejoins a persisted Codex thread when enough provider context is
+// available. The current core path resumes lazily in SendTurn, where profile and
+// workspace settings are present.
+func (c *Codex) Resume(ctx context.Context, req ResumeRequest) (Handle, error) {
+	if err := ctx.Err(); err != nil {
+		return Handle{}, err
+	}
+	if req.Handle.ID == "" {
+		return Handle{}, errors.New("codex threadId is required")
+	}
+	return req.Handle, nil
+}
+
+// SendTurn starts a Codex turn and streams agent message deltas until the turn
+// completes. Existing handles are lazily resumed if the app-server was restarted.
+func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, error) {
+	if req.Settings.WorkspaceDir == "" {
+		return nil, errors.New("codex workspace dir is required")
+	}
+	client := c.client(req.Settings.ProfileDir)
+	threadID := req.Handle.ID
+	firstEvents := []Event{}
+	if threadID == "" {
+		handle, err := c.Start(ctx, StartRequest{
+			SessionID:      req.SessionID,
+			AgentName:      req.Settings.AgentName,
+			Provider:       config.ProviderCodex,
+			Profile:        req.Settings.Profile,
+			ProfileDir:     req.Settings.ProfileDir,
+			Model:          req.Settings.Model,
+			Effort:         req.Settings.Effort,
+			PermissionMode: req.Settings.PermissionMode,
+			WorkspaceDir:   req.Settings.WorkspaceDir,
+		})
+		if err != nil {
+			return nil, err
+		}
+		threadID = handle.ID
+		firstEvents = append(firstEvents, Event{Kind: EventHandleUpdated, Handle: &handle})
+	} else if err := client.ensureThread(ctx, threadID, req.Settings); err != nil {
+		return nil, err
+	}
+
+	result, err := client.call(ctx, "turn/start", codexTurnStartParams(threadID, req.Message, req.Settings))
+	if err != nil && threadID != "" {
+		client.markUnloaded(threadID)
+		if resumeErr := client.ensureThread(ctx, threadID, req.Settings); resumeErr == nil {
+			result, err = client.call(ctx, "turn/start", codexTurnStartParams(threadID, req.Message, req.Settings))
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	turnID, err := codexTurnID(result)
+	if err != nil {
+		return nil, err
+	}
+
+	key := codexTurnKey{threadID: threadID, turnID: turnID}
+	turnEvents := client.registerTurn(key, codexActiveTurn{
+		ctx:          ctx,
+		podiumTurnID: firstNonEmptyString(req.Settings.PermissionTurnID, req.SessionID),
+		relay:        req.Relay,
+		timeout:      c.permissionTimeout,
+	})
+
+	out := make(chan Event, 64)
+	go client.streamTurn(ctx, key, turnEvents, firstEvents, out)
+	return out, nil
+}
+
+// Teardown leaves the long-lived app-server running. Podium currently does not
+// carry profile context through this interface, so unsubscribe is deferred until
+// a future lifecycle pass can target the correct CODEX_HOME process.
+func (c *Codex) Teardown(ctx context.Context, handle Handle) error {
+	return ctx.Err()
+}
+
+func (c *Codex) client(profileDir string) *codexClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.clients == nil {
+		c.clients = map[string]*codexClient{}
+	}
+	client := c.clients[profileDir]
+	if client == nil {
+		client = newCodexClient(c.bin, profileDir)
+		c.clients[profileDir] = client
+	}
+	return client
+}
+
+type codexClient struct {
+	bin        string
+	profileDir string
+
+	initMu sync.Mutex
+	mu     sync.Mutex
+
+	cmd         *osProcess
+	stdin       io.WriteCloser
+	nextID      int64
+	initialized bool
+
+	pending  map[string]chan codexCallResponse
+	loaded   map[string]bool
+	watchers map[codexTurnKey]chan codexStreamEvent
+	buffered map[codexTurnKey][]codexStreamEvent
+	active   map[codexTurnKey]codexActiveTurn
+}
+
+type osProcess struct {
+	cmdWait func() error
+	kill    func() error
+}
+
+type codexCallResponse struct {
+	result json.RawMessage
+	err    error
+}
+
+type codexRPCMessage struct {
+	ID     json.RawMessage `json:"id,omitempty"`
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *codexRPCError  `json:"error,omitempty"`
+}
+
+type codexRPCError struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+func (e codexRPCError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("codex rpc error %d", e.Code)
+	}
+	return fmt.Sprintf("codex rpc error %d: %s", e.Code, e.Message)
+}
+
+type codexTurnKey struct {
+	threadID string
+	turnID   string
+}
+
+type codexActiveTurn struct {
+	ctx          context.Context
+	podiumTurnID string
+	relay        PermissionRelay
+	timeout      time.Duration
+}
+
+type codexStreamEvent struct {
+	method string
+	params json.RawMessage
+	err    error
+}
+
+func newCodexClient(bin, profileDir string) *codexClient {
+	return &codexClient{
+		bin:        bin,
+		profileDir: profileDir,
+		pending:    map[string]chan codexCallResponse{},
+		loaded:     map[string]bool{},
+		watchers:   map[codexTurnKey]chan codexStreamEvent{},
+		buffered:   map[codexTurnKey][]codexStreamEvent{},
+		active:     map[codexTurnKey]codexActiveTurn{},
+	}
+}
+
+func (c *codexClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := c.ensureProcess(ctx); err != nil {
+			return nil, err
+		}
+		result, err := c.callStarted(ctx, method, params)
+		if err == nil {
+			return result, nil
+		}
+		last = err
+		if !errors.Is(err, errCodexTransport) {
+			return nil, err
+		}
+		c.reset()
+	}
+	return nil, last
+}
+
+func (c *codexClient) ensureProcess(ctx context.Context) error {
+	c.initMu.Lock()
+	defer c.initMu.Unlock()
+
+	c.mu.Lock()
+	if c.stdin == nil {
+		if err := c.startLocked(); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+	}
+	initialized := c.initialized
+	c.mu.Unlock()
+	if initialized {
+		return ctx.Err()
+	}
+
+	if _, err := c.callStarted(ctx, "initialize", map[string]any{
+		"clientInfo": map[string]any{
+			"name":    "podium",
+			"title":   "Podium",
+			"version": "dev",
+		},
+		"capabilities": map[string]any{
+			"experimentalApi":                true,
+			"requestAttestation":             false,
+			"mcpServerOpenaiFormElicitation": false,
+		},
+	}); err != nil {
+		c.reset()
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stdin == nil {
+		return fmt.Errorf("%w: app-server exited during initialize", errCodexTransport)
+	}
+	if err := c.writeJSONLocked(map[string]any{"method": "initialized"}); err != nil {
+		return fmt.Errorf("%w: write initialized: %v", errCodexTransport, err)
+	}
+	c.initialized = true
+	return nil
+}
+
+func (c *codexClient) startLocked() error {
+	cmd := podiumexec.Command(context.Background(), c.bin, "app-server", "--listen", "stdio://")
+	cmd.Env = codexEnv(c.profileDir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("codex stdin: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("codex stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("codex stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start codex app-server: %w", err)
+	}
+
+	proc := &osProcess{
+		cmdWait: cmd.Wait,
+		kill:    func() error { return podiumexec.Kill(cmd) },
+	}
+	c.cmd = proc
+	c.stdin = stdin
+	c.initialized = false
+	c.loaded = map[string]bool{}
+	go c.readLoop(proc, stdout)
+	go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	return nil
+}
+
+func (c *codexClient) callStarted(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	c.mu.Lock()
+	if c.stdin == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("%w: app-server is not running", errCodexTransport)
+	}
+	c.nextID++
+	id := c.nextID
+	idKey := strconv.FormatInt(id, 10)
+	ch := make(chan codexCallResponse, 1)
+	c.pending[idKey] = ch
+	req := map[string]any{"id": id, "method": method}
+	if params != nil {
+		req["params"] = params
+	}
+	if err := c.writeJSONLocked(req); err != nil {
+		delete(c.pending, idKey)
+		c.mu.Unlock()
+		return nil, fmt.Errorf("%w: write %s: %v", errCodexTransport, method, err)
+	}
+	c.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		c.mu.Lock()
+		delete(c.pending, idKey)
+		c.mu.Unlock()
+		return nil, ctx.Err()
+	case resp := <-ch:
+		return resp.result, resp.err
+	}
+}
+
+func (c *codexClient) writeJSONLocked(value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	_, err = c.stdin.Write(raw)
+	return err
+}
+
+func (c *codexClient) readLoop(proc *osProcess, stdout io.Reader) {
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var msg codexRPCMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+		c.dispatch(msg)
+	}
+	err := scanner.Err()
+	waitErr := proc.cmdWait()
+	if err == nil {
+		err = waitErr
+	}
+	if err == nil {
+		err = io.EOF
+	}
+	c.mu.Lock()
+	if c.cmd == proc {
+		c.failLocked(fmt.Errorf("%w: %v", errCodexTransport, err))
+	}
+	c.mu.Unlock()
+}
+
+func (c *codexClient) dispatch(msg codexRPCMessage) {
+	if len(msg.ID) > 0 && msg.Method == "" {
+		c.dispatchResponse(msg)
+		return
+	}
+	if len(msg.ID) > 0 && msg.Method != "" {
+		go c.handleServerRequest(msg)
+		return
+	}
+	if msg.Method == "" {
+		return
+	}
+	c.dispatchNotification(msg)
+}
+
+func (c *codexClient) dispatchResponse(msg codexRPCMessage) {
+	key := codexIDKey(msg.ID)
+	c.mu.Lock()
+	ch := c.pending[key]
+	delete(c.pending, key)
+	c.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	if msg.Error != nil {
+		ch <- codexCallResponse{err: *msg.Error}
+		return
+	}
+	ch <- codexCallResponse{result: append(json.RawMessage(nil), msg.Result...)}
+}
+
+func (c *codexClient) dispatchNotification(msg codexRPCMessage) {
+	key, ok := codexNotificationKey(msg.Method, msg.Params)
+	if !ok {
+		return
+	}
+	event := codexStreamEvent{
+		method: msg.Method,
+		params: append(json.RawMessage(nil), msg.Params...),
+	}
+	c.mu.Lock()
+	ch := c.watchers[key]
+	if ch == nil {
+		buffered := append(c.buffered[key], event)
+		if len(buffered) > 256 {
+			buffered = buffered[len(buffered)-256:]
+		}
+		c.buffered[key] = buffered
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	ch <- event
+}
+
+func (c *codexClient) reset() {
+	c.mu.Lock()
+	proc := c.cmd
+	c.failLocked(fmt.Errorf("%w: connection reset", errCodexTransport))
+	c.mu.Unlock()
+	if proc != nil && proc.kill != nil {
+		_ = proc.kill()
+	}
+}
+
+func (c *codexClient) failLocked(err error) {
+	c.cmd = nil
+	c.stdin = nil
+	c.initialized = false
+	c.loaded = map[string]bool{}
+	for key, ch := range c.pending {
+		delete(c.pending, key)
+		ch <- codexCallResponse{err: err}
+	}
+	for _, ch := range c.watchers {
+		select {
+		case ch <- codexStreamEvent{err: err}:
+		default:
+		}
+	}
+}
+
+func (c *codexClient) ensureThread(ctx context.Context, threadID string, settings TurnSettings) error {
+	if threadID == "" {
+		return errors.New("codex threadId is required")
+	}
+	if c.isLoaded(threadID) {
+		return nil
+	}
+	result, err := c.call(ctx, "thread/resume", codexThreadResumeParams(threadID, settings))
+	if err != nil {
+		return err
+	}
+	if _, err := codexThreadID(result); err != nil {
+		return err
+	}
+	c.markLoaded(threadID)
+	return nil
+}
+
+func (c *codexClient) isLoaded(threadID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.loaded[threadID]
+}
+
+func (c *codexClient) markLoaded(threadID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.loaded[threadID] = true
+}
+
+func (c *codexClient) markUnloaded(threadID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.loaded, threadID)
+}
+
+func (c *codexClient) registerTurn(key codexTurnKey, active codexActiveTurn) <-chan codexStreamEvent {
+	ch := make(chan codexStreamEvent, 128)
+	c.mu.Lock()
+	c.watchers[key] = ch
+	c.active[key] = active
+	buffered := c.buffered[key]
+	delete(c.buffered, key)
+	c.mu.Unlock()
+	go func() {
+		for _, event := range buffered {
+			ch <- event
+		}
+	}()
+	return ch
+}
+
+func (c *codexClient) unregisterTurn(key codexTurnKey) {
+	c.mu.Lock()
+	delete(c.watchers, key)
+	delete(c.active, key)
+	c.mu.Unlock()
+}
+
+func (c *codexClient) streamTurn(ctx context.Context, key codexTurnKey, events <-chan codexStreamEvent, first []Event, out chan<- Event) {
+	defer close(out)
+	defer c.unregisterTurn(key)
+	for _, event := range first {
+		if !sendAdapterEvent(ctx, out, event) {
+			return
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-events:
+			if event.err != nil {
+				sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: event.err.Error()})
+				return
+			}
+			switch event.method {
+			case "item/agentMessage/delta":
+				if text := codexDelta(event.params); text != "" {
+					if !sendAdapterEvent(ctx, out, Event{Kind: EventAssistantDelta, Content: text}) {
+						return
+					}
+				}
+			case "turn/completed":
+				if text := codexFinalMessage(event.params); text != "" {
+					if !sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: text}) {
+						return
+					}
+				}
+				sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
+				return
+			case "error":
+				sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: codexErrorMessage(event.params)})
+				sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
+				return
+			}
+		}
+	}
+}
+
+func (c *codexClient) handleServerRequest(msg codexRPCMessage) {
+	if msg.Method == "currentTime/read" {
+		c.respond(msg.ID, map[string]any{"currentTimeAt": time.Now().Unix()})
+		return
+	}
+	if !codexIsApprovalRequest(msg.Method) {
+		c.respondError(msg.ID, -32601, fmt.Sprintf("unsupported codex server request %s", msg.Method))
+		return
+	}
+	active, ok := c.waitActiveForRequest(msg.Method, msg.Params, 2*time.Second)
+	decision := PermissionDecision{Behavior: "deny"}
+	if ok && active.relay != nil {
+		req := codexPermissionRequest(msg.Method, msg.ID, msg.Params, active)
+		got, err := active.relay.RequestPermission(active.ctx, req, active.timeout)
+		if err == nil && got.Behavior != "" {
+			decision = got
+		}
+	}
+	c.respond(msg.ID, codexApprovalResponse(msg.Method, msg.Params, decision))
+}
+
+func (c *codexClient) waitActiveForRequest(method string, params json.RawMessage, timeout time.Duration) (codexActiveTurn, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if active, ok := c.activeForRequest(method, params); ok {
+			return active, true
+		}
+		if timeout <= 0 || time.Now().After(deadline) {
+			return codexActiveTurn{}, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (c *codexClient) activeForRequest(method string, params json.RawMessage) (codexActiveTurn, bool) {
+	threadID, turnID := codexRequestThreadTurn(method, params)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if turnID != "" {
+		active, ok := c.active[codexTurnKey{threadID: threadID, turnID: turnID}]
+		return active, ok
+	}
+	for key, active := range c.active {
+		if key.threadID == threadID {
+			return active, true
+		}
+	}
+	return codexActiveTurn{}, false
+}
+
+func (c *codexClient) respond(id json.RawMessage, result any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stdin == nil {
+		return
+	}
+	_ = c.writeJSONLocked(map[string]any{
+		"id":     json.RawMessage(id),
+		"result": result,
+	})
+}
+
+func (c *codexClient) respondError(id json.RawMessage, code int, message string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stdin == nil {
+		return
+	}
+	_ = c.writeJSONLocked(map[string]any{
+		"id": json.RawMessage(id),
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	})
+}
+
+func codexThreadStartParams(req StartRequest) map[string]any {
+	params := map[string]any{
+		"cwd":                   req.WorkspaceDir,
+		"runtimeWorkspaceRoots": []string{req.WorkspaceDir},
+		"approvalPolicy":        codexApprovalPolicy(req.PermissionMode),
+		"sandbox":               codexSandboxMode(req.PermissionMode),
+		"threadSource":          "podium",
+		"serviceName":           "podium",
+	}
+	if req.Model != "" {
+		params["model"] = req.Model
+	}
+	return params
+}
+
+func codexThreadResumeParams(threadID string, settings TurnSettings) map[string]any {
+	params := map[string]any{
+		"threadId":       threadID,
+		"excludeTurns":   true,
+		"approvalPolicy": codexApprovalPolicy(settings.PermissionMode),
+		"sandbox":        codexSandboxMode(settings.PermissionMode),
+	}
+	if settings.WorkspaceDir != "" {
+		params["cwd"] = settings.WorkspaceDir
+		params["runtimeWorkspaceRoots"] = []string{settings.WorkspaceDir}
+	}
+	if settings.Model != "" {
+		params["model"] = settings.Model
+	}
+	return params
+}
+
+func codexTurnStartParams(threadID, message string, settings TurnSettings) map[string]any {
+	params := map[string]any{
+		"threadId": threadID,
+		"input": []map[string]any{{
+			"type":          "text",
+			"text":          message,
+			"text_elements": []any{},
+		}},
+		"cwd":                   settings.WorkspaceDir,
+		"runtimeWorkspaceRoots": []string{settings.WorkspaceDir},
+		"approvalPolicy":        codexApprovalPolicy(settings.PermissionMode),
+		"sandboxPolicy":         codexSandboxPolicy(settings.PermissionMode, settings.WorkspaceDir),
+	}
+	if settings.Model != "" {
+		params["model"] = settings.Model
+	}
+	if settings.Effort != "" {
+		params["effort"] = settings.Effort
+	}
+	return params
+}
+
+func codexApprovalPolicy(mode config.PermissionMode) string {
+	if mode == config.PermissionYolo {
+		return "never"
+	}
+	return "on-request"
+}
+
+func codexSandboxMode(mode config.PermissionMode) string {
+	if mode == config.PermissionYolo {
+		return "danger-full-access"
+	}
+	return "workspace-write"
+}
+
+func codexSandboxPolicy(mode config.PermissionMode, workspace string) map[string]any {
+	if mode == config.PermissionYolo {
+		return map[string]any{"type": "dangerFullAccess"}
+	}
+	return map[string]any{
+		"type":                "workspaceWrite",
+		"writableRoots":       []string{workspace},
+		"networkAccess":       false,
+		"excludeTmpdirEnvVar": false,
+		"excludeSlashTmp":     false,
+	}
+}
+
+func codexThreadID(raw json.RawMessage) (string, error) {
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", fmt.Errorf("parse codex thread response: %w", err)
+	}
+	if resp.Thread.ID == "" {
+		return "", errors.New("codex thread response missing thread.id")
+	}
+	return resp.Thread.ID, nil
+}
+
+func codexTurnID(raw json.RawMessage) (string, error) {
+	var resp struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", fmt.Errorf("parse codex turn response: %w", err)
+	}
+	if resp.Turn.ID == "" {
+		return "", errors.New("codex turn response missing turn.id")
+	}
+	return resp.Turn.ID, nil
+}
+
+func codexDoubleLoadGuard(raw json.RawMessage, workspace string) error {
+	var resp struct {
+		InstructionSources []string `json:"instructionSources"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil || len(resp.InstructionSources) == 0 {
+		return nil
+	}
+	workspaceAgents := filepath.Clean(filepath.Join(workspace, "AGENTS.md"))
+	parentAgents := filepath.Clean(filepath.Join(filepath.Dir(workspace), "AGENTS.md"))
+	var hasWorkspace, hasParent bool
+	for _, src := range resp.InstructionSources {
+		clean := filepath.Clean(src)
+		hasWorkspace = hasWorkspace || clean == workspaceAgents
+		hasParent = hasParent || clean == parentAgents
+	}
+	if hasWorkspace && hasParent {
+		return fmt.Errorf("codex loaded both generated workspace AGENTS.md and parent agent AGENTS.md; refusing duplicated instructions")
+	}
+	return nil
+}
+
+func codexNotificationKey(method string, params json.RawMessage) (codexTurnKey, bool) {
+	var p struct {
+		ThreadID string `json:"threadId"`
+		TurnID   string `json:"turnId"`
+		Turn     struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return codexTurnKey{}, false
+	}
+	turnID := p.TurnID
+	if turnID == "" {
+		turnID = p.Turn.ID
+	}
+	if p.ThreadID == "" || turnID == "" {
+		return codexTurnKey{}, false
+	}
+	switch method {
+	case "item/agentMessage/delta", "turn/completed", "error", "turn/started":
+		return codexTurnKey{threadID: p.ThreadID, turnID: turnID}, true
+	default:
+		return codexTurnKey{}, false
+	}
+}
+
+func codexDelta(params json.RawMessage) string {
+	var p struct {
+		Delta string `json:"delta"`
+	}
+	_ = json.Unmarshal(params, &p)
+	return p.Delta
+}
+
+func codexFinalMessage(params json.RawMessage) string {
+	var p struct {
+		Turn struct {
+			Items []struct {
+				Type  string `json:"type"`
+				Text  string `json:"text"`
+				Phase string `json:"phase"`
+			} `json:"items"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ""
+	}
+	var finals []string
+	var fallback []string
+	for _, item := range p.Turn.Items {
+		if item.Type != "agentMessage" || strings.TrimSpace(item.Text) == "" {
+			continue
+		}
+		if item.Phase == "final_answer" {
+			finals = append(finals, item.Text)
+		} else {
+			fallback = append(fallback, item.Text)
+		}
+	}
+	if len(finals) > 0 {
+		return strings.Join(finals, "\n")
+	}
+	return strings.Join(fallback, "\n")
+}
+
+func codexErrorMessage(params json.RawMessage) string {
+	var p struct {
+		Error any `json:"error"`
+	}
+	if err := json.Unmarshal(params, &p); err == nil && p.Error != nil {
+		raw, _ := json.Marshal(p.Error)
+		return "codex error: " + string(raw)
+	}
+	return "codex error"
+}
+
+func codexIsApprovalRequest(method string) bool {
+	switch method {
+	case "item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/permissions/requestApproval",
+		"execCommandApproval",
+		"applyPatchApproval":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexPermissionRequest(method string, id, params json.RawMessage, active codexActiveTurn) PermissionRequest {
+	fields := map[string]json.RawMessage{}
+	_ = json.Unmarshal(params, &fields)
+	_, codexTurnID := codexRequestThreadTurn(method, params)
+	toolUseID := firstRawString(fields, "approvalId", "itemId", "callId")
+	if toolUseID == "" {
+		toolUseID = codexIDKey(id)
+	}
+	turnID := active.podiumTurnID
+	if turnID == "" {
+		turnID = codexTurnID
+	}
+	return PermissionRequest{
+		ID:        "codex-" + sanitizeFilename(codexIDKey(id)) + "-" + sanitizeFilename(toolUseID),
+		TurnID:    turnID,
+		ToolName:  codexToolName(method),
+		ToolUseID: toolUseID,
+		Input:     append(json.RawMessage(nil), params...),
+	}
+}
+
+func codexRequestThreadTurn(method string, params json.RawMessage) (string, string) {
+	fields := map[string]json.RawMessage{}
+	_ = json.Unmarshal(params, &fields)
+	threadID := firstRawString(fields, "threadId", "conversationId")
+	turnID := firstRawString(fields, "turnId")
+	return threadID, turnID
+}
+
+func codexToolName(method string) string {
+	switch method {
+	case "item/commandExecution/requestApproval", "execCommandApproval":
+		return "codex.command"
+	case "item/fileChange/requestApproval", "applyPatchApproval":
+		return "codex.file_change"
+	case "item/permissions/requestApproval":
+		return "codex.permissions"
+	default:
+		return "codex.approval"
+	}
+}
+
+func codexApprovalResponse(method string, params json.RawMessage, decision PermissionDecision) any {
+	allowed := decision.Behavior == "allow"
+	switch method {
+	case "item/commandExecution/requestApproval":
+		if allowed {
+			return map[string]any{"decision": "accept"}
+		}
+		return map[string]any{"decision": "decline"}
+	case "item/fileChange/requestApproval":
+		if allowed {
+			return map[string]any{"decision": "accept"}
+		}
+		return map[string]any{"decision": "decline"}
+	case "item/permissions/requestApproval":
+		if !allowed {
+			return map[string]any{
+				"permissions":      map[string]any{},
+				"scope":            "turn",
+				"strictAutoReview": true,
+			}
+		}
+		var p struct {
+			Permissions json.RawMessage `json:"permissions"`
+		}
+		granted := map[string]any{}
+		if err := json.Unmarshal(params, &p); err == nil && len(p.Permissions) > 0 {
+			_ = json.Unmarshal(p.Permissions, &granted)
+		}
+		return map[string]any{"permissions": granted, "scope": "turn"}
+	case "execCommandApproval", "applyPatchApproval":
+		if allowed {
+			return map[string]any{"decision": "approved"}
+		}
+		return map[string]any{"decision": "denied"}
+	default:
+		return map[string]any{}
+	}
+}
+
+func firstRawString(fields map[string]json.RawMessage, keys ...string) string {
+	for _, key := range keys {
+		raw := fields[key]
+		if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
+		}
+	}
+	return ""
+}
+
+func codexIDKey(raw json.RawMessage) string {
+	return strings.TrimSpace(string(raw))
+}
+
+func codexEnv(profileDir string) []string {
+	env := os.Environ()
+	if profileDir == "" {
+		return unsetEnv(env, "CODEX_HOME")
+	}
+	return append(unsetEnv(env, "CODEX_HOME"), "CODEX_HOME="+profileDir)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}

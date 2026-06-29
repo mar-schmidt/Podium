@@ -7,7 +7,7 @@ layer implements against (requirements §8).
 | Provider | Contract | Status |
 | --- | --- | --- |
 | Claude | [`claude.md`](claude.md) | implemented in Phase 2 |
-| Codex | `codex.md` | authored in Phase 5 |
+| Codex | [`codex.md`](codex.md) | implemented in Phase 5 |
 
 The grounding reference (process model, CLI parameters, app-server protocol, and
 the OpenClaw policy values Podium deliberately inverts) is captured in

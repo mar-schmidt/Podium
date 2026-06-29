@@ -79,6 +79,23 @@
   - *Notes:* `/profile`, replay on provider/profile switching, and auto-naming
     refinements remain Phase 6; this phase keeps Codex UI visible but Codex
     turns still wait for Phase 5.
+- **Phase 5 — Codex adapter: ✅ COMPLETE (2026-06-29).** Added a long-lived
+  Codex app-server adapter (`codex app-server --listen stdio://`) with
+  newline-delimited JSON-RPC, one process per `CODEX_HOME` profile, startup
+  handshake, `thread/start`, lazy `thread/resume`, `turn/start`, model/effort
+  propagation, workspace `cwd`, persisted `threadId` handles, permission
+  request translation through Podium's broker, and app-server restart recovery.
+  Added a provider router so `podiumd` can serve Claude and Codex sessions
+  side-by-side, plus `docs/integrations/codex.md`.
+  - *Verification:* `go test ./...`, `go vet ./...`, and `make build` green.
+    Adapter tests use a fake Codex app-server for streaming, approval relay, and
+    restart/resume. Live smoke with a throwaway `PODIUM_HOME` streamed a real
+    Codex yolo turn (`C5OK`), then killed the daemon's Codex app-server child and
+    continued the same session successfully (`C5RESUME`).
+  - *Notes:* current `codex-cli 0.142.4` reports only
+    `workspace/AGENTS.md` in `instructionSources` when both workspace and parent
+    agent-root `AGENTS.md` exist. Podium also fails session startup if a future
+    Codex version reports both paths, avoiding duplicated instructions.
 
 ## Context
 

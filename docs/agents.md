@@ -32,5 +32,6 @@ The delivery artifact depends on the provider:
 | Claude | `workspace/CLAUDE.md` | A generated file with `@` imports for each instruction source. |
 | Codex | `workspace/AGENTS.md` | A generated bundle concatenating the instruction sources in order. |
 
-Phase 1 only produces these payloads and tests them with a fake adapter. Real
-Claude and Codex CLI wiring lands in later phases.
+Claude wiring landed in Phase 2 and Codex wiring landed in Phase 5. The
+workspace artifacts are generated and disposable; users edit only the canonical
+base, per-agent, and `SOUL.md` sources.

@@ -92,23 +92,30 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	adapters := map[config.Provider]adapter.Adapter{}
 	claude, err := adapter.NewClaude(adapter.ClaudeOptions{
 		DaemonAddr:        addr,
 		PermissionTimeout: permissionTimeout,
 	})
 	if err != nil {
-		log.Warn("claude adapter unavailable; using fake adapter until claude is installed", "error", err)
-	}
-	var ad adapter.Adapter
-	if claude != nil {
-		ad = claude
+		log.Warn("claude adapter unavailable", "error", err)
+		adapters[config.ProviderClaude] = adapter.Unavailable{Provider: config.ProviderClaude, Err: err}
 	} else {
-		ad = adapter.NewFake()
+		adapters[config.ProviderClaude] = claude
+	}
+	codex, err := adapter.NewCodex(adapter.CodexOptions{
+		PermissionTimeout: permissionTimeout,
+	})
+	if err != nil {
+		log.Warn("codex adapter unavailable", "error", err)
+		adapters[config.ProviderCodex] = adapter.Unavailable{Provider: config.ProviderCodex, Err: err}
+	} else {
+		adapters[config.ProviderCodex] = codex
 	}
 	coreSvc, err := core.New(core.Options{
 		Paths:    paths,
 		Store:    db,
-		Adapter:  ad,
+		Adapter:  adapter.NewRouter(adapters),
 		Global:   cfg.Global,
 		Profiles: cfg.Profiles,
 	})

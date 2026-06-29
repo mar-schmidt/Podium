@@ -9,6 +9,27 @@ export interface Health {
   uptime_ms: number;
 }
 
+export interface UpdateStatus {
+  current_version: string;
+  current_commit: string;
+  latest_version: string;
+  latest_commitish: string;
+  update_available: boolean;
+  asset_name: string;
+  asset_url: string;
+  checksum_url: string;
+  release_url: string;
+  blocking_reason?: string;
+}
+
+export interface UpdateApplyResult {
+  status: UpdateStatus;
+  installed: boolean;
+  helper_started: boolean;
+  restart_required: boolean;
+  message: string;
+}
+
 export type Provider = "claude" | "codex";
 export type PermissionMode = "approve" | "yolo";
 export type SessionOrigin = "web" | "cli" | "onboarding" | "schedule" | "roadmap";

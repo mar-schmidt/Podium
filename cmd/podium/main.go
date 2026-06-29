@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/onboard"
 	"github.com/mar-schmidt/Podium/internal/providercheck"
+	"github.com/mar-schmidt/Podium/internal/updater"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +54,146 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newTasksCmd(&addr))
 	root.AddCommand(newDoctorCmd(&addr))
 	root.AddCommand(newOnboardCmd(&addr))
+	root.AddCommand(newUpdateCmd(&addr))
 	return root
+}
+
+func newUpdateCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Check for and apply Podium releases",
+		Long:  "Check GitHub Releases for a newer Podium build and apply verified updates.",
+	}
+	cmd.AddCommand(newUpdateCheckCmd())
+	cmd.AddCommand(newUpdateApplyCmd(addr))
+	cmd.AddCommand(newUpdateHelperCmd())
+	return cmd
+}
+
+func newUpdateCheckCmd() *cobra.Command {
+	var jsonOut bool
+	var version string
+	cmd := &cobra.Command{
+		Use:     "check",
+		Short:   "Check GitHub Releases for an update",
+		Example: "  podium update check\n  podium update check --json",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, err := updater.Check(cmd.Context(), updater.Options{
+				CurrentVersion: buildinfo.Version,
+				CurrentCommit:  buildinfo.Commit,
+				Version:        version,
+				Home:           updateHome(),
+			})
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(status)
+			}
+			fmt.Printf("current: %s (%s)\n", status.CurrentVersion, status.CurrentCommit)
+			fmt.Printf("latest:  %s\n", status.LatestVersion)
+			fmt.Printf("asset:   %s\n", status.AssetName)
+			if status.UpdateAvailable {
+				fmt.Println("status:  update available")
+			} else {
+				fmt.Println("status:  up to date")
+			}
+			if status.BlockingReason != "" {
+				fmt.Printf("note:    %s\n", status.BlockingReason)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "print machine-readable JSON")
+	cmd.Flags().StringVar(&version, "version", "latest", "release tag to check, or latest")
+	return cmd
+}
+
+func newUpdateApplyCmd(addr *string) *cobra.Command {
+	var version, installDir string
+	var yes, force bool
+	cmd := &cobra.Command{
+		Use:     "apply",
+		Short:   "Download and apply a verified Podium update",
+		Example: "  podium update apply --yes\n  podium update apply --version v0.1.123 --yes",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes {
+				fmt.Println("Updating may restart podiumd and interrupt active turns.")
+				fmt.Print("Continue? [y/N] ")
+				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				line = strings.TrimSpace(strings.ToLower(line))
+				if line != "y" && line != "yes" {
+					return nil
+				}
+			}
+
+			if installDir == "" {
+				if resolved, err := resolveAddr(*addr); err == nil {
+					c := client.New(resolved)
+					if _, err := c.Health(cmd.Context()); err == nil {
+						result, err := c.ApplyUpdate(cmd.Context(), client.UpdateApplyRequest{Version: version, Force: force})
+						if err == nil {
+							fmt.Println(result.Message)
+							if result.RestartRequired || result.HelperStarted {
+								fmt.Println("podiumd is restarting; reconnect in a moment.")
+							}
+							return nil
+						}
+						fmt.Fprintf(os.Stderr, "daemon update failed, trying local update: %v\n", err)
+					}
+				}
+			}
+
+			result, err := updater.Apply(cmd.Context(), updater.Options{
+				CurrentVersion: buildinfo.Version,
+				CurrentCommit:  buildinfo.Commit,
+				Version:        version,
+				Force:          force,
+				InstallDir:     installDir,
+				Home:           updateHome(),
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Println(result.Message)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&version, "version", "latest", "release tag to install, or latest")
+	cmd.Flags().StringVar(&installDir, "install-dir", "", "override binary install directory")
+	cmd.Flags().BoolVar(&yes, "yes", false, "skip confirmation prompt")
+	cmd.Flags().BoolVar(&force, "force", false, "allow updating dev, dirty, or same-version builds")
+	return cmd
+}
+
+func newUpdateHelperCmd() *cobra.Command {
+	var stageDir, installDir string
+	var parentPID int
+	var restartDaemon bool
+	cmd := &cobra.Command{
+		Use:    "helper",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return updater.RunHelper(stageDir, installDir, parentPID, restartDaemon)
+		},
+	}
+	cmd.Flags().StringVar(&stageDir, "stage-dir", "", "extracted update directory")
+	cmd.Flags().StringVar(&installDir, "install-dir", "", "install directory")
+	cmd.Flags().IntVar(&parentPID, "parent-pid", 0, "parent process id to wait for")
+	cmd.Flags().BoolVar(&restartDaemon, "restart-daemon", false, "restart podiumd after replacement")
+	_ = cmd.MarkFlagRequired("stage-dir")
+	_ = cmd.MarkFlagRequired("install-dir")
+	return cmd
+}
+
+func updateHome() string {
+	home, err := config.ResolveHome()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 func newDoctorCmd(addr *string) *cobra.Command {

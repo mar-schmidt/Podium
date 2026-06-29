@@ -147,6 +147,7 @@ func run() error {
 		},
 		Core:      coreSvc,
 		Scheduler: scheduler,
+		Paths:     paths,
 	})
 
 	// Serve until a termination signal arrives, then shut down gracefully.

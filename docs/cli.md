@@ -51,8 +51,8 @@ Global flags:
 Public copy-paste installers:
 
 ```
-curl -fsSL https://podium.ai/install.sh | bash
-irm https://podium.ai/install.ps1 | iex
+curl -fsSL https://github.com/mar-schmidt/Podium/releases/latest/download/install.sh | bash
+irm https://github.com/mar-schmidt/Podium/releases/latest/download/install.ps1 | iex
 ```
 
 The scripts download release archives, verify `SHA256SUMS`, install `podium` and
@@ -98,6 +98,39 @@ podium doctor
 The command never reads credentials. It locates `claude` and `codex`, prints
 versions when available, and gives install/login hints when a provider is not
 ready.
+
+### `podium update check`
+
+Check GitHub Releases for a newer Podium build. This works without a running
+daemon.
+
+```
+podium update check
+podium update check --json
+podium update check --version v0.1.123
+```
+
+`dev` and `*-dirty` builds are reported as non-release builds; applying an
+update from them requires `--force`.
+
+### `podium update apply`
+
+Download, checksum-verify, extract, and install a release archive for the current
+OS/architecture.
+
+```
+podium update apply --yes
+podium update apply --version v0.1.123 --yes
+podium update apply --force --yes
+```
+
+When `podiumd` is reachable, the CLI asks the daemon to coordinate the update so
+the web UI and daemon restart together. If no daemon is reachable, the CLI
+updates the sibling binaries directly. Updating may interrupt active turns or
+scheduled runs because `podiumd` restarts.
+
+Linux support is distro-neutral: releases ship static Go binaries, not distro
+packages.
 
 ### `podium onboard` / `podium setup`
 

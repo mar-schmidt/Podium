@@ -16,7 +16,7 @@ usage() {
 Install Podium.
 
 Usage:
-  curl -fsSL https://podium.ai/install.sh | bash
+  curl -fsSL https://github.com/mar-schmidt/Podium/releases/latest/download/install.sh | bash
   bash install.sh [--version VERSION] [--install-dir DIR] [--podium-home DIR]
                   [--autostart ask|yes|no] [--no-onboard]
                   [--source-fallback] [--dry-run]

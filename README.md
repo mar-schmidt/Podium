@@ -23,7 +23,7 @@ ledger. It ships as a single Go binary with an embedded Svelte web UI.
 macOS/Linux:
 
 ```sh
-curl -fsSL https://podium.ai/install.sh | bash
+curl -fsSL https://github.com/mar-schmidt/Podium/releases/latest/download/install.sh | bash
 ```
 
 Windows PowerShell:
@@ -40,6 +40,15 @@ Every commit to `master` publishes a GitHub Release using the automatic
 `v0.1.<run-number>` series. That series is intentionally monotonic rather than
 calendar-based, so bursts of work can produce many releases without implying a
 monthly cadence.
+
+After install, updates can be checked and applied from the CLI or web UI:
+
+```sh
+podium update check
+podium update apply --yes
+```
+
+Linux releases are distro-neutral static binaries.
 
 ### Development
 

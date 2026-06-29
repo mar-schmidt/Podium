@@ -11,6 +11,8 @@ import type {
   SessionDetail,
   Task,
   TaskStatus,
+  UpdateApplyResult,
+  UpdateStatus,
 } from "./types";
 
 async function asJSON<T>(res: Response): Promise<T> {
@@ -23,6 +25,20 @@ async function asJSON<T>(res: Response): Promise<T> {
 
 export async function getHealth(): Promise<Health> {
   return asJSON(await fetch("/healthz"));
+}
+
+export async function checkUpdate(): Promise<UpdateStatus> {
+  return asJSON(await fetch("/api/update"));
+}
+
+export async function applyUpdate(force = false): Promise<UpdateApplyResult> {
+  return asJSON(
+    await fetch("/api/update/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    }),
+  );
 }
 
 export async function listAgents(): Promise<Agent[]> {

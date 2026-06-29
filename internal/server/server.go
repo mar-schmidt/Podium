@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 )
@@ -30,6 +31,7 @@ type Server struct {
 	core      *core.Core
 	scheduler *schedule.Scheduler
 	broker    *permissionBroker
+	paths     config.Paths
 }
 
 // Options configures the server.
@@ -39,6 +41,7 @@ type Options struct {
 	Build     BuildInfo
 	Core      *core.Core
 	Scheduler *schedule.Scheduler
+	Paths     config.Paths
 }
 
 // New constructs a Server bound to the given address. It does not start
@@ -52,6 +55,7 @@ func New(opts Options) *Server {
 		core:      opts.Core,
 		scheduler: opts.Scheduler,
 		broker:    newPermissionBroker(),
+		paths:     opts.Paths,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -69,6 +73,8 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/tasks/", s.handleTask)
 	mux.HandleFunc("/api/permission-decisions/", s.handlePermissionDecision)
 	mux.HandleFunc("/api/permissions/", s.handlePermissionRequest)
+	mux.HandleFunc("/api/update", s.handleUpdate)
+	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
 	mux.Handle("/", spaHandler())
 
 	s.httpSrv = &http.Server{

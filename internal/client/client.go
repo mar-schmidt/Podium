@@ -23,6 +23,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
 	"github.com/mar-schmidt/Podium/internal/store"
+	"github.com/mar-schmidt/Podium/internal/updater"
 )
 
 // ErrDaemonUnreachable indicates podiumd is not accepting connections at the
@@ -269,6 +270,30 @@ func (c *Client) ListTasks(ctx context.Context) ([]store.Task, error) {
 		return nil, err
 	}
 	return tasks, nil
+}
+
+// UpdateApplyRequest starts an update through the daemon.
+type UpdateApplyRequest struct {
+	Version string `json:"version,omitempty"`
+	Force   bool   `json:"force,omitempty"`
+}
+
+// CheckUpdate checks GitHub Releases through the daemon.
+func (c *Client) CheckUpdate(ctx context.Context) (updater.Status, error) {
+	var status updater.Status
+	if err := c.getJSON(ctx, "/api/update", &status); err != nil {
+		return status, err
+	}
+	return status, nil
+}
+
+// ApplyUpdate starts a daemon-coordinated update.
+func (c *Client) ApplyUpdate(ctx context.Context, req UpdateApplyRequest) (updater.ApplyResult, error) {
+	var result updater.ApplyResult
+	if err := c.postJSON(ctx, "/api/update/apply", req, &result); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

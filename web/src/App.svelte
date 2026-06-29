@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getHealth, hireAgent, listAgents } from "./lib/api";
-  import type { Agent, Health, PermissionMode, Provider } from "./lib/types";
+  import { applyUpdate, checkUpdate, getHealth, hireAgent, listAgents } from "./lib/api";
+  import type { Agent, Health, PermissionMode, Provider, UpdateStatus } from "./lib/types";
   import Chat from "./pages/Chat.svelte";
   import Roadmap from "./pages/Roadmap.svelte";
   import Agents from "./pages/Agents.svelte";
@@ -46,6 +46,9 @@
 
   let route = $state<Route>("chat");
   let health = $state<Health | null>(null);
+  let update = $state<UpdateStatus | null>(null);
+  let updateState = $state<"idle" | "checking" | "available" | "current" | "updating" | "restarting" | "failed">("idle");
+  let updateError = $state<string | null>(null);
   let chatStatus = $state<"connecting" | "live" | "offline">("connecting");
   let agents = $state<Agent[]>([]);
   let chatTarget = $state<ChatTarget | null>(null);
@@ -64,6 +67,7 @@
       health = null;
     }
     await refreshAgents();
+    await refreshUpdate();
   });
 
   async function refreshAgents() {
@@ -71,6 +75,53 @@
       agents = await listAgents();
     } catch {
       // leave agents as-is
+    }
+  }
+
+  async function refreshUpdate() {
+    updateState = "checking";
+    updateError = null;
+    try {
+      update = await checkUpdate();
+      updateState = update.update_available ? "available" : "current";
+    } catch (e) {
+      update = null;
+      updateState = "failed";
+      updateError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function runUpdate() {
+    if (!update) return;
+    const warning = update.blocking_reason
+      ? `${update.blocking_reason}\n\nForce update anyway? This restarts podiumd and may interrupt active turns.`
+      : `Install ${update.latest_version}? This restarts podiumd and may interrupt active turns.`;
+    if (!window.confirm(warning)) return;
+    updateState = "updating";
+    updateError = null;
+    try {
+      await applyUpdate(Boolean(update.blocking_reason));
+      updateState = "restarting";
+      await waitForRestart(update.latest_version);
+      window.location.reload();
+    } catch (e) {
+      updateState = "failed";
+      updateError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function waitForRestart(version: string) {
+    for (let i = 0; i < 45; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      try {
+        const h = await getHealth();
+        if (h.version === version) {
+          health = h;
+          return;
+        }
+      } catch {
+        // daemon is probably between old and new process
+      }
     }
   }
 
@@ -152,6 +203,34 @@
         <span class="daemon-dot" class:live={chatStatus === "live"}></span>
         <div class="daemon-text mono">
           {daemonLabel}<br /><span class="daemon-addr">{daemonAddr}</span>
+        </div>
+      </div>
+      <div class="update-box">
+        <div class="update-line mono">
+          {#if updateState === "checking"}
+            checking updates
+          {:else if updateState === "available" && update}
+            update {update.latest_version}
+          {:else if updateState === "updating"}
+            updating
+          {:else if updateState === "restarting"}
+            restarting
+          {:else if updateState === "failed"}
+            update check failed
+          {:else}
+            up to date
+          {/if}
+        </div>
+        {#if update?.blocking_reason}
+          <div class="update-note">{update.blocking_reason}</div>
+        {:else if updateError}
+          <div class="update-note">{updateError}</div>
+        {/if}
+        <div class="update-actions">
+          <button class="update-btn" disabled={updateState === "checking" || updateState === "updating" || updateState === "restarting"} onclick={refreshUpdate}>Check</button>
+          {#if updateState === "available" || update?.blocking_reason}
+            <button class="update-btn primary" disabled={updateState === "updating" || updateState === "restarting"} onclick={runUpdate}>Update</button>
+          {/if}
         </div>
       </div>
       <button class="hire-btn" onclick={openHire}><span class="hire-plus">+</span> Hire agent</button>
@@ -324,6 +403,47 @@
 
   .daemon-addr {
     color: var(--faint);
+  }
+
+  .update-box {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--surface-3);
+    border: 1px solid var(--line-3);
+  }
+
+  .update-line {
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+
+  .update-note {
+    margin-top: 5px;
+    color: var(--faint);
+    font: 400 11px/1.35 "Hanken Grotesk";
+  }
+
+  .update-actions {
+    display: flex;
+    gap: 7px;
+    margin-top: 8px;
+  }
+
+  .update-btn {
+    flex: 1;
+    border: 1px solid var(--line-3);
+    background: #fff;
+    border-radius: 9px;
+    padding: 7px 8px;
+    cursor: pointer;
+    font: 700 11px "Hanken Grotesk";
+    color: var(--muted);
+  }
+
+  .update-btn.primary {
+    background: var(--teal);
+    border-color: var(--teal);
+    color: #fff;
   }
 
   .hire-btn {

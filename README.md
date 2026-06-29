@@ -1,20 +1,22 @@
+<p align="center">
+  <img src="docs/assets/hero.svg" alt="Podium — Your AI agents, in concert." width="100%">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/build-passing-1F8A5B?style=flat-square&labelColor=3A3430" alt="build passing">
+  <img src="https://img.shields.io/badge/version-0.4.0-2F6E60?style=flat-square&labelColor=3A3430" alt="version 0.4.0">
+  <img src="https://img.shields.io/badge/license-MIT-5A6470?style=flat-square&labelColor=3A3430" alt="license MIT">
+  <img src="https://img.shields.io/badge/local--first-✓-C9A24E?style=flat-square&labelColor=3A3430" alt="local-first">
+</p>
+
 # Podium
 
-A thin orchestration layer for local LLM agents (Claude Code, OpenAI Codex).
+A thin orchestration layer for local LLM agents (Claude Code, OpenAI Codex atm.).
 Podium shells out to the native `claude` and `codex` CLIs and leans on *their*
 MCP, tools, and memory, while owning its own durable truth: named agents, durable
 chat sessions, a canonical history that replays onto a fresh backing CLI session
 on any profile/provider switch, an embedded scheduler, and a shared project
 ledger. It ships as a single Go binary with an embedded Svelte web UI.
-
-> **Status:** v1 feature-complete (Phases 0–9). The daemon, durable
-> agents/sessions, Claude and Codex adapters, CLI chat, WebSocket API, the full
-> browser UI (Chat, Roadmap kanban, Agents, Schedules, Projects), slash controls,
-> permission relay, auto-naming, profile switching, history replay, rolling
-> summaries, fallback, the embedded scheduler, and the shared project ledger +
-> roadmap tasks (start-on-demand and scheduled pickup) are all in place, with
-> cross-platform hardening and a security/logging review pass complete. See
-> [the implementation plan](docs/implementation-plan.md) for the phase log.
 
 ## Quick start (dev)
 
@@ -104,8 +106,6 @@ All runtime state lives under `$PODIUM_HOME` (default `~/.podium/`).
 
 ## Documentation
 
-- [Implementation plan](docs/implementation-plan.md) — **the living, phased plan
-  and progress log. Start here if you're picking up the work.**
 - [Requirements](docs/requirements.md) — the authoritative spec (v1.6).
 - [CLI reference](docs/cli.md)
 - [Configuration](docs/configuration.md)
@@ -113,12 +113,3 @@ All runtime state lives under `$PODIUM_HOME` (default `~/.podium/`).
 - [Projects & Roadmap](docs/projects.md)
 - [Security & logging](docs/security.md) — permission modes, redaction, run logs
 - [Integration contracts](docs/integrations/README.md)
-
-## Implementation plan
-
-Podium is built in reviewable phases, tracked in
-[docs/implementation-plan.md](docs/implementation-plan.md) — the shared,
-version-controlled source of truth for what's done and what's next. Phase 0
-establishes the foundations; subsequent phases add the core domain, the Claude
-and Codex adapters, the chat web UI, profiles/replay/fallback, the scheduler, and
-the projects/roadmap UI. The plan's Progress log is updated as each phase lands.

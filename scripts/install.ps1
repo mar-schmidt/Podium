@@ -93,7 +93,7 @@ try {
   }
 
   if ($Autostart -eq "ask") {
-    $reply = Read-Host "Start Podium automatically when you log in? [Y/n]"
+    $reply = Read-Host "Start Podium automatically when your system starts? [Y/n]"
     if ($reply -and $reply.ToLowerInvariant().StartsWith("n")) { $Autostart = "no" } else { $Autostart = "yes" }
   }
 

@@ -180,8 +180,16 @@ PLIST
 }
 
 if [ "$AUTOSTART" = "ask" ]; then
-  printf 'Start Podium automatically when you log in? [Y/n] '
-  read -r reply || reply=""
+  # Read from the controlling terminal so prompts work even under `curl | bash`,
+  # where stdin is the script pipe rather than the keyboard. With no tty
+  # (e.g. CI), fall back to the default; use --autostart yes|no to be explicit.
+  if [ -r /dev/tty ]; then
+    printf 'Start Podium automatically when your system starts? [Y/n] ' > /dev/tty
+    read -r reply < /dev/tty || reply=""
+  else
+    reply=""
+    say "Non-interactive install: enabling autostart (pass --autostart no to disable)."
+  fi
   case "${reply:-Y}" in y|Y|yes|YES|"") AUTOSTART="yes" ;; *) AUTOSTART="no" ;; esac
 fi
 [ "$AUTOSTART" = "yes" ] && install_autostart
@@ -193,5 +201,9 @@ case ":$PATH:" in
 esac
 
 if [ "$RUN_ONBOARD" = "yes" ]; then
-  PATH="$INSTALL_DIR:$PATH" run "$INSTALL_DIR/podium" onboard
+  if [ -r /dev/tty ]; then
+    PATH="$INSTALL_DIR:$PATH" run "$INSTALL_DIR/podium" onboard < /dev/tty
+  else
+    say "Non-interactive install: skipping onboarding. Run 'podium onboard' when ready."
+  fi
 fi

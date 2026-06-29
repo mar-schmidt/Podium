@@ -173,7 +173,14 @@
   <!-- ============ SIDEBAR ============ -->
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-logo"><span class="brand-glyph"></span></div>
+      <div class="brand-logo">
+        <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+          <path d="M8 31 Q18 6 30 16" fill="none" stroke="#fff" stroke-width="3.8" stroke-linecap="round" />
+          <circle cx="30" cy="16" r="4.8" fill="#fff" />
+          <circle cx="36" cy="23" r="2.9" fill="#fff" opacity=".72" />
+          <circle cx="41" cy="29" r="1.7" fill="#fff" opacity=".45" />
+        </svg>
+      </div>
       <div>
         <div class="brand-name">Podium</div>
         <div class="brand-tag mono">conductor</div>
@@ -311,14 +318,6 @@
     align-items: center;
     justify-content: center;
     box-shadow: 0 6px 14px -6px rgba(47, 110, 96, 0.6);
-  }
-
-  .brand-glyph {
-    width: 11px;
-    height: 11px;
-    background: #fff;
-    border-radius: 3px;
-    transform: rotate(45deg);
   }
 
   .brand-name {

@@ -40,6 +40,20 @@
   no new CLI commands. Verified: `go test ./...` green.
   - *Notes:* real Claude/Codex adapters and CLI/web commands remain deferred to
     later phases per scope.
+- **Phase 2 — Claude adapter + approve relay: ✅ COMPLETE (2026-06-29).** Added
+  real Claude Code per-turn adapter (`claude -p` stream-json, workspace cwd,
+  model/effort flags, `--resume`, profile env, generated `CLAUDE.md` discovery),
+  daemon-owned core wiring, NDJSON chat endpoint, CLI `agents`/`chat` commands,
+  and an approve-mode MCP permission relay with configurable auto-deny timeout
+  (`global.permission_timeout`). Added hidden `podiumd permission-mcp` helper,
+  daemon permission broker, and docs in `docs/integrations/claude.md`. Verified
+  manually with a throwaway `PODIUM_HOME`: yolo Claude turn streamed once, same
+  session resumed after daemon restart, and approve-mode `Write` request surfaced
+  in the CLI and succeeded after approval.
+  - *Notes:* web/WebSocket permission UX remains Phase 3/4; Codex remains Phase
+    5. The Claude permission MCP response shape was adjusted during live testing
+    to match Claude Code's validator: a single MCP text block containing the JSON
+    decision.
 
 ## Context
 

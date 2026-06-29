@@ -1,0 +1,91 @@
+# Claude Integration
+
+Status: Phase 2 implemented.
+
+Podium drives Claude Code as a per-turn process. The daemon owns the durable
+Podium session and launches `claude` for each turn with the agent workspace as
+`cwd`.
+
+## Launch
+
+Base command:
+
+```text
+claude -p \
+  --input-format stream-json \
+  --output-format stream-json \
+  --include-partial-messages \
+  --verbose \
+  --replay-user-messages
+```
+
+Optional flags:
+
+| Setting | Claude flag |
+| --- | --- |
+| Session provider handle | `--resume <claude-session-id>` |
+| Model | `--model <name>` |
+| Effort | `--effort <low|medium|high|xhigh|max>` |
+| `yolo` permission mode | `--permission-mode bypassPermissions` |
+
+When a profile is set, Podium exports `CLAUDE_CONFIG_DIR=<profile.config_dir>`.
+When no profile is set, Podium leaves `CLAUDE_CONFIG_DIR` unset so Claude uses
+its normal global login.
+
+## Instructions
+
+Before a turn, core composes the agent instructions and writes
+`agents/<name>/workspace/CLAUDE.md`. The file is Podium-managed and contains
+absolute `@` imports in this order:
+
+1. `$PODIUM_HOME/AGENTS.md`
+2. `$PODIUM_HOME/agents/<name>/AGENTS.md` when present
+3. `$PODIUM_HOME/agents/<name>/SOUL.md`
+
+Claude auto-discovers `CLAUDE.md` because the workspace is the process cwd.
+
+## Streaming
+
+Podium writes stream-json user input on stdin and parses Claude stream-json on
+stdout. The adapter handles:
+
+| Claude event | Podium behavior |
+| --- | --- |
+| `system.session_id` / `result.session_id` | Persist as provider handle. |
+| nested `stream_event.content_block_delta.delta.text` | Stream as assistant delta. |
+| `assistant.message.content` / `result.result` | Use as final assistant text for durable history. |
+
+When resuming with `--resume`, Podium sends only the new user turn. It does not
+also replay canonical history into an already-resumed Claude session.
+
+## Permissions
+
+`approve` mode generates a temporary MCP config in `workspace/.podium/` and adds:
+
+```text
+--mcp-config <generated-json>
+--permission-prompt-tool mcp__podium_permission__prompt
+```
+
+The generated MCP server command is:
+
+```text
+podiumd permission-mcp --addr <daemon-addr> --turn <turn-id> --timeout <duration>
+```
+
+The hidden MCP helper exposes one tool, `prompt`. For each Claude permission
+request it POSTs to the daemon permission broker. The CLI receives the request
+on the live chat stream, prompts the user, and POSTs the decision back.
+
+Decision payloads:
+
+```json
+{"behavior":"allow","updatedInput":{...}}
+{"behavior":"deny","message":"Denied by user"}
+```
+
+The MCP `tools/call` response is a single text block containing that JSON. This
+shape was verified against Claude Code during Phase 2.
+
+If no decision arrives before `global.permission_timeout`, the daemon returns
+`{"behavior":"deny"}` so Claude does not block indefinitely.

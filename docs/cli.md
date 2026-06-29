@@ -58,8 +58,46 @@ podium --addr 127.0.0.1:8787 status
 Exits non-zero with a "start it with: podiumd" hint when the daemon is
 unreachable.
 
+### `podium agents list`
+
+List durable agents known to the daemon.
+
+```
+podium agents list
+```
+
+### `podium agents create`
+
+Create an agent through `podiumd`. This stores the agent, creates
+`$PODIUM_HOME/agents/<name>/SOUL.md`, and creates its `workspace/`.
+
+```
+podium agents create jared
+podium agents create builder --provider claude --model sonnet --effort medium --permission approve
+```
+
+| Flag | Description |
+| --- | --- |
+| `--provider claude|codex` | Provider for the agent. Empty inherits `global.provider`. |
+| `--model name` | Default model. Empty means provider default. |
+| `--effort level` | Default effort (`low`, `medium`, `high`, `xhigh`, `max`). |
+| `--permission approve|yolo` | Agent permission default. |
+
+### `podium chat`
+
+Send one chat turn through the daemon. Use `--agent` to create a new CLI-origin
+session or `--session` to continue an existing session.
+
+```
+podium chat --agent jared "Summarise this workspace"
+podium chat --session <session-id> "Continue"
+```
+
+In `approve` mode, permission requests are shown inline. Answer `y`/`yes` to
+allow the requested tool input unchanged; any other answer denies it. Unanswered
+requests auto-deny after `global.permission_timeout`.
+
 ---
 
-*Phase 1 adds the core agent/session domain APIs but no new user-facing CLI
-commands. More commands (agents, sessions, chat, profiles, schedules, projects)
+*More commands and flags (profiles, schedules, projects, richer chat controls)
 are added as later phases land; each gets an entry here when it ships.*

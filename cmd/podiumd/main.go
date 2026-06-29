@@ -6,15 +6,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/buildinfo"
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/core"
 	"github.com/mar-schmidt/Podium/internal/server"
 	"github.com/mar-schmidt/Podium/internal/store"
 	"github.com/spf13/cobra"
@@ -28,8 +33,8 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "podiumd",
-		Short:         "The Podium orchestration daemon",
+		Use:   "podiumd",
+		Short: "The Podium orchestration daemon",
 		Long: "podiumd is the long-running Podium daemon. It owns session, agent, and\n" +
 			"schedule state, serves the web UI and API, and runs the embedded scheduler.\n" +
 			"All state lives under $PODIUM_HOME (default ~/.podium/).",
@@ -40,6 +45,7 @@ func newRootCmd() *cobra.Command {
 			return run()
 		},
 	}
+	cmd.AddCommand(newPermissionMCPCmd())
 	return cmd
 }
 
@@ -81,6 +87,38 @@ func run() error {
 	defer db.Close()
 	log.Info("database open", "path", paths.DB)
 
+	addr := net.JoinHostPort(cfg.Server.Bind, strconv.Itoa(cfg.Server.Port))
+	permissionTimeout, err := time.ParseDuration(cfg.Global.PermissionTimeout)
+	if err != nil {
+		return err
+	}
+	claude, err := adapter.NewClaude(adapter.ClaudeOptions{
+		DaemonAddr:        addr,
+		PermissionTimeout: permissionTimeout,
+	})
+	if err != nil {
+		log.Warn("claude adapter unavailable; using fake adapter until claude is installed", "error", err)
+	}
+	var ad adapter.Adapter
+	if claude != nil {
+		ad = claude
+	} else {
+		ad = adapter.NewFake()
+	}
+	coreSvc, err := core.New(core.Options{
+		Paths:    paths,
+		Store:    db,
+		Adapter:  ad,
+		Global:   cfg.Global,
+		Profiles: cfg.Profiles,
+	})
+	if err != nil {
+		return err
+	}
+	if err := syncConfiguredAgents(context.Background(), coreSvc, cfg); err != nil {
+		return err
+	}
+
 	srv := server.New(server.Options{
 		Bind: cfg.Server.Bind,
 		Port: cfg.Server.Port,
@@ -88,6 +126,7 @@ func run() error {
 			Version: buildinfo.Version,
 			Commit:  buildinfo.Commit,
 		},
+		Core: coreSvc,
 	})
 
 	// Serve until a termination signal arrives, then shut down gracefully.
@@ -107,4 +146,39 @@ func run() error {
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
+}
+
+func syncConfiguredAgents(ctx context.Context, coreSvc *core.Core, cfg *config.Config) error {
+	for _, a := range cfg.Agents {
+		agent, err := coreSvc.GetAgent(ctx, a.Name)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				if _, err := coreSvc.CreateAgent(ctx, core.CreateAgentRequest{
+					Name:           a.Name,
+					Provider:       a.Provider,
+					Profile:        a.Profile,
+					Model:          a.Model,
+					Effort:         a.Effort,
+					PermissionMode: a.PermissionMode,
+					Fallback:       a.Fallback,
+					MCPConfig:      a.MCPConfig,
+				}); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		agent.Provider = a.Provider
+		agent.Profile = a.Profile
+		agent.Model = a.Model
+		agent.Effort = a.Effort
+		agent.PermissionMode = a.PermissionMode
+		agent.Fallback = a.Fallback
+		agent.MCPConfig = a.MCPConfig
+		if _, err := coreSvc.UpdateAgent(ctx, agent); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -1,0 +1,400 @@
+package adapter
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/mar-schmidt/Podium/internal/config"
+	podiumexec "github.com/mar-schmidt/Podium/internal/exec"
+	"github.com/mar-schmidt/Podium/internal/store"
+)
+
+const defaultPermissionTimeout = 2 * time.Minute
+
+// ClaudeOptions configures the Claude Code adapter.
+type ClaudeOptions struct {
+	Discovery         podiumexec.Discovery
+	DaemonAddr        string
+	PermissionTimeout time.Duration
+	MCPCommand        string
+}
+
+// Claude drives Claude Code as a per-turn process.
+type Claude struct {
+	bin               string
+	daemonAddr        string
+	permissionTimeout time.Duration
+	mcpCommand        string
+}
+
+// NewClaude discovers the Claude Code CLI and returns an adapter.
+func NewClaude(opts ClaudeOptions) (*Claude, error) {
+	found, err := opts.Discovery.Find("claude")
+	if err != nil {
+		return nil, err
+	}
+	timeout := opts.PermissionTimeout
+	if timeout == 0 {
+		timeout = defaultPermissionTimeout
+	}
+	mcpCommand := opts.MCPCommand
+	if mcpCommand == "" {
+		if exe, err := os.Executable(); err == nil {
+			mcpCommand = exe
+		}
+	}
+	return &Claude{
+		bin:               found.Path,
+		daemonAddr:        opts.DaemonAddr,
+		permissionTimeout: timeout,
+		mcpCommand:        mcpCommand,
+	}, nil
+}
+
+// Start returns the existing Claude handle shape. Claude only yields a real
+// session ID after the first turn, so a new session starts with an empty handle.
+func (c *Claude) Start(ctx context.Context, req StartRequest) (Handle, error) {
+	if err := ctx.Err(); err != nil {
+		return Handle{}, err
+	}
+	return Handle{Provider: config.ProviderClaude}, nil
+}
+
+// Resume returns the persisted Claude session ID unchanged.
+func (c *Claude) Resume(ctx context.Context, req ResumeRequest) (Handle, error) {
+	if err := ctx.Err(); err != nil {
+		return Handle{}, err
+	}
+	return req.Handle, nil
+}
+
+// SendTurn launches one `claude -p` process and streams parsed events.
+func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, error) {
+	if req.Settings.WorkspaceDir == "" {
+		return nil, errors.New("claude workspace dir is required")
+	}
+	args, cleanup, err := c.args(req)
+	if err != nil {
+		return nil, err
+	}
+	cmd := podiumexec.Command(ctx, c.bin, args...)
+	cmd.Dir = req.Settings.WorkspaceDir
+	cmd.Env = c.env(req.Settings.ProfileDir)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("claude stdin: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("claude stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("claude stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("start claude: %w", err)
+	}
+
+	if err := writeClaudeInput(stdin, req.Message, req.History, req.Handle.ID != ""); err != nil {
+		_ = podiumexec.Kill(cmd)
+		cleanup()
+		return nil, err
+	}
+
+	out := make(chan Event, 32)
+	go func() {
+		defer cleanup()
+		defer close(out)
+		errc := make(chan error, 2)
+		go func() { errc <- parseClaudeStream(ctx, stdout, out) }()
+		go func() { errc <- logStderr(stderr) }()
+		parseErr := <-errc
+		waitErr := cmd.Wait()
+		if ctx.Err() != nil {
+			return
+		}
+		if parseErr != nil {
+			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: fmt.Sprintf("claude stream error: %v", parseErr)})
+			return
+		}
+		if waitErr != nil {
+			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: fmt.Sprintf("claude exited with error: %v", waitErr)})
+			return
+		}
+		sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
+	}()
+	return out, nil
+}
+
+// Teardown has no persistent Claude process to stop.
+func (c *Claude) Teardown(ctx context.Context, handle Handle) error {
+	return ctx.Err()
+}
+
+func (c *Claude) args(req TurnRequest) ([]string, func(), error) {
+	args := []string{
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+		"--replay-user-messages",
+	}
+	if req.Settings.Model != "" {
+		args = append(args, "--model", req.Settings.Model)
+	}
+	if req.Settings.Effort != "" {
+		args = append(args, "--effort", req.Settings.Effort)
+	}
+	if req.Handle.ID != "" {
+		args = append(args, "--resume", req.Handle.ID)
+	}
+	cleanup := func() {}
+	switch req.Settings.PermissionMode {
+	case config.PermissionYolo:
+		args = append(args, "--permission-mode", "bypassPermissions")
+	default:
+		if c.daemonAddr == "" || c.mcpCommand == "" {
+			return nil, cleanup, errors.New("claude approve mode needs daemon address and MCP command")
+		}
+		configPath, err := c.writeMCPConfig(req)
+		if err != nil {
+			return nil, cleanup, err
+		}
+		cleanup = func() { _ = os.Remove(configPath) }
+		args = append(args,
+			"--mcp-config", configPath,
+			"--permission-prompt-tool", "mcp__podium_permission__prompt",
+		)
+	}
+	return args, cleanup, nil
+}
+
+func (c *Claude) writeMCPConfig(req TurnRequest) (string, error) {
+	if err := os.MkdirAll(filepath.Join(req.Settings.WorkspaceDir, ".podium"), 0o755); err != nil {
+		return "", fmt.Errorf("create claude mcp dir: %w", err)
+	}
+	turnID := req.Settings.PermissionTurnID
+	if turnID == "" {
+		turnID = req.SessionID
+	}
+	payload := map[string]any{
+		"mcpServers": map[string]any{
+			"podium_permission": map[string]any{
+				"command": c.mcpCommand,
+				"args": []string{
+					"permission-mcp",
+					"--addr", c.daemonAddr,
+					"--turn", turnID,
+					"--timeout", c.permissionTimeout.String(),
+				},
+			},
+		},
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(req.Settings.WorkspaceDir, ".podium", fmt.Sprintf("claude-mcp-%s.json", sanitizeFilename(turnID)))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return "", fmt.Errorf("write claude mcp config: %w", err)
+	}
+	return path, nil
+}
+
+func (c *Claude) env(profileDir string) []string {
+	env := os.Environ()
+	if profileDir == "" {
+		return unsetEnv(env, "CLAUDE_CONFIG_DIR")
+	}
+	return append(unsetEnv(env, "CLAUDE_CONFIG_DIR"), "CLAUDE_CONFIG_DIR="+profileDir)
+}
+
+func writeClaudeInput(stdin io.WriteCloser, message string, history []store.Message, resumed bool) error {
+	defer stdin.Close()
+	enc := json.NewEncoder(stdin)
+	if !resumed {
+		for _, msg := range history {
+			if msg.Content == "" {
+				continue
+			}
+			if err := enc.Encode(claudeInputMessage(string(msg.Role), msg.Content)); err != nil {
+				return fmt.Errorf("write history to claude: %w", err)
+			}
+		}
+	}
+	if err := enc.Encode(claudeInputMessage("user", message)); err != nil {
+		return fmt.Errorf("write user turn to claude: %w", err)
+	}
+	return nil
+}
+
+func claudeInputMessage(role, text string) map[string]any {
+	return map[string]any{
+		"type": role,
+		"message": map[string]any{
+			"role": role,
+			"content": []map[string]string{
+				{"type": "text", "text": text},
+			},
+		},
+	}
+}
+
+func parseClaudeStream(ctx context.Context, r io.Reader, out chan<- Event) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		events, err := parseClaudeLine(line)
+		if err != nil {
+			return err
+		}
+		for _, event := range events {
+			if !sendAdapterEvent(ctx, out, event) {
+				return ctx.Err()
+			}
+		}
+	}
+	return scanner.Err()
+}
+
+func parseClaudeLine(line []byte) ([]Event, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return nil, fmt.Errorf("parse claude json %q: %w", string(line), err)
+	}
+	var events []Event
+	if id := firstString(raw, "session_id", "sessionId"); id != "" {
+		events = append(events, Event{
+			Kind:   EventHandleUpdated,
+			Handle: &Handle{Provider: config.ProviderClaude, ID: id},
+		})
+	}
+	eventType := firstString(raw, "type", "event")
+	switch eventType {
+	case "stream_event":
+		if nested, ok := raw["event"].(map[string]any); ok {
+			if text := extractText(nested); text != "" {
+				events = append(events, Event{Kind: EventAssistantDelta, Content: text})
+			}
+		}
+	case "assistant_delta", "text_delta", "content_block_delta":
+		if text := extractText(raw); text != "" {
+			events = append(events, Event{Kind: EventAssistantDelta, Content: text})
+		}
+	case "assistant", "message":
+		if text := extractText(raw); text != "" {
+			events = append(events, Event{Kind: EventAssistantMessage, Content: text})
+		}
+	case "result":
+		if text := firstString(raw, "result", "content"); text != "" {
+			events = append(events, Event{Kind: EventAssistantMessage, Content: text})
+		}
+	}
+	return events, nil
+}
+
+func extractText(raw map[string]any) string {
+	if text := firstString(raw, "text", "content"); text != "" {
+		return text
+	}
+	if delta, ok := raw["delta"].(map[string]any); ok {
+		if text := firstString(delta, "text"); text != "" {
+			return text
+		}
+	}
+	if block, ok := raw["content_block"].(map[string]any); ok {
+		if text := firstString(block, "text"); text != "" {
+			return text
+		}
+	}
+	if message, ok := raw["message"].(map[string]any); ok {
+		if text := contentText(message["content"]); text != "" {
+			return text
+		}
+	}
+	return contentText(raw["content"])
+}
+
+func contentText(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []any:
+		var parts []string
+		for _, item := range v {
+			switch block := item.(type) {
+			case string:
+				parts = append(parts, block)
+			case map[string]any:
+				if text := firstString(block, "text", "content"); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.Join(parts, "")
+	default:
+		return ""
+	}
+}
+
+func firstString(raw map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := raw[key].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+func logStderr(r io.Reader) error {
+	_, err := io.Copy(io.Discard, r)
+	return err
+}
+
+func unsetEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, value := range env {
+		if !strings.HasPrefix(value, prefix) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
+	return replacer.Replace(name)
+}
+
+func sendAdapterEvent(ctx context.Context, out chan<- Event, event Event) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case out <- event:
+		return true
+	}
+}

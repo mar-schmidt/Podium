@@ -4,13 +4,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 
+	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/buildinfo"
 	"github.com/mar-schmidt/Podium/internal/client"
 	"github.com/mar-schmidt/Podium/internal/config"
@@ -40,14 +43,16 @@ func newRootCmd() *cobra.Command {
 		"daemon address host:port (default: from config.yaml, or PODIUM_ADDR)")
 
 	root.AddCommand(newStatusCmd(&addr))
+	root.AddCommand(newAgentsCmd(&addr))
+	root.AddCommand(newChatCmd(&addr))
 	return root
 }
 
 func newStatusCmd(addr *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Report whether podiumd is running and its version",
-		Long:  "Connects to the daemon's health endpoint and prints its status, version, and uptime.",
+		Use:     "status",
+		Short:   "Report whether podiumd is running and its version",
+		Long:    "Connects to the daemon's health endpoint and prints its status, version, and uptime.",
 		Example: "  podium status\n  podium --addr 127.0.0.1:8787 status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := resolveAddr(*addr)
@@ -70,6 +75,161 @@ func newStatusCmd(addr *string) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newAgentsCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "agents",
+		Short: "Manage Podium agents",
+		Long:  "List and create durable Podium agents through the running podiumd daemon.",
+		Example: "  podium agents list\n" +
+			"  podium agents create jared --provider claude --permission approve",
+	}
+	cmd.AddCommand(newAgentsListCmd(addr))
+	cmd.AddCommand(newAgentsCreateCmd(addr))
+	return cmd
+}
+
+func newAgentsListCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Short:   "List agents",
+		Long:    "Fetches durable agents from podiumd and prints their provider and defaults.",
+		Example: "  podium agents list",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			agents, err := c.ListAgents(cmd.Context())
+			if err != nil {
+				return err
+			}
+			for _, agent := range agents {
+				fmt.Printf("%s\tprovider=%s\tmodel=%s\teffort=%s\tpermission=%s\n",
+					agent.Name, agent.Provider, agent.Model, agent.Effort, agent.PermissionMode)
+			}
+			return nil
+		},
+	}
+}
+
+func newAgentsCreateCmd(addr *string) *cobra.Command {
+	var provider, model, effort, permission string
+	cmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create an agent",
+		Long: "Creates a durable agent through podiumd and scaffolds its SOUL.md and workspace/.\n" +
+			"The optional per-agent AGENTS.md is left for you to create manually.",
+		Example: "  podium agents create jared\n" +
+			"  podium agents create builder --provider claude --model sonnet --effort medium --permission approve",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			agent, err := c.CreateAgent(cmd.Context(), client.AgentCreateRequest{
+				Name:           args[0],
+				Provider:       config.Provider(provider),
+				Model:          model,
+				Effort:         effort,
+				PermissionMode: config.PermissionMode(permission),
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("created agent %s (%s)\n", agent.Name, agent.Provider)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&provider, "provider", "", "provider: claude or codex (default from config)")
+	cmd.Flags().StringVar(&model, "model", "", "default model")
+	cmd.Flags().StringVar(&effort, "effort", "", "default effort: low, medium, high, xhigh, max")
+	cmd.Flags().StringVar(&permission, "permission", "", "permission mode: approve or yolo")
+	return cmd
+}
+
+func newChatCmd(addr *string) *cobra.Command {
+	var agentName, sessionID string
+	cmd := &cobra.Command{
+		Use:   "chat <message>",
+		Short: "Send one chat turn through podiumd",
+		Long: "Sends one message to a Podium session through the daemon. Provide --agent to start\n" +
+			"a new CLI-origin session, or --session to continue an existing one.",
+		Example: "  podium chat --agent jared \"Summarise this workspace\"\n" +
+			"  podium chat --session <session-id> \"Continue\"",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if (agentName == "") == (sessionID == "") {
+				return fmt.Errorf("provide exactly one of --agent or --session")
+			}
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			events, errs := c.Chat(cmd.Context(), client.ChatRequest{
+				AgentName: agentName,
+				SessionID: sessionID,
+				Message:   args[0],
+			})
+			printedDelta := false
+			for event := range events {
+				switch event.Type {
+				case "session":
+					if event.Session != nil {
+						fmt.Fprintf(os.Stderr, "session %s (%s)\n", event.Session.ID, event.Session.AgentName)
+					}
+				case "delta":
+					fmt.Print(event.Delta)
+					printedDelta = true
+				case "assistant":
+					if !printedDelta {
+						fmt.Print(event.Delta)
+						printedDelta = true
+					}
+				case "permission_request":
+					if event.Request != nil {
+						if err := promptPermission(cmd.Context(), c, *event.Request); err != nil {
+							return err
+						}
+					}
+				case "error":
+					return errors.New(event.Error)
+				}
+			}
+			if err := <-errs; err != nil {
+				return err
+			}
+			fmt.Println()
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&agentName, "agent", "", "agent name for a new session")
+	cmd.Flags().StringVar(&sessionID, "session", "", "existing session ID to continue")
+	return cmd
+}
+
+func promptPermission(ctx context.Context, c *client.Client, req adapter.PermissionRequest) error {
+	fmt.Fprintf(os.Stderr, "\npermission requested: %s\ninput: %s\nAllow? [y/N] ", req.ToolName, string(req.Input))
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	behavior := "deny"
+	decision := adapter.PermissionDecision{Behavior: behavior}
+	if strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes") {
+		behavior = "allow"
+		decision = adapter.PermissionDecision{Behavior: behavior, UpdatedInput: req.Input}
+	} else {
+		decision = adapter.PermissionDecision{Behavior: behavior, Message: "Denied by user"}
+	}
+	return c.DecidePermission(ctx, req.ID, decision)
+}
+
+func daemonClient(flagAddr string) (*client.Client, error) {
+	resolved, err := resolveAddr(flagAddr)
+	if err != nil {
+		return nil, err
+	}
+	return client.New(resolved), nil
 }
 
 // resolveAddr determines the daemon address with precedence:

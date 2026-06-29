@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -38,11 +39,12 @@ type Config struct {
 
 // Global holds defaults applied across agents unless overridden per agent.
 type Global struct {
-	Provider       Provider       `yaml:"provider"`
-	Model          string         `yaml:"model"`
-	Effort         string         `yaml:"effort"`
-	PermissionMode PermissionMode `yaml:"permission_mode"`
-	Fallback       []string       `yaml:"fallback"`
+	Provider          Provider       `yaml:"provider"`
+	Model             string         `yaml:"model"`
+	Effort            string         `yaml:"effort"`
+	PermissionMode    PermissionMode `yaml:"permission_mode"`
+	PermissionTimeout string         `yaml:"permission_timeout"`
+	Fallback          []string       `yaml:"fallback"`
 }
 
 // Profile is an optional named auth context, 1:1 with one underlying account
@@ -106,6 +108,9 @@ func (c *Config) applyDefaults() {
 	if c.Global.PermissionMode == "" {
 		c.Global.PermissionMode = PermissionApprove
 	}
+	if c.Global.PermissionTimeout == "" {
+		c.Global.PermissionTimeout = "2m"
+	}
 	if c.Server.Bind == "" {
 		c.Server.Bind = "127.0.0.1"
 	}
@@ -122,6 +127,9 @@ func (c *Config) Validate() error {
 	}
 	if err := validatePermission(c.Global.PermissionMode); err != nil {
 		return fmt.Errorf("global.permission_mode: %w", err)
+	}
+	if _, err := time.ParseDuration(c.Global.PermissionTimeout); err != nil {
+		return fmt.Errorf("global.permission_timeout: %w", err)
 	}
 
 	profileNames := map[string]Provider{}

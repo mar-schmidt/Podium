@@ -19,15 +19,15 @@ const EnvHome = "PODIUM_HOME"
 // Paths holds every well-known location under the storage root. Resolve these
 // once at startup and pass Paths around rather than recomputing strings.
 type Paths struct {
-	Home      string // the storage root itself (e.g. ~/.podium)
-	ConfigYAML string // config.yaml
-	BaseAgents string // AGENTS.md (Podium-owned base instructions)
-	DB        string // podium.db (SQLite)
-	AgentsDir string // agents/
-	ProjectsDir string // projects/
+	Home         string // the storage root itself (e.g. ~/.podium)
+	ConfigYAML   string // config.yaml
+	BaseAgents   string // AGENTS.md (Podium-owned base instructions)
+	DB           string // podium.db (SQLite)
+	AgentsDir    string // agents/
+	ProjectsDir  string // projects/
 	ProjectsYAML string // projects/projects.yaml
 	SchedulesDir string // schedules/
-	ProfilesDir string // profiles/
+	ProfilesDir  string // profiles/
 }
 
 // ResolveHome returns the absolute storage root. Precedence:
@@ -47,12 +47,12 @@ func ResolveHome() (string, error) {
 // NewPaths derives all well-known paths from a resolved storage root.
 func NewPaths(home string) Paths {
 	return Paths{
-		Home:        home,
-		ConfigYAML:  filepath.Join(home, "config.yaml"),
-		BaseAgents:  filepath.Join(home, "AGENTS.md"),
-		DB:          filepath.Join(home, "podium.db"),
-		AgentsDir:   filepath.Join(home, "agents"),
-		ProjectsDir: filepath.Join(home, "projects"),
+		Home:         home,
+		ConfigYAML:   filepath.Join(home, "config.yaml"),
+		BaseAgents:   filepath.Join(home, "AGENTS.md"),
+		DB:           filepath.Join(home, "podium.db"),
+		AgentsDir:    filepath.Join(home, "agents"),
+		ProjectsDir:  filepath.Join(home, "projects"),
 		ProjectsYAML: filepath.Join(home, "projects", "projects.yaml"),
 		SchedulesDir: filepath.Join(home, "schedules"),
 		ProfilesDir:  filepath.Join(home, "profiles"),

@@ -5,6 +5,8 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/store"
@@ -24,6 +26,7 @@ type StartRequest struct {
 	AgentName      string
 	Provider       config.Provider
 	Profile        string
+	ProfileDir     string
 	Model          string
 	Effort         string
 	PermissionMode config.PermissionMode
@@ -43,6 +46,21 @@ type TurnRequest struct {
 	Handle    Handle
 	Message   string
 	History   []store.Message
+	Settings  TurnSettings
+	Relay     PermissionRelay
+}
+
+// TurnSettings are the current session settings needed by per-turn providers
+// such as Claude.
+type TurnSettings struct {
+	AgentName        string
+	Profile          string
+	ProfileDir       string
+	Model            string
+	Effort           string
+	PermissionMode   config.PermissionMode
+	WorkspaceDir     string
+	PermissionTurnID string
 }
 
 // EventKind classifies streamed adapter output.
@@ -53,6 +71,8 @@ const (
 	EventAssistantDelta EventKind = "assistant_delta"
 	// EventAssistantMessage is the final assistant message for the turn.
 	EventAssistantMessage EventKind = "assistant_message"
+	// EventPermissionRequest asks the client to approve or deny a tool action.
+	EventPermissionRequest EventKind = "permission_request"
 	// EventHandleUpdated carries a replacement resumable provider handle.
 	EventHandleUpdated EventKind = "handle_updated"
 	// EventTurnDone marks the end of a turn stream.
@@ -61,9 +81,10 @@ const (
 
 // Event is one streamed provider event.
 type Event struct {
-	Kind    EventKind
-	Content string
-	Handle  *Handle
+	Kind              EventKind
+	Content           string
+	Handle            *Handle
+	PermissionRequest *PermissionRequest
 }
 
 // Adapter abstracts over provider process models: per-turn Claude processes and
@@ -73,4 +94,25 @@ type Adapter interface {
 	Resume(context.Context, ResumeRequest) (Handle, error)
 	SendTurn(context.Context, TurnRequest) (<-chan Event, error)
 	Teardown(context.Context, Handle) error
+}
+
+// PermissionRequest is the provider-neutral approval payload surfaced to a user.
+type PermissionRequest struct {
+	ID        string          `json:"id"`
+	TurnID    string          `json:"turn_id"`
+	ToolName  string          `json:"tool_name"`
+	ToolUseID string          `json:"tool_use_id"`
+	Input     json.RawMessage `json:"input"`
+}
+
+// PermissionDecision is returned to the provider permission mechanism.
+type PermissionDecision struct {
+	Behavior     string          `json:"behavior"`
+	UpdatedInput json.RawMessage `json:"updatedInput,omitempty"`
+	Message      string          `json:"message,omitempty"`
+}
+
+// PermissionRelay receives permission requests and waits for user decisions.
+type PermissionRelay interface {
+	RequestPermission(context.Context, PermissionRequest, time.Duration) (PermissionDecision, error)
 }

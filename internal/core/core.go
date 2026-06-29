@@ -18,10 +18,11 @@ var safeAgentName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // Options configures a Core service.
 type Options struct {
-	Paths   config.Paths
-	Store   *store.Store
-	Adapter adapter.Adapter
-	Global  config.Global
+	Paths    config.Paths
+	Store    *store.Store
+	Adapter  adapter.Adapter
+	Global   config.Global
+	Profiles []config.Profile
 }
 
 // Core coordinates typed persistence, filesystem scaffolding, instruction
@@ -31,6 +32,7 @@ type Core struct {
 	store    *store.Store
 	adapter  adapter.Adapter
 	global   config.Global
+	profiles map[string]config.Profile
 	composer InstructionComposer
 }
 
@@ -58,7 +60,11 @@ func New(opts Options) (*Core, error) {
 		store:    opts.Store,
 		adapter:  ad,
 		global:   global,
+		profiles: map[string]config.Profile{},
 		composer: NewFileComposer(opts.Paths),
+	}
+	for _, profile := range opts.Profiles {
+		c.profiles[profile.Name] = profile
 	}
 	return c, nil
 }
@@ -93,4 +99,22 @@ func validateAgentName(name string) error {
 		return fmt.Errorf("invalid agent name %q: parent path segments are not allowed", name)
 	}
 	return nil
+}
+
+func (c *Core) profileDir(provider config.Provider, name string) string {
+	if name == "" {
+		return ""
+	}
+	profile, ok := c.profiles[name]
+	if !ok || profile.Provider != provider {
+		return ""
+	}
+	switch provider {
+	case config.ProviderClaude:
+		return profile.ConfigDir
+	case config.ProviderCodex:
+		return profile.HomeDir
+	default:
+		return ""
+	}
 }

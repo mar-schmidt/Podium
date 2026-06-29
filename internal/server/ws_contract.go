@@ -27,6 +27,7 @@ type ServerMessage struct {
 	History   []store.Message            `json:"history,omitempty"`
 	Message   *store.Message             `json:"message,omitempty"`
 	Delta     string                     `json:"delta,omitempty"`
+	Notice    string                     `json:"notice,omitempty"`
 	Request   *adapter.PermissionRequest `json:"request,omitempty"`
 	Error     string                     `json:"error,omitempty"`
 }

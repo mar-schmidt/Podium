@@ -50,6 +50,7 @@ func (b *permissionBroker) RequestPermission(ctx context.Context, req adapter.Pe
 	}()
 
 	if turnCh != nil {
+		req.ExpiresAt = time.Now().Add(timeout).UTC()
 		select {
 		case <-ctx.Done():
 			return adapter.PermissionDecision{Behavior: "deny"}, ctx.Err()

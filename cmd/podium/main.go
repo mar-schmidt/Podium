@@ -188,6 +188,8 @@ func newChatCmd(addr *string) *cobra.Command {
 						fmt.Print(event.Delta)
 						printedDelta = true
 					}
+				case "notice":
+					fmt.Fprintf(os.Stderr, "%s\n", event.Notice)
 				case "permission_request":
 					if event.Request != nil {
 						if err := promptPermission(cmd.Context(), c, *event.Request); err != nil {

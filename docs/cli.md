@@ -97,6 +97,17 @@ In `approve` mode, permission requests are shown inline. Answer `y`/`yes` to
 allow the requested tool input unchanged; any other answer denies it. Unanswered
 requests auto-deny after `global.permission_timeout`.
 
+Slash commands can be sent as the message body:
+
+| Command | Effect |
+| --- | --- |
+| `/model <name>` | Set the session model for subsequent turns. |
+| `/effort low|medium|high|xhigh|max` | Set reasoning effort. |
+| `/permission approve|yolo` | Set permission mode. |
+| `/name <text>` | Rename the session. |
+| `/describe <text>` | Set the session description. |
+| `/help` | Print command help. |
+
 ---
 
 *More commands and flags (profiles, schedules, projects, richer chat controls)

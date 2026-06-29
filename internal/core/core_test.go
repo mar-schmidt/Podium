@@ -151,6 +151,92 @@ func TestAppendTurnHistorySurvivesReopen(t *testing.T) {
 	}
 }
 
+func TestSlashCommandsUpdateSessionSettingsAndMetadata(t *testing.T) {
+	ctx := context.Background()
+	c, cleanup := newTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "operator", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "operator", Origin: store.OriginWeb})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	result, err := c.HandleSlashCommand(ctx, session.ID, "/model claude-sonnet")
+	if err != nil {
+		t.Fatalf("model slash: %v", err)
+	}
+	if !result.Handled || result.Session.Model != "claude-sonnet" {
+		t.Fatalf("model slash did not update session: %+v", result)
+	}
+	result, err = c.HandleSlashCommand(ctx, session.ID, "/effort high")
+	if err != nil {
+		t.Fatalf("effort slash: %v", err)
+	}
+	if result.Session.Effort != "high" {
+		t.Fatalf("effort slash did not update session: %+v", result.Session)
+	}
+	result, err = c.HandleSlashCommand(ctx, session.ID, "/permission yolo")
+	if err != nil {
+		t.Fatalf("permission slash: %v", err)
+	}
+	if result.Session.PermissionMode != config.PermissionYolo {
+		t.Fatalf("permission slash did not update session: %+v", result.Session)
+	}
+	result, err = c.HandleSlashCommand(ctx, session.ID, "/name Launch Plan")
+	if err != nil {
+		t.Fatalf("name slash: %v", err)
+	}
+	if result.Session.Name != "Launch Plan" || result.Session.AutoNamed {
+		t.Fatalf("name slash did not update metadata: %+v", result.Session)
+	}
+}
+
+func TestAutoNameSessionUsesModelJSON(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	fake := adapter.NewFake()
+	fake.Responses = []string{`{"name":"Release Checklist","description":"Coordinate final checks before release."}`}
+	c, err := New(Options{Paths: paths, Store: db, Adapter: fake})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "namer", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "namer", Origin: store.OriginWeb})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := db.AppendMessages(ctx, session.ID, []store.Message{
+		{Role: store.RoleUser, Content: "Prepare the release checklist."},
+		{Role: store.RoleAssistant, Content: "I will collect the final checks."},
+	}); err != nil {
+		t.Fatalf("append messages: %v", err)
+	}
+	updated, err := c.AutoNameSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("auto name: %v", err)
+	}
+	if updated.Name != "Release Checklist" || !updated.AutoNamed {
+		t.Fatalf("unexpected auto-name result: %+v", updated)
+	}
+}
+
 func newTestCore(t *testing.T) (*Core, func()) {
 	t.Helper()
 	home := t.TempDir()

@@ -107,6 +107,7 @@ type StreamEvent struct {
 	Session *store.Session             `json:"session,omitempty"`
 	Message *store.Message             `json:"message,omitempty"`
 	Delta   string                     `json:"delta,omitempty"`
+	Notice  string                     `json:"notice,omitempty"`
 	Request *adapter.PermissionRequest `json:"request,omitempty"`
 	Error   string                     `json:"error,omitempty"`
 }

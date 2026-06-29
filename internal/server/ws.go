@@ -159,6 +159,18 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 	if err := writer.write(ctx, ServerMessage{Type: "session", RequestID: msg.RequestID, Session: &session}); err != nil {
 		return
 	}
+	slash, err := s.core.HandleSlashCommand(ctx, session.ID, msg.Message)
+	if err != nil {
+		_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, Error: err.Error()})
+		return
+	}
+	if slash.Handled {
+		_ = writer.write(ctx, ServerMessage{Type: "session", RequestID: msg.RequestID, Session: &slash.Session})
+		_ = writer.write(ctx, ServerMessage{Type: "notice", RequestID: msg.RequestID, Notice: slash.Notice})
+		_ = writer.write(ctx, ServerMessage{Type: "done", RequestID: msg.RequestID})
+		_ = s.writeState(ctx, writer)
+		return
+	}
 
 	turnID := uuid.NewString()
 	requests, unsubscribe := s.broker.subscribe(turnID)

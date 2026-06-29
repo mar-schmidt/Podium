@@ -30,6 +30,27 @@ Message history is stored as strictly ordered `user` and `assistant` messages.
 The provider's own session or thread is treated as a resumable backing resource;
 Podium's SQLite history is the canonical truth that survives daemon restarts.
 
-Phase 1 drives turns through a deterministic fake adapter. Real provider turns,
-streaming UI, replay, and rolling-summary refresh are layered on this model in
-later phases.
+## Naming
+
+After the first user/assistant exchange, Podium starts a non-blocking naming job.
+It asks the session's own provider/model at low effort for a concise name and
+description, then stores them on the session. If the provider output cannot be
+parsed, Podium falls back to a short deterministic title from the first user
+message.
+
+Manual `/name <text>` and `/describe <text>` commands override auto-generated
+metadata and mark it as user-authored.
+
+## Slash Commands
+
+Slash commands are session-scoped controls and are not appended to canonical chat
+history.
+
+| Command | Effect |
+| --- | --- |
+| `/model <name>` | Set the model for subsequent turns. |
+| `/effort low|medium|high|xhigh|max` | Set reasoning effort for subsequent turns. |
+| `/permission approve|yolo` | Override permission mode for subsequent turns. |
+| `/name <text>` | Set the session display name. |
+| `/describe <text>` | Set the session description. |
+| `/help` | Show available commands. |

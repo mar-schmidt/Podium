@@ -31,6 +31,9 @@ Create a web-origin session.
 
 Send a turn to a new or existing session.
 
+Slash commands use the same `send_turn` envelope and return `notice`, `session`,
+and `done` messages rather than provider deltas.
+
 ```json
 {
   "type": "permission_decision",
@@ -57,8 +60,14 @@ Answer an inline permission request. Denies use:
 | `delta` | Incremental assistant text. |
 | `assistant` | Final assistant text fallback. |
 | `permission_request` | Tool approval request. |
+| `notice` | Non-history UI notice, usually from slash commands. |
 | `done` | Turn complete. |
 | `error` | Error string. |
+
+Session payloads include display metadata (`Name`, `Description`, `AutoNamed`)
+and current settings (`Model`, `Effort`, `PermissionMode`). Permission requests
+include `expires_at` when a timeout is active so clients can show an auto-deny
+countdown.
 
 ## REST Support
 

@@ -103,6 +103,7 @@ type PermissionRequest struct {
 	ToolName  string          `json:"tool_name"`
 	ToolUseID string          `json:"tool_use_id"`
 	Input     json.RawMessage `json:"input"`
+	ExpiresAt time.Time       `json:"expires_at,omitempty"`
 }
 
 // PermissionDecision is returned to the provider permission mechanism.

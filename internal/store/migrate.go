@@ -74,7 +74,14 @@ var migrations = []migration{
 
 		CREATE INDEX idx_sessions_agent_name ON sessions(agent_name);
 		CREATE INDEX idx_sessions_origin ON sessions(origin);
-		CREATE INDEX idx_messages_session_seq ON messages(session_id, seq);`,
+			CREATE INDEX idx_messages_session_seq ON messages(session_id, seq);`,
+	},
+	{
+		version: 3,
+		name:    "session_metadata_and_settings",
+		sql: `ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT '';
+		ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT '';
+		ALTER TABLE sessions ADD COLUMN auto_named INTEGER NOT NULL DEFAULT 0;`,
 	},
 }
 

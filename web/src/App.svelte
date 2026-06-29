@@ -5,9 +5,12 @@
     ClientMessage,
     Health,
     Message,
+    PermissionMode,
     PermissionRequest,
+    Provider,
     ServerMessage,
     Session,
+    SessionOrigin,
   } from "./lib/types";
 
   let health = $state<Health | null>(null);
@@ -18,19 +21,46 @@
   let messages = $state<Message[]>([]);
   let pendingAssistant = $state("");
   let pendingPermission = $state<PermissionRequest | null>(null);
-  let agentName = $state("web-agent");
+  let permissionRemaining = $state(0);
   let messageText = $state("");
-  let newAgentName = $state("web-agent");
-  let permissionMode = $state<"approve" | "yolo">("approve");
+  let selectedAgent = $state("");
+  let originFilter = $state<SessionOrigin | "all">("all");
+  let agentFilter = $state("all");
   let error = $state<string | null>(null);
+  let notice = $state<string | null>(null);
   let sending = $state(false);
+  let hireOpen = $state(false);
+  let hireName = $state("jared");
+  let hireProvider = $state<Provider>("claude");
+  let hirePermission = $state<PermissionMode>("approve");
+  let hireModel = $state("");
+  let hireEffort = $state("medium");
+  let modelDraft = $state("");
   let ws: WebSocket | null = null;
+  let poll: number | undefined;
+  let countdown: number | undefined;
 
-  const activeAgent = $derived(agents.find((agent) => agent.Name === activeSession?.AgentName));
+  const activeAgent = $derived(agents.find((agent) => agent.Name === activeSession?.AgentName || agent.Name === selectedAgent));
+  const filteredSessions = $derived(
+    sessions.filter((session) => {
+      if (originFilter !== "all" && session.Origin !== originFilter) return false;
+      if (agentFilter !== "all" && session.AgentName !== agentFilter) return false;
+      return true;
+    }),
+  );
+  const sessionTitle = $derived(activeSession ? activeSession.Name || activeSession.AgentName : selectedAgent || "New session");
+  const sessionDescription = $derived(activeSession?.Description || "Ready");
 
   onMount(() => {
     void fetchHealth();
     connect();
+    poll = window.setInterval(() => send({ type: "list" }), 4000);
+    countdown = window.setInterval(updatePermissionRemaining, 1000);
+    return () => {
+      if (poll) window.clearInterval(poll);
+      if (countdown) window.clearInterval(countdown);
+      ws?.close();
+    };
   });
 
   async function fetchHealth() {
@@ -75,14 +105,22 @@
       case "state":
         agents = msg.agents ?? [];
         sessions = msg.sessions ?? [];
-        if (!activeSession && sessions.length > 0) activeSession = sessions[0];
+        if (!selectedAgent && agents.length > 0) selectedAgent = agents[0].Name;
+        if (activeSession) {
+          const replacement = sessions.find((session) => session.ID === activeSession?.ID);
+          if (replacement) activeSession = replacement;
+        } else if (sessions.length > 0) {
+          activeSession = sessions[0];
+          selectedAgent = sessions[0].AgentName;
+          void loadHistory(sessions[0]);
+        }
         break;
       case "session":
         if (msg.session) {
           activeSession = msg.session;
-          if (!sessions.some((session) => session.ID === msg.session?.ID)) {
-            sessions = [msg.session, ...sessions];
-          }
+          selectedAgent = msg.session.AgentName;
+          sessions = [msg.session, ...sessions.filter((session) => session.ID !== msg.session?.ID)];
+          modelDraft = msg.session.Model;
         }
         break;
       case "history":
@@ -90,7 +128,7 @@
         pendingAssistant = "";
         break;
       case "message":
-        if (msg.message && !messages.some((existing) => existing.ID === msg.message?.ID)) {
+        if (msg.message && !messages.some((existing) => sameMessage(existing, msg.message))) {
           messages = [...messages, msg.message];
           if (msg.message.Role === "assistant") pendingAssistant = "";
         }
@@ -103,10 +141,16 @@
         break;
       case "permission_request":
         pendingPermission = msg.request ?? null;
+        updatePermissionRemaining();
+        break;
+      case "notice":
+        notice = msg.notice ?? null;
+        sending = false;
         break;
       case "done":
         pendingPermission = null;
         sending = false;
+        window.setTimeout(() => send({ type: "list" }), 1200);
         break;
       case "error":
         error = msg.error ?? "Unknown server error";
@@ -115,15 +159,21 @@
     }
   }
 
-  async function createAgent() {
+  function sameMessage(a: Message, b: Message | undefined) {
+    return !!b && a.ID === b.ID && a.SessionID === b.SessionID;
+  }
+
+  async function hireAgent() {
     error = null;
     const res = await fetch("/api/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: newAgentName,
-        provider: "claude",
-        permission_mode: permissionMode,
+        name: hireName.trim(),
+        provider: hireProvider,
+        model: hireModel.trim(),
+        effort: hireEffort,
+        permission_mode: hirePermission,
       }),
     });
     if (!res.ok) {
@@ -132,10 +182,11 @@
     }
     const agent = (await res.json()) as Agent;
     agents = [agent, ...agents.filter((item) => item.Name !== agent.Name)];
-    agentName = agent.Name;
+    selectedAgent = agent.Name;
+    hireOpen = false;
   }
 
-  async function selectSession(session: Session) {
+  async function loadHistory(session: Session) {
     error = null;
     const res = await fetch(`/api/sessions/${session.ID}`);
     if (!res.ok) {
@@ -144,24 +195,51 @@
     }
     const detail = (await res.json()) as { session: Session; history: Message[] };
     activeSession = detail.session;
+    selectedAgent = detail.session.AgentName;
     messages = detail.history;
     pendingAssistant = "";
+    modelDraft = detail.session.Model;
   }
 
-  function sendTurn() {
-    const text = messageText.trim();
+  function sendTurn(text = messageText.trim()) {
     if (!text) return;
+    if (!activeSession && !selectedAgent) {
+      error = "Create or select an agent first";
+      return;
+    }
     error = null;
+    notice = null;
     sending = true;
     pendingAssistant = "";
     send({
       type: "send_turn",
       request_id: crypto.randomUUID(),
-      agent_name: activeSession ? undefined : agentName,
+      agent_name: activeSession ? undefined : selectedAgent,
       session_id: activeSession?.ID,
       message: text,
     });
     messageText = "";
+  }
+
+  function newSession() {
+    activeSession = null;
+    messages = [];
+    pendingAssistant = "";
+    notice = null;
+    error = null;
+  }
+
+  function runCommand(command: string) {
+    if (!activeSession) {
+      messageText = command;
+      return;
+    }
+    sendTurn(command);
+  }
+
+  function setModel() {
+    const value = modelDraft.trim();
+    if (value) runCommand(`/model ${value}`);
   }
 
   function decidePermission(allow: boolean) {
@@ -175,69 +253,121 @@
     });
     pendingPermission = null;
   }
+
+  function updatePermissionRemaining() {
+    if (!pendingPermission?.expires_at) {
+      permissionRemaining = 0;
+      return;
+    }
+    permissionRemaining = Math.max(0, Math.ceil((new Date(pendingPermission.expires_at).getTime() - Date.now()) / 1000));
+  }
+
+  function badgeClass(origin: SessionOrigin) {
+    return `badge ${origin}`;
+  }
+
+  function stopModalEvent(event: Event) {
+    event.stopPropagation();
+  }
 </script>
 
-<main class="grid min-h-screen grid-cols-[280px_1fr] bg-[var(--color-bg)] text-[var(--color-ink)]">
-  <aside class="border-r border-black/10 bg-[var(--color-surface)] px-4 py-4">
-    <div class="mb-5 flex items-center justify-between">
+<main class="app-shell">
+  <aside class="sidebar">
+    <header class="brand-row">
       <div>
-        <h1 class="text-xl font-semibold">Podium</h1>
-        <p class="text-xs text-[var(--color-muted)]">{health?.version ?? "local"}</p>
+        <h1>Podium</h1>
+        <p>{health ? `${health.version} (${health.commit})` : "local daemon"}</p>
       </div>
       <span class:live={status === "live"} class="status-dot" title={status}></span>
+    </header>
+
+    <div class="toolbar-row">
+      <button class="button primary" onclick={() => (hireOpen = true)}>Hire agent</button>
+      <button class="icon-button" onclick={newSession} title="New session">+</button>
     </div>
 
-    <section class="mb-5">
-      <h2 class="mb-2 text-xs font-semibold uppercase text-[var(--color-muted)]">Agents</h2>
-      <div class="space-y-2">
-        <input class="field" bind:value={newAgentName} aria-label="Agent name" />
-        <select class="field" bind:value={permissionMode} aria-label="Permission mode">
-          <option value="approve">approve</option>
-          <option value="yolo">yolo</option>
-        </select>
-        <button class="button w-full" onclick={createAgent}>Create</button>
+    <section class="panel">
+      <div class="panel-heading">
+        <span>Agents</span>
       </div>
-      <div class="mt-3 space-y-1">
+      <div class="agent-list">
         {#each agents as agent}
-          <button class="list-button" class:selected={agent.Name === agentName} onclick={() => (agentName = agent.Name)}>
-            <span>{agent.Name}</span>
-            <small>{agent.Provider} · {agent.PermissionMode}</small>
+          <button class:selected={selectedAgent === agent.Name} class="agent-row" onclick={() => ((selectedAgent = agent.Name), newSession())}>
+            <strong>{agent.Name}</strong>
+            <small>{agent.Provider} / {agent.PermissionMode}</small>
           </button>
         {/each}
       </div>
     </section>
 
-    <section>
-      <h2 class="mb-2 text-xs font-semibold uppercase text-[var(--color-muted)]">Sessions</h2>
-      <div class="space-y-1">
-        {#each sessions as session}
-          <button class="list-button" class:selected={activeSession?.ID === session.ID} onclick={() => selectSession(session)}>
-            <span>{session.AgentName}</span>
-            <small>{session.Origin} · {session.ID.slice(0, 8)}</small>
+    <section class="panel sessions-panel">
+      <div class="panel-heading">
+        <span>Sessions</span>
+      </div>
+      <div class="filters">
+        <select class="field compact" bind:value={originFilter} aria-label="Origin filter">
+          <option value="all">all origins</option>
+          <option value="web">web</option>
+          <option value="cli">cli</option>
+          <option value="schedule">schedule</option>
+          <option value="roadmap">roadmap</option>
+        </select>
+        <select class="field compact" bind:value={agentFilter} aria-label="Agent filter">
+          <option value="all">all agents</option>
+          {#each agents as agent}
+            <option value={agent.Name}>{agent.Name}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="session-list">
+        {#each filteredSessions as session}
+          <button class:selected={activeSession?.ID === session.ID} class="session-row" onclick={() => loadHistory(session)}>
+            <span class={badgeClass(session.Origin)}>{session.Origin}</span>
+            <strong>{session.Name || session.AgentName}</strong>
+            <small>{session.Description || session.ID.slice(0, 8)}</small>
           </button>
         {/each}
       </div>
     </section>
   </aside>
 
-  <section class="grid min-h-screen grid-rows-[auto_1fr_auto]">
-    <header class="border-b border-black/10 bg-white/45 px-6 py-4">
-      <div class="flex items-center justify-between">
-        <div>
-          <h2 class="text-lg font-semibold">{activeSession?.AgentName ?? agentName}</h2>
-          <p class="text-sm text-[var(--color-muted)]">
-            {activeSession?.ID ?? "new web session"}
-            {#if activeAgent} · {activeAgent.Provider} · {activeAgent.PermissionMode}{/if}
-          </p>
+  <section class="chat-shell">
+    <header class="chat-header">
+      <div>
+        <div class="title-row">
+          {#if activeSession}<span class={badgeClass(activeSession.Origin)}>{activeSession.Origin}</span>{/if}
+          <h2>{sessionTitle}</h2>
         </div>
-        <button class="button secondary" onclick={() => ((activeSession = null), (messages = []), (pendingAssistant = ""))}>
-          New
-        </button>
+        <p>{sessionDescription}</p>
+      </div>
+      <div class="settings-strip">
+        <input class="field model-field" bind:value={modelDraft} placeholder="model" aria-label="Model" />
+        <button class="button secondary" onclick={setModel}>/model</button>
+        <select class="field compact" value={activeSession?.Effort || activeAgent?.Effort || "medium"} onchange={(event) => runCommand(`/effort ${(event.currentTarget as HTMLSelectElement).value}`)} aria-label="Effort">
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="xhigh">xhigh</option>
+          <option value="max">max</option>
+        </select>
+        <select class="field compact" value={activeSession?.PermissionMode || activeAgent?.PermissionMode || "approve"} onchange={(event) => runCommand(`/permission ${(event.currentTarget as HTMLSelectElement).value}`)} aria-label="Permission">
+          <option value="approve">approve</option>
+          <option value="yolo">yolo</option>
+        </select>
       </div>
     </header>
 
-    <div class="overflow-auto px-6 py-5">
-      <div class="mx-auto flex max-w-3xl flex-col gap-3">
+    <div class="slash-row">
+      <button onclick={() => (messageText = "/model ")}>/model</button>
+      <button onclick={() => (messageText = "/effort medium")} >/effort</button>
+      <button onclick={() => (messageText = "/permission approve")} >/permission</button>
+      <button onclick={() => (messageText = "/name ")}>/name</button>
+      <button onclick={() => (messageText = "/describe ")}>/describe</button>
+      <button onclick={() => runCommand("/help")}>/help</button>
+    </div>
+
+    <div class="messages-pane">
+      <div class="message-stack">
         {#each messages as message}
           <article class:assistant={message.Role === "assistant"} class="bubble">
             <div class="role">{message.Role}</div>
@@ -245,22 +375,28 @@
           </article>
         {/each}
         {#if pendingAssistant}
-          <article class="bubble assistant">
+          <article class="bubble assistant streaming">
             <div class="role">assistant</div>
             <p>{pendingAssistant}</p>
           </article>
         {/if}
         {#if pendingPermission}
-          <div class="permission">
+          <section class="permission-card">
             <div>
-              <strong>{pendingPermission.tool_name}</strong>
+              <div class="permission-title">
+                <strong>{pendingPermission.tool_name}</strong>
+                <span>{permissionRemaining}s</span>
+              </div>
               <pre>{JSON.stringify(pendingPermission.input, null, 2)}</pre>
             </div>
-            <div class="flex gap-2">
-              <button class="button" onclick={() => decidePermission(true)}>Allow</button>
+            <div class="permission-actions">
+              <button class="button primary" onclick={() => decidePermission(true)}>Allow</button>
               <button class="button secondary" onclick={() => decidePermission(false)}>Deny</button>
             </div>
-          </div>
+          </section>
+        {/if}
+        {#if notice}
+          <div class="notice">{notice}</div>
         {/if}
         {#if error}
           <div class="error">{error}</div>
@@ -268,11 +404,49 @@
       </div>
     </div>
 
-    <form class="border-t border-black/10 bg-[var(--color-surface)] p-4" onsubmit={(event) => { event.preventDefault(); sendTurn(); }}>
-      <div class="mx-auto flex max-w-3xl gap-2">
-        <input class="field flex-1" bind:value={messageText} placeholder="Message" aria-label="Message" />
-        <button class="button" disabled={sending || status !== "live"}>{sending ? "Sending" : "Send"}</button>
-      </div>
+    <form class="composer" onsubmit={(event) => { event.preventDefault(); sendTurn(); }}>
+      <input class="field composer-input" bind:value={messageText} placeholder="Message or slash command" aria-label="Message" />
+      <button class="button primary send-button" disabled={sending || status !== "live"}>{sending ? "Sending" : "Send"}</button>
     </form>
   </section>
+
+  {#if hireOpen}
+    <div class="modal-backdrop" role="presentation" onclick={() => (hireOpen = false)}>
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Hire agent" tabindex="-1" onclick={stopModalEvent} onkeydown={stopModalEvent}>
+        <header>
+          <h2>Hire agent</h2>
+          <button class="icon-button" onclick={() => (hireOpen = false)} title="Close">x</button>
+        </header>
+        <div class="modal-grid">
+          <label>Name<input class="field" bind:value={hireName} /></label>
+          <label>Provider
+            <select class="field" bind:value={hireProvider}>
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+            </select>
+          </label>
+          <label>Permission
+            <select class="field" bind:value={hirePermission}>
+              <option value="approve">approve</option>
+              <option value="yolo">yolo</option>
+            </select>
+          </label>
+          <label>Effort
+            <select class="field" bind:value={hireEffort}>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max</option>
+            </select>
+          </label>
+          <label class="full">Model<input class="field" bind:value={hireModel} placeholder="provider default" /></label>
+        </div>
+        <footer>
+          <button class="button secondary" onclick={() => (hireOpen = false)}>Cancel</button>
+          <button class="button primary" onclick={hireAgent}>Create</button>
+        </footer>
+      </div>
+    </div>
+  {/if}
 </main>

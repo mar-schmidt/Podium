@@ -45,6 +45,9 @@ type Agent struct {
 type Session struct {
 	ID             string
 	AgentName      string
+	Name           string
+	Description    string
+	AutoNamed      bool
 	Provider       config.Provider
 	Profile        string
 	Model          string

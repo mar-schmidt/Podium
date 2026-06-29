@@ -41,6 +41,7 @@ type streamEvent struct {
 	Session    *store.Session             `json:"session,omitempty"`
 	Message    *store.Message             `json:"message,omitempty"`
 	Delta      string                     `json:"delta,omitempty"`
+	Notice     string                     `json:"notice,omitempty"`
 	Request    *adapter.PermissionRequest `json:"request,omitempty"`
 	Error      string                     `json:"error,omitempty"`
 	AutoDenied bool                       `json:"auto_denied,omitempty"`
@@ -194,6 +195,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	enc := json.NewEncoder(w)
 	writeStreamEvent(enc, flusher, streamEvent{Type: "session", Session: &session})
+
+	slash, err := s.core.HandleSlashCommand(ctx, session.ID, req.Message)
+	if err != nil {
+		writeStreamEvent(enc, flusher, streamEvent{Type: "error", Error: err.Error()})
+		return
+	}
+	if slash.Handled {
+		writeStreamEvent(enc, flusher, streamEvent{Type: "session", Session: &slash.Session})
+		writeStreamEvent(enc, flusher, streamEvent{Type: "notice", Notice: slash.Notice})
+		writeStreamEvent(enc, flusher, streamEvent{Type: "done"})
+		return
+	}
 
 	turnID := uuid.NewString()
 	requests, unsubscribe := s.broker.subscribe(turnID)

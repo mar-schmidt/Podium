@@ -65,6 +65,20 @@
   - *Notes:* this is a functional contract slice, not the Phase 4 polished chat
     MVP; visual refinement, slash chips, auto-naming, and richer session filters
     remain deferred.
+- **Phase 4 — Frontend Chat MVP + auto-naming + slash controls: ✅ COMPLETE
+  (2026-06-29).** Added session metadata migration (`name`, `description`,
+  `auto_named`), typed store/core updates for mutable session settings and
+  metadata, core slash command handling (`/model`, `/effort`, `/permission`,
+  `/name`, `/describe`, `/help`), and non-blocking auto-naming after the first
+  exchange using the session provider at low effort with deterministic fallback.
+  Reworked the Svelte app into the chat MVP: left nav with daemon status,
+  hire-agent modal, agent/session lists, origin/agent filters, origin badges,
+  chat header metadata, slash chips/settings controls, streaming chat, and
+  permission cards with auto-deny countdown. Docs updated in `docs/sessions.md`,
+  `docs/cli.md`, and `docs/websocket.md`.
+  - *Notes:* `/profile`, replay on provider/profile switching, and auto-naming
+    refinements remain Phase 6; this phase keeps Codex UI visible but Codex
+    turns still wait for Phase 5.
 
 ## Context
 

@@ -215,6 +215,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				return
 			}
 		}
+		go c.autoNameSessionBackground(sessionID)
 		_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: adapter.EventTurnDone})
 	}()
 	return streamOut, nil

@@ -26,6 +26,9 @@ export interface Agent {
 export interface Session {
   ID: string;
   AgentName: string;
+  Name: string;
+  Description: string;
+  AutoNamed: boolean;
   Provider: Provider;
   Profile: string;
   Model: string;
@@ -49,6 +52,7 @@ export interface PermissionRequest {
   tool_name: string;
   tool_use_id: string;
   input: Record<string, unknown>;
+  expires_at?: string;
 }
 
 export interface PermissionDecision {
@@ -79,6 +83,7 @@ export interface ServerMessage {
     | "delta"
     | "assistant"
     | "permission_request"
+    | "notice"
     | "done"
     | "error";
   request_id?: string;
@@ -88,6 +93,7 @@ export interface ServerMessage {
   history?: Message[];
   message?: Message;
   delta?: string;
+  notice?: string;
   request?: PermissionRequest;
   error?: string;
 }

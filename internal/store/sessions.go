@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/mar-schmidt/Podium/internal/config"
 )
 
 // CreateSession inserts a durable session. If ID is empty, a UUID is assigned.
@@ -15,10 +16,13 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 		sess.ID = uuid.NewString()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions
-		(id, agent_name, provider, profile, model, effort, permission_mode, origin, schedule_id, run_id, rolling_summary, provider_handle)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+		(id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin, schedule_id, run_id, rolling_summary, provider_handle)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
 		sess.ID,
 		sess.AgentName,
+		sess.Name,
+		sess.Description,
+		boolInt(sess.AutoNamed),
 		sess.Provider,
 		sess.Profile,
 		sess.Model,
@@ -39,7 +43,7 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 // GetSession fetches a session by ID.
 func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT
-		id, agent_name, provider, profile, model, effort, permission_mode, origin,
+		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
 		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
 		FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
@@ -55,7 +59,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 // ListSessions returns all sessions ordered newest first.
 func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
-		id, agent_name, provider, profile, model, effort, permission_mode, origin,
+		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
 		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
 		FROM sessions ORDER BY created_at DESC, id DESC`)
 	if err != nil {
@@ -72,6 +76,42 @@ func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
 		sessions = append(sessions, sess)
 	}
 	return sessions, rows.Err()
+}
+
+// UpdateSessionSettings stores mutable per-session provider settings.
+func (s *Store) UpdateSessionSettings(ctx context.Context, id, model, effort string, permissionMode config.PermissionMode) (Session, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions
+		SET model = ?, effort = ?, permission_mode = ?, updated_at = datetime('now')
+		WHERE id = ?`, model, effort, permissionMode, id)
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q settings: %w", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q rows affected: %w", id, err)
+	}
+	if changed == 0 {
+		return Session{}, fmt.Errorf("session %q: %w", id, ErrNotFound)
+	}
+	return s.GetSession(ctx, id)
+}
+
+// UpdateSessionMetadata stores the display name and description for a session.
+func (s *Store) UpdateSessionMetadata(ctx context.Context, id, name, description string, autoNamed bool) (Session, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions
+		SET name = ?, description = ?, auto_named = ?, updated_at = datetime('now')
+		WHERE id = ?`, name, description, boolInt(autoNamed), id)
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q metadata: %w", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q rows affected: %w", id, err)
+	}
+	if changed == 0 {
+		return Session{}, fmt.Errorf("session %q: %w", id, ErrNotFound)
+	}
+	return s.GetSession(ctx, id)
 }
 
 // UpdateSessionProviderHandle stores the latest provider-owned resume handle.
@@ -184,6 +224,9 @@ func scanSession(row scanner) (Session, error) {
 	if err := row.Scan(
 		&sess.ID,
 		&sess.AgentName,
+		&sess.Name,
+		&sess.Description,
+		&sess.AutoNamed,
 		&sess.Provider,
 		&sess.Profile,
 		&sess.Model,
@@ -200,4 +243,11 @@ func scanSession(row scanner) (Session, error) {
 		return Session{}, err
 	}
 	return sess, nil
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

@@ -27,6 +27,19 @@
   deep-link fallback; `podium status` reports live/not-running.
   - *Notes:* installed Go 1.26.4 via Homebrew (was missing); `codex` CLI not
     present on the original dev machine (fine until Phase 5).
+- **Phase 1 — Core domain: ✅ COMPLETE (2026-06-29).** Added SQLite migration v2
+  for agents, sessions, immutable session origin, schedule/run linkage, rolling
+  summaries, provider handles, and ordered user/assistant message history. Added
+  typed `internal/store` APIs; `internal/adapter` seam with deterministic fake
+  adapter; `internal/core` agent CRUD/scaffolding, session lifecycle, append-turn,
+  and instruction composition. Agent creation scaffolds `SOUL.md` and
+  `workspace/` while leaving per-agent `AGENTS.md` user-created. Composition
+  writes provider-ready payloads in fixed order: Claude `workspace/CLAUDE.md`
+  with `@` imports, Codex `workspace/AGENTS.md` concatenated bundle. Docs added:
+  `docs/agents.md`, `docs/sessions.md`; CLI reference notes that Phase 1 exposes
+  no new CLI commands. Verified: `go test ./...` green.
+  - *Notes:* real Claude/Codex adapters and CLI/web commands remain deferred to
+    later phases per scope.
 
 ## Context
 

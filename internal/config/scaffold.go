@@ -19,15 +19,18 @@ var (
 
 	//go:embed templates/projects.empty.yaml
 	emptyProjectsYAML []byte
+
+	//go:embed templates/SOUL.md
+	agentSoulMD []byte
 )
 
 // ScaffoldResult reports what first-run scaffolding actually created, so the
 // daemon can log a useful "initialized fresh ~/.podium" message.
 type ScaffoldResult struct {
-	CreatedHome     bool
-	CreatedConfig   bool
+	CreatedHome       bool
+	CreatedConfig     bool
 	CreatedBaseAgents bool
-	CreatedProjects bool
+	CreatedProjects   bool
 }
 
 // Scaffold ensures the storage root and its directory tree exist and writes the
@@ -85,4 +88,12 @@ func writeIfAbsent(path string, data []byte, perm os.FileMode) (bool, error) {
 		return false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil
+}
+
+// AgentSoulTemplate returns the default SOUL.md skeleton used when a new agent
+// is created. A copy is returned so callers can safely modify the bytes.
+func AgentSoulTemplate() []byte {
+	out := make([]byte, len(agentSoulMD))
+	copy(out, agentSoulMD)
+	return out
 }

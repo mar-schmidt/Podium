@@ -1,0 +1,203 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+)
+
+// CreateSession inserts a durable session. If ID is empty, a UUID is assigned.
+func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error) {
+	if sess.ID == "" {
+		sess.ID = uuid.NewString()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions
+		(id, agent_name, provider, profile, model, effort, permission_mode, origin, schedule_id, run_id, rolling_summary, provider_handle)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+		sess.ID,
+		sess.AgentName,
+		sess.Provider,
+		sess.Profile,
+		sess.Model,
+		sess.Effort,
+		sess.PermissionMode,
+		sess.Origin,
+		sess.ScheduleID,
+		sess.RunID,
+		sess.RollingSummary,
+		sess.ProviderHandle,
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("create session %q: %w", sess.ID, err)
+	}
+	return s.GetSession(ctx, sess.ID)
+}
+
+// GetSession fetches a session by ID.
+func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT
+		id, agent_name, provider, profile, model, effort, permission_mode, origin,
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		FROM sessions WHERE id = ?`, id)
+	sess, err := scanSession(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Session{}, fmt.Errorf("session %q: %w", id, ErrNotFound)
+		}
+		return Session{}, err
+	}
+	return sess, nil
+}
+
+// ListSessions returns all sessions ordered newest first.
+func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		id, agent_name, provider, profile, model, effort, permission_mode, origin,
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		FROM sessions ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		sess, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, rows.Err()
+}
+
+// UpdateSessionProviderHandle stores the latest provider-owned resume handle.
+func (s *Store) UpdateSessionProviderHandle(ctx context.Context, id, handle string) (Session, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions
+		SET provider_handle = ?, updated_at = datetime('now')
+		WHERE id = ?`, handle, id)
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q provider handle: %w", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q rows affected: %w", id, err)
+	}
+	if changed == 0 {
+		return Session{}, fmt.Errorf("session %q: %w", id, ErrNotFound)
+	}
+	return s.GetSession(ctx, id)
+}
+
+// UpdateRollingSummary stores the current replay summary for a session.
+func (s *Store) UpdateRollingSummary(ctx context.Context, id, summary string) (Session, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions
+		SET rolling_summary = ?, updated_at = datetime('now')
+		WHERE id = ?`, summary, id)
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q rolling summary: %w", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q rows affected: %w", id, err)
+	}
+	if changed == 0 {
+		return Session{}, fmt.Errorf("session %q: %w", id, ErrNotFound)
+	}
+	return s.GetSession(ctx, id)
+}
+
+// AppendMessages appends messages to the canonical history with strictly
+// increasing sequence numbers assigned inside one transaction.
+func (s *Store) AppendMessages(ctx context.Context, sessionID string, messages []Message) ([]Message, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin append messages: %w", err)
+	}
+	defer tx.Rollback()
+
+	var next int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id = ?`,
+		sessionID,
+	).Scan(&next); err != nil {
+		return nil, fmt.Errorf("next message seq: %w", err)
+	}
+
+	inserted := make([]Message, 0, len(messages))
+	for _, msg := range messages {
+		msg.SessionID = sessionID
+		msg.Seq = next
+		next++
+		res, err := tx.ExecContext(ctx, `INSERT INTO messages (session_id, seq, role, content)
+			VALUES (?, ?, ?, ?)`, msg.SessionID, msg.Seq, msg.Role, msg.Content)
+		if err != nil {
+			return nil, fmt.Errorf("append message %d to session %q: %w", msg.Seq, sessionID, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("read appended message id: %w", err)
+		}
+		msg.ID = id
+		inserted = append(inserted, msg)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET updated_at = datetime('now') WHERE id = ?`,
+		sessionID,
+	); err != nil {
+		return nil, fmt.Errorf("touch session %q: %w", sessionID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit append messages: %w", err)
+	}
+	return inserted, nil
+}
+
+// ListMessages returns a session's canonical history in sequence order.
+func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, seq, role, content, created_at
+		FROM messages WHERE session_id = ? ORDER BY seq`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list messages for session %q: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var msg Message
+		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Seq, &msg.Role, &msg.Content, &msg.CreatedAt); err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+	return messages, rows.Err()
+}
+
+func scanSession(row scanner) (Session, error) {
+	var sess Session
+	if err := row.Scan(
+		&sess.ID,
+		&sess.AgentName,
+		&sess.Provider,
+		&sess.Profile,
+		&sess.Model,
+		&sess.Effort,
+		&sess.PermissionMode,
+		&sess.Origin,
+		&sess.ScheduleID,
+		&sess.RunID,
+		&sess.RollingSummary,
+		&sess.ProviderHandle,
+		&sess.CreatedAt,
+		&sess.UpdatedAt,
+	); err != nil {
+		return Session{}, err
+	}
+	return sess, nil
+}

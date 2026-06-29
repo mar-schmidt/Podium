@@ -60,5 +60,6 @@ unreachable.
 
 ---
 
-*More commands (agents, sessions, chat, profiles, schedules, projects) are added
-as later phases land; each gets an entry here when it ships.*
+*Phase 1 adds the core agent/session domain APIs but no new user-facing CLI
+commands. More commands (agents, sessions, chat, profiles, schedules, projects)
+are added as later phases land; each gets an entry here when it ships.*

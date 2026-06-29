@@ -1,0 +1,177 @@
+package core
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mar-schmidt/Podium/internal/adapter"
+	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/store"
+)
+
+func TestCreateAgentScaffoldsDirectory(t *testing.T) {
+	ctx := context.Background()
+	c, cleanup := newTestCore(t)
+	defer cleanup()
+
+	agent, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "writer", Provider: config.ProviderClaude})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	paths := c.AgentPaths(agent.Name)
+	if _, err := os.Stat(paths.Workspace); err != nil {
+		t.Fatalf("workspace not scaffolded: %v", err)
+	}
+	soul, err := os.ReadFile(paths.Soul)
+	if err != nil {
+		t.Fatalf("SOUL.md not scaffolded: %v", err)
+	}
+	if !strings.Contains(string(soul), "Name: writer") {
+		t.Fatalf("SOUL.md did not include agent name:\n%s", soul)
+	}
+	if _, err := os.Stat(paths.Agents); !os.IsNotExist(err) {
+		t.Fatalf("per-agent AGENTS.md should be left for the user, stat err=%v", err)
+	}
+}
+
+func TestInstructionCompositionPayloads(t *testing.T) {
+	ctx := context.Background()
+	c, cleanup := newTestCore(t)
+	defer cleanup()
+
+	agent, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "builder", Provider: config.ProviderClaude})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	paths := c.AgentPaths(agent.Name)
+	if err := os.WriteFile(paths.Agents, []byte("agent layer\n"), 0o644); err != nil {
+		t.Fatalf("write agent AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(paths.Soul, []byte("soul layer\n"), 0o644); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+
+	claudePayload, err := c.composer.Compose(ctx, agent, DeliveryClaudeImport)
+	if err != nil {
+		t.Fatalf("compose claude: %v", err)
+	}
+	wantClaude := "# Podium generated Claude context for builder\n\n" +
+		"@" + c.paths.BaseAgents + "\n" +
+		"@" + paths.Agents + "\n" +
+		"@" + paths.Soul + "\n"
+	if string(claudePayload.Bytes) != wantClaude {
+		t.Fatalf("unexpected claude payload:\n%s", claudePayload.Bytes)
+	}
+	if claudePayload.Path != filepath.Join(paths.Workspace, "CLAUDE.md") {
+		t.Fatalf("unexpected claude payload path %q", claudePayload.Path)
+	}
+
+	agent.Provider = config.ProviderCodex
+	codexPayload, err := c.composer.Compose(ctx, agent, DeliveryCodexBundle)
+	if err != nil {
+		t.Fatalf("compose codex: %v", err)
+	}
+	got := string(codexPayload.Bytes)
+	baseIdx := strings.Index(got, "base layer")
+	agentIdx := strings.Index(got, "agent layer")
+	soulIdx := strings.Index(got, "soul layer")
+	if baseIdx == -1 || agentIdx == -1 || soulIdx == -1 {
+		t.Fatalf("codex payload missing layers:\n%s", got)
+	}
+	if !(baseIdx < agentIdx && agentIdx < soulIdx) {
+		t.Fatalf("codex payload order is wrong:\n%s", got)
+	}
+	if codexPayload.Path != filepath.Join(paths.Workspace, "AGENTS.md") {
+		t.Fatalf("unexpected codex payload path %q", codexPayload.Path)
+	}
+}
+
+func TestAppendTurnHistorySurvivesReopen(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	fake := adapter.NewFake()
+	fake.Responses = []string{"assistant one"}
+	c, err := New(Options{Paths: paths, Store: db, Adapter: fake})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "analyst", Provider: config.ProviderCodex}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "analyst", Origin: store.OriginCLI})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if session.ProviderHandle == "" {
+		t.Fatalf("expected provider handle to be stored")
+	}
+	written, err := c.AppendTurn(ctx, session.ID, "hello")
+	if err != nil {
+		t.Fatalf("append turn: %v", err)
+	}
+	if len(written) != 2 {
+		t.Fatalf("expected user and assistant messages, got %d", len(written))
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	history, err := reopened.ListMessages(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list reopened history: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 persisted messages, got %d", len(history))
+	}
+	if history[0].Seq != 1 || history[0].Role != store.RoleUser || history[0].Content != "hello" {
+		t.Fatalf("bad first message: %+v", history[0])
+	}
+	if history[1].Seq != 2 || history[1].Role != store.RoleAssistant || history[1].Content != "assistant one" {
+		t.Fatalf("bad second message: %+v", history[1])
+	}
+}
+
+func newTestCore(t *testing.T) (*Core, func()) {
+	t.Helper()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	c, err := New(Options{Paths: paths, Store: db, Adapter: adapter.NewFake()})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	return c, func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	}
+}

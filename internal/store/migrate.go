@@ -23,6 +23,59 @@ var migrations = []migration{
 			applied_at TEXT    NOT NULL DEFAULT (datetime('now'))
 		);`,
 	},
+	{
+		version: 2,
+		name:    "core_domain",
+		sql: `CREATE TABLE agents (
+			name            TEXT PRIMARY KEY,
+			provider        TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+			profile         TEXT NOT NULL DEFAULT '',
+			model           TEXT NOT NULL DEFAULT '',
+			effort          TEXT NOT NULL DEFAULT '',
+			permission_mode TEXT NOT NULL CHECK (permission_mode IN ('approve', 'yolo')),
+			fallback_json   TEXT NOT NULL DEFAULT '[]',
+			mcp_config      TEXT NOT NULL DEFAULT '',
+			created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE TABLE sessions (
+			id               TEXT PRIMARY KEY,
+			agent_name       TEXT NOT NULL REFERENCES agents(name) ON UPDATE CASCADE ON DELETE RESTRICT,
+			provider         TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+			profile          TEXT NOT NULL DEFAULT '',
+			model            TEXT NOT NULL DEFAULT '',
+			effort           TEXT NOT NULL DEFAULT '',
+			permission_mode  TEXT NOT NULL CHECK (permission_mode IN ('approve', 'yolo')),
+			origin           TEXT NOT NULL CHECK (origin IN ('web', 'cli', 'schedule', 'roadmap')),
+			schedule_id      TEXT,
+			run_id           TEXT,
+			rolling_summary  TEXT NOT NULL DEFAULT '',
+			provider_handle  TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE TRIGGER sessions_origin_immutable
+		BEFORE UPDATE OF origin ON sessions
+		BEGIN
+			SELECT RAISE(ABORT, 'session origin is immutable');
+		END;
+
+		CREATE TABLE messages (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+			seq        INTEGER NOT NULL,
+			role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+			content    TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE (session_id, seq)
+		);
+
+		CREATE INDEX idx_sessions_agent_name ON sessions(agent_name);
+		CREATE INDEX idx_sessions_origin ON sessions(origin);
+		CREATE INDEX idx_messages_session_seq ON messages(session_id, seq);`,
+	},
 }
 
 // migrate applies every migration whose version has not yet been recorded. Each

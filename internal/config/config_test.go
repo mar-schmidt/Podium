@@ -1,0 +1,94 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadDefaultConfigIsValid(t *testing.T) {
+	// The shipped default config.yaml must always load and validate — it's what a
+	// fresh install runs on.
+	dir := t.TempDir()
+	p := NewPaths(dir)
+	if _, err := Scaffold(p); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	cfg, err := Load(p.ConfigYAML)
+	if err != nil {
+		t.Fatalf("load default config: %v", err)
+	}
+	if cfg.Server.Port != 8787 {
+		t.Errorf("default port = %d, want 8787", cfg.Server.Port)
+	}
+	if cfg.Global.PermissionMode != PermissionApprove {
+		t.Errorf("default permission mode = %q, want approve", cfg.Global.PermissionMode)
+	}
+}
+
+func TestValidateRejectsUnknownProfileReference(t *testing.T) {
+	c := &Config{
+		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove},
+		Agents: []Agent{{Name: "a", Profile: "ghost"}},
+		Server: Server{Bind: "127.0.0.1", Port: 8787},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for unknown profile reference, got nil")
+	}
+}
+
+func TestValidateRejectsDuplicateAgentNames(t *testing.T) {
+	c := &Config{
+		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove},
+		Agents: []Agent{{Name: "dup"}, {Name: "dup"}},
+		Server: Server{Bind: "127.0.0.1", Port: 8787},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for duplicate agent names, got nil")
+	}
+}
+
+func TestScaffoldIsIdempotentAndPreservesEdits(t *testing.T) {
+	dir := t.TempDir()
+	p := NewPaths(dir)
+
+	res, err := Scaffold(p)
+	if err != nil {
+		t.Fatalf("first scaffold: %v", err)
+	}
+	if !res.CreatedConfig || !res.CreatedBaseAgents || !res.CreatedProjects {
+		t.Fatalf("first scaffold should create seed files, got %+v", res)
+	}
+
+	// Simulate a user edit, then re-scaffold; the edit must survive.
+	edited := []byte("global:\n  provider: codex\n  permission_mode: approve\nserver:\n  bind: 127.0.0.1\n  port: 9001\n")
+	if err := os.WriteFile(p.ConfigYAML, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := Scaffold(p)
+	if err != nil {
+		t.Fatalf("second scaffold: %v", err)
+	}
+	if res2.CreatedConfig {
+		t.Error("second scaffold should not recreate existing config.yaml")
+	}
+	cfg, err := Load(p.ConfigYAML)
+	if err != nil {
+		t.Fatalf("load edited config: %v", err)
+	}
+	if cfg.Server.Port != 9001 || cfg.Global.Provider != ProviderCodex {
+		t.Errorf("user edits not preserved: got port=%d provider=%s", cfg.Server.Port, cfg.Global.Provider)
+	}
+}
+
+func TestResolveHomeUsesEnvOverride(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "custom")
+	t.Setenv(EnvHome, want)
+	got, err := ResolveHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("ResolveHome() = %q, want %q", got, want)
+	}
+}

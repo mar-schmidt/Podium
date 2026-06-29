@@ -1,0 +1,65 @@
+# Podium system configuration.
+#
+# This file was generated on first run. It is yours to edit — Podium reads it on
+# start. Schedules and projects are NOT configured here: schedules are
+# self-describing markdown files under ~/.podium/schedules/, and projects live in
+# the shared ledger at ~/.podium/projects/projects.yaml.
+#
+# All Podium state lives under a single root (default ~/.podium/, override with
+# the PODIUM_HOME environment variable).
+
+# ---------------------------------------------------------------------------
+# global: defaults applied across all agents unless an agent overrides them.
+# ---------------------------------------------------------------------------
+global:
+  provider: claude            # default backend for new agents: claude | codex
+  model: ""                   # default model name (empty = provider/CLI default)
+  effort: medium              # default reasoning effort: low | medium | high | xhigh | max
+  permission_mode: approve    # approve (relay each side-effect to you) | yolo (auto-approve, whole-machine)
+  # Optional global fallback chain used when an agent declares none of its own.
+  # Each entry is a profile name (or "default" for the CLI's global login).
+  # On rate limit, Podium steps to the next target and replays history. A chain
+  # may mix providers (Claude -> Codex). See docs for details.
+  fallback: []                # e.g. [work, personal, codex-main]
+
+# ---------------------------------------------------------------------------
+# profiles: OPTIONAL named auth contexts, each 1:1 with one underlying account.
+# A profile is just a directory + a name that Podium owns — Podium never handles
+# credentials. You log in yourself against the profile dir using the CLI's own
+# auth flow (e.g. CLAUDE_CONFIG_DIR=<dir> claude login).
+# Omit a profile on an agent to use the CLI's normal global login (no env set).
+# ---------------------------------------------------------------------------
+profiles: []
+  # - name: work
+  #   provider: claude
+  #   config_dir: ~/.podium/profiles/claude-work     # exported as CLAUDE_CONFIG_DIR
+  # - name: personal
+  #   provider: claude
+  #   config_dir: ~/.podium/profiles/claude-personal
+  # - name: codex-main
+  #   provider: codex
+  #   home_dir: ~/.podium/profiles/codex-main         # exported as CODEX_HOME
+
+# ---------------------------------------------------------------------------
+# agents: named colleagues maintained by Podium. Each gets a directory under
+# ~/.podium/agents/<name>/ (SOUL.md identity, optional AGENTS.md instructions,
+# and a workspace/ used as the agent's working directory). Defaults below are
+# inherited from `global` unless set here.
+# ---------------------------------------------------------------------------
+agents: []
+  # - name: jared
+  #   provider: claude
+  #   profile: work               # omit to use the CLI's global login (default)
+  #   model: ""
+  #   effort: medium
+  #   permission_mode: approve    # per-agent override of the global default
+  #   fallback: [work, personal, codex-main]   # ordered; rate-limit -> next target
+  #   # mcp_config: ./config/jared-mcp.json     # opt-in per-agent MCP, additive
+
+# ---------------------------------------------------------------------------
+# server: the local web UI / API bind address. Keep it on loopback unless you
+# know you want it exposed (single-user, local deployment is the v1 assumption).
+# ---------------------------------------------------------------------------
+server:
+  bind: 127.0.0.1
+  port: 8787

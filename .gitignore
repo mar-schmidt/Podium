@@ -1,0 +1,26 @@
+# Go
+/podium
+/podiumd
+/bin/
+*.exe
+*.test
+*.out
+/dist/
+
+# Web build artifacts (embedded at build time). The placeholder
+# web/dist/index.html is tracked so `go build` works pre-frontend-build; the
+# vite-generated hashed assets are not committed.
+/web/node_modules/
+/web/dist/assets/
+/web/dist/vite.svg
+/web/.vite/
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Local runtime data (should live under ~/.podium, never in-repo)
+/.podium/
+
+# Design source export (large binary; kept local, not in git history)
+/Podium frontend design.zip

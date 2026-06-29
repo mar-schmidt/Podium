@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/*
+  Podium theme tokens. The full warm/soft palette (terracotta accent, soft cards)
+  from the Claude design is fleshed out in Phase 4. This seeds the base so the
+  skeleton renders on-brand.
+*/
+@theme {
+  --color-bg: #efe9e1;
+  --color-surface: #faf7f2;
+  --color-ink: #2f2a26;
+  --color-muted: #8a8178;
+  --color-accent: #c4633f;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}

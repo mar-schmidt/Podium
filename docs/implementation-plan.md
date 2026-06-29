@@ -95,7 +95,9 @@
   - *Notes:* current `codex-cli 0.142.4` reports only
     `workspace/AGENTS.md` in `instructionSources` when both workspace and parent
     agent-root `AGENTS.md` exist. Podium also fails session startup if a future
-    Codex version reports both paths, avoiding duplicated instructions.
+    Codex version reports both paths, avoiding duplicated instructions. Follow-up
+    alignment: Codex `approve` uses `read-only` rather than Codex's native
+    `workspace-write` Auto preset so workspace writes prompt like Claude.
 
 ## Context
 
@@ -300,7 +302,7 @@ Runtime data layout under `$PODIUM_HOME` (R9.1): `config.yaml`, `AGENTS.md` (Pod
   stdio; restart/reconnect on failure (R8.11); `thread/start`/`thread/resume`/`turn/start` (R8.12);
   `model`/`effort` in protocol (R8.13); `cwd` on thread/turn start (R8.21); resume via `threadId` (R8.15);
   correlate by `threadId`+`turnId` (R8.16).
-- **Permissions** (§8.4/§8.19): `approve` = `approvalPolicy:on-request` + `sandbox:workspace-write` with
+- **Permissions** (§8.4/§8.19): `approve` = `approvalPolicy:on-request` + `sandbox:read-only` with
   approval requests relayed; `yolo` = `approvalPolicy:never` + `sandbox:danger-full-access`. Sandbox and
   approval kept independent (R8.19).
 - **Composition delivery for Codex:** concatenated bundle into the `AGENTS.md` Codex reads from `cwd`

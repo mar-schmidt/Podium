@@ -78,8 +78,13 @@ Podium keeps Codex sandbox and approval settings separate.
 
 | Podium mode | Codex settings |
 | --- | --- |
-| `approve` | `approvalPolicy: "on-request"` and `sandbox: "workspace-write"` on thread start; per-turn `sandboxPolicy.type: "workspaceWrite"`. |
+| `approve` | `approvalPolicy: "on-request"` and `sandbox: "read-only"` on thread start; per-turn `sandboxPolicy.type: "readOnly"`. |
 | `yolo` | `approvalPolicy: "never"` and `sandbox: "danger-full-access"` on thread start; per-turn `sandboxPolicy.type: "dangerFullAccess"`. |
+
+Podium intentionally does not use Codex's lower-friction `workspace-write` Auto
+preset for `approve`, because Claude prompts before workspace writes. Keeping
+Codex in `read-only` makes the user-facing `approve` promise aligned across
+providers: reads may proceed, writes ask.
 
 When Codex sends `item/commandExecution/requestApproval`,
 `item/fileChange/requestApproval`, or `item/permissions/requestApproval`, Podium

@@ -21,7 +21,7 @@ func TestCodexParamsUseNativePermissionModes(t *testing.T) {
 		PermissionMode: config.PermissionApprove,
 		WorkspaceDir:   "/tmp/workspace",
 	})
-	if approveStart["approvalPolicy"] != "on-request" || approveStart["sandbox"] != "workspace-write" {
+	if approveStart["approvalPolicy"] != "on-request" || approveStart["sandbox"] != "read-only" {
 		t.Fatalf("bad approve thread params: %#v", approveStart)
 	}
 	approveTurn := codexTurnStartParams("thread-1", "hi", TurnSettings{
@@ -30,7 +30,7 @@ func TestCodexParamsUseNativePermissionModes(t *testing.T) {
 		WorkspaceDir:   "/tmp/workspace",
 	})
 	policy, ok := approveTurn["sandboxPolicy"].(map[string]any)
-	if !ok || policy["type"] != "workspaceWrite" {
+	if !ok || policy["type"] != "readOnly" || policy["networkAccess"] != false {
 		t.Fatalf("bad approve turn sandbox policy: %#v", approveTurn["sandboxPolicy"])
 	}
 	if approveTurn["effort"] != "high" {

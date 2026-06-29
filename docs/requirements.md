@@ -396,7 +396,8 @@ There are three layers, composed in this fixed order:
   - **`yolo`** (opt-in) — everything is auto-approved ("danger-full-access").
 - **R5.19** Mode maps onto native controls per provider (full mapping in §8.4):
   - `approve` → Claude `--permission-prompt-tool` (Podium relays); Codex
-    `approvalPolicy: on-request` + `sandbox: workspace-write`.
+    `approvalPolicy: on-request` + `sandbox: read-only`, so workspace writes
+    prompt consistently across providers.
   - `yolo` → Claude `--permission-mode bypassPermissions`; Codex
     `approvalPolicy: never` + `sandbox: danger-full-access`.
 - **R5.20** Mode is a per-agent default and MAY be overridden per session via a
@@ -568,7 +569,7 @@ reference does.
 
 | Podium mode | Claude (per-turn) | Codex (app-server) |
 | --- | --- | --- |
-| **`approve`** (default) | `--permission-prompt-tool <podium-mcp>` — Claude calls a Podium-run MCP permission tool for any action not matched by static allow/deny rules. The call **blocks** until Podium answers, so a **timeout** is mandatory (auto-deny). | `approvalPolicy: "on-request"` + `sandbox: "workspace-write"` — Codex emits an approval request over the protocol that Podium relays. Optionally `approvalPolicy: { granular: {…} }` to auto-handle some categories. |
+| **`approve`** (default) | `--permission-prompt-tool <podium-mcp>` — Claude calls a Podium-run MCP permission tool for any action not matched by static allow/deny rules. The call **blocks** until Podium answers, so a **timeout** is mandatory (auto-deny). | `approvalPolicy: "on-request"` + `sandbox: "read-only"` — Codex emits an approval request over the protocol for writes/commands that cross the read-only boundary, which Podium relays. Optionally `approvalPolicy: { granular: {…} }` to auto-handle some categories. |
 | **`yolo`** (opt-in) | `--permission-mode bypassPermissions` | `approvalPolicy: "never"` + `sandbox: "danger-full-access"` |
 
 Key facts behind this (see Appendix A + verified docs):
@@ -631,7 +632,7 @@ looks like. The lean column is the default.
 | --- | --- | --- | --- |
 | Permissions (Claude) | `bypassPermissions` | `--permission-prompt-tool` relay | `bypassPermissions` |
 | Approvals (Codex) | `approvalPolicy: "never"` | `on-request` | `never` |
-| Sandbox (Codex) | `danger-full-access` | `workspace-write` | `danger-full-access` |
+| Sandbox (Codex) | `danger-full-access` | `read-only` | `danger-full-access` |
 | MCP surface | `--strict-mcp-config` + host-only config | **Inherit native MCP servers** | (unchanged) |
 | Tools | `mcp__host__*` allow-list | Inherit native tools | (unchanged) |
 | Identity / prompt | Large host-generated runtime block | Layered files Podium owns and composes: base `AGENTS.md` + per-agent `AGENTS.md` + `SOUL.md`; delivered by `@`-link (Claude) or bundle (Codex) | (unchanged) |
@@ -930,7 +931,7 @@ one-line rationale for each.
   security boundary. Deliberate for a single-user, fully-trusted setup. (§5.8)
 - **D12 — Permission mechanics → verified two-mode (was O11).** `approve` = Claude
   `--permission-prompt-tool` (blocking Podium MCP server + timeout) / Codex
-  `on-request` + `workspace-write`. `yolo` = Claude `bypassPermissions` / Codex
+  `on-request` + `read-only`. `yolo` = Claude `bypassPermissions` / Codex
   `never` + `danger-full-access`. Sandbox and approval are independent on Codex.
   (§8.4)
 - **D13 — Fallback chain → ordered, cross-provider, automatic on rate limit

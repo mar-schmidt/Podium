@@ -739,20 +739,14 @@ func codexSandboxMode(mode config.PermissionMode) string {
 	if mode == config.PermissionYolo {
 		return "danger-full-access"
 	}
-	return "workspace-write"
+	return "read-only"
 }
 
 func codexSandboxPolicy(mode config.PermissionMode, workspace string) map[string]any {
 	if mode == config.PermissionYolo {
 		return map[string]any{"type": "dangerFullAccess"}
 	}
-	return map[string]any{
-		"type":                "workspaceWrite",
-		"writableRoots":       []string{workspace},
-		"networkAccess":       false,
-		"excludeTmpdirEnvVar": false,
-		"excludeSlashTmp":     false,
-	}
+	return map[string]any{"type": "readOnly", "networkAccess": false}
 }
 
 func codexThreadID(raw json.RawMessage) (string, error) {

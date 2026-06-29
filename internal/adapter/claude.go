@@ -312,8 +312,29 @@ func parseClaudeLine(line []byte) ([]Event, error) {
 		if text := firstString(raw, "result", "content"); text != "" {
 			events = append(events, Event{Kind: EventAssistantMessage, Content: text})
 		}
+	case "api_retry":
+		if claudeRateLimited(raw) {
+			events = append(events, Event{Kind: EventRateLimited, Content: "claude rate limited"})
+		}
 	}
 	return events, nil
+}
+
+func claudeRateLimited(raw map[string]any) bool {
+	for _, key := range []string{"status", "status_code", "statusCode"} {
+		switch v := raw[key].(type) {
+		case float64:
+			if int(v) == 429 {
+				return true
+			}
+		case string:
+			if v == "429" {
+				return true
+			}
+		}
+	}
+	message := strings.ToLower(firstString(raw, "message", "error", "reason"))
+	return strings.Contains(message, "rate limit") || strings.Contains(message, "rate_limit")
 }
 
 func extractText(raw map[string]any) string {

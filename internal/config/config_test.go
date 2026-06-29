@@ -37,6 +37,30 @@ func TestValidateRejectsUnknownProfileReference(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsProfileProviderMismatch(t *testing.T) {
+	c := &Config{
+		Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+		Profiles: []Profile{{Name: "codex-main", Provider: ProviderCodex, HomeDir: "/tmp/codex"}},
+		Agents:   []Agent{{Name: "a", Provider: ProviderClaude, Profile: "codex-main"}},
+		Server:   Server{Bind: "127.0.0.1", Port: 8787},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for provider/profile mismatch, got nil")
+	}
+}
+
+func TestValidateChecksFallbackEntries(t *testing.T) {
+	c := &Config{
+		Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m", Fallback: []string{"default", "ghost"}},
+		Profiles: []Profile{{Name: "work", Provider: ProviderClaude, ConfigDir: "/tmp/claude"}},
+		Agents:   []Agent{{Name: "a"}},
+		Server:   Server{Bind: "127.0.0.1", Port: 8787},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for unknown fallback profile, got nil")
+	}
+}
+
 func TestValidateRejectsDuplicateAgentNames(t *testing.T) {
 	c := &Config{
 		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove},

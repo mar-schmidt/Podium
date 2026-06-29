@@ -96,6 +96,27 @@ func (s *Store) UpdateSessionSettings(ctx context.Context, id, model, effort str
 	return s.GetSession(ctx, id)
 }
 
+// UpdateSessionRuntime stores the current backing target and mutable runtime
+// settings. Clearing providerHandle forces the next turn to replay Podium's
+// canonical history into a fresh provider session/thread.
+func (s *Store) UpdateSessionRuntime(ctx context.Context, id string, provider config.Provider, profile, model, effort string, permissionMode config.PermissionMode, providerHandle string) (Session, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions
+		SET provider = ?, profile = ?, model = ?, effort = ?, permission_mode = ?,
+			provider_handle = ?, updated_at = datetime('now')
+		WHERE id = ?`, provider, profile, model, effort, permissionMode, providerHandle, id)
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q runtime: %w", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return Session{}, fmt.Errorf("update session %q rows affected: %w", id, err)
+	}
+	if changed == 0 {
+		return Session{}, fmt.Errorf("session %q: %w", id, ErrNotFound)
+	}
+	return s.GetSession(ctx, id)
+}
+
 // UpdateSessionMetadata stores the display name and description for a session.
 func (s *Store) UpdateSessionMetadata(ctx context.Context, id, name, description string, autoNamed bool) (Session, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE sessions

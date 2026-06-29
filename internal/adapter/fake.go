@@ -9,9 +9,11 @@ import (
 // Fake is a deterministic in-memory adapter for tests and local core
 // development. It never shells out or spends tokens.
 type Fake struct {
-	mu        sync.Mutex
-	started   map[string]Handle
-	Responses []string
+	mu               sync.Mutex
+	started          map[string]Handle
+	Responses        []string
+	Requests         []TurnRequest
+	RateLimitedTurns int
 }
 
 // NewFake returns a fake adapter with the default echo-style response script.
@@ -53,10 +55,23 @@ func (f *Fake) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, err
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	response := f.nextResponse(req.Message)
+	rateLimited, response := f.nextResult(req)
 	ch := make(chan Event, 2)
 	go func() {
 		defer close(ch)
+		if rateLimited {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- Event{Kind: EventRateLimited, Content: "fake rate limit"}:
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- Event{Kind: EventTurnDone}:
+			}
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -86,13 +101,18 @@ func (f *Fake) Teardown(ctx context.Context, handle Handle) error {
 	return nil
 }
 
-func (f *Fake) nextResponse(message string) string {
+func (f *Fake) nextResult(req TurnRequest) (bool, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.Requests = append(f.Requests, req)
+	if f.RateLimitedTurns > 0 {
+		f.RateLimitedTurns--
+		return true, ""
+	}
 	if len(f.Responses) > 0 {
 		response := f.Responses[0]
 		f.Responses = f.Responses[1:]
-		return response
+		return false, response
 	}
-	return fmt.Sprintf("fake response: %s", message)
+	return false, fmt.Sprintf("fake response: %s", req.Message)
 }

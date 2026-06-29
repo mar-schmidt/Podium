@@ -30,6 +30,11 @@ Message history is stored as strictly ordered `user` and `assistant` messages.
 The provider's own session or thread is treated as a resumable backing resource;
 Podium's SQLite history is the canonical truth that survives daemon restarts.
 
+When a profile switch or fallback changes the provider target, Podium clears the
+provider handle, starts a fresh backing session/thread on the next live turn, and
+replays canonical history. If a rolling summary is available, replay sends the
+summary plus the most recent turns verbatim instead of the full transcript.
+
 ## Naming
 
 After the first user/assistant exchange, Podium starts a non-blocking naming job.
@@ -50,6 +55,7 @@ history.
 | --- | --- |
 | `/model <name>` | Set the model for subsequent turns. |
 | `/effort low|medium|high|xhigh|max` | Set reasoning effort for subsequent turns. |
+| `/profile <name|default>` | Switch auth profile; `default` clears the profile and uses the provider's normal login. The next turn replays history into a fresh backing session/thread. |
 | `/permission approve|yolo` | Override permission mode for subsequent turns. |
 | `/name <text>` | Set the session display name. |
 | `/describe <text>` | Set the session description. |

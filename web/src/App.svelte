@@ -360,6 +360,7 @@
     <div class="slash-row">
       <button onclick={() => (messageText = "/model ")}>/model</button>
       <button onclick={() => (messageText = "/effort medium")} >/effort</button>
+      <button onclick={() => (messageText = "/profile default")} >/profile</button>
       <button onclick={() => (messageText = "/permission approve")} >/permission</button>
       <button onclick={() => (messageText = "/name ")}>/name</button>
       <button onclick={() => (messageText = "/describe ")}>/describe</button>

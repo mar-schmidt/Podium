@@ -17,6 +17,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/config"
 	podiumexec "github.com/mar-schmidt/Podium/internal/exec"
+	"github.com/mar-schmidt/Podium/internal/store"
 )
 
 var errCodexTransport = errors.New("codex app-server transport failed")
@@ -97,6 +98,7 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 	client := c.client(req.Settings.ProfileDir)
 	threadID := req.Handle.ID
 	firstEvents := []Event{}
+	startedFresh := threadID == ""
 	if threadID == "" {
 		handle, err := c.Start(ctx, StartRequest{
 			SessionID:      req.SessionID,
@@ -118,11 +120,16 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 		return nil, err
 	}
 
-	result, err := client.call(ctx, "turn/start", codexTurnStartParams(threadID, req.Message, req.Settings))
+	message := req.Message
+	if startedFresh && len(req.History) > 0 {
+		message = codexReplayMessage(req.History, req.Message)
+	}
+
+	result, err := client.call(ctx, "turn/start", codexTurnStartParams(threadID, message, req.Settings))
 	if err != nil && threadID != "" {
 		client.markUnloaded(threadID)
 		if resumeErr := client.ensureThread(ctx, threadID, req.Settings); resumeErr == nil {
-			result, err = client.call(ctx, "turn/start", codexTurnStartParams(threadID, req.Message, req.Settings))
+			result, err = client.call(ctx, "turn/start", codexTurnStartParams(threadID, message, req.Settings))
 		}
 	}
 	if err != nil {
@@ -589,9 +596,20 @@ func (c *codexClient) streamTurn(ctx context.Context, key codexTurnKey, events <
 				sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
 				return
 			case "error":
+				if codexRateLimited(event.params) {
+					sendAdapterEvent(ctx, out, Event{Kind: EventRateLimited, Content: codexErrorMessage(event.params)})
+					sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
+					return
+				}
 				sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: codexErrorMessage(event.params)})
 				sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
 				return
+			case "token_count", "account/updated":
+				if status, ok := codexRateStatus(event.params); ok {
+					if !sendAdapterEvent(ctx, out, Event{Kind: EventRateStatus, RateStatus: &status}) {
+						return
+					}
+				}
 			}
 		}
 	}
@@ -819,7 +837,7 @@ func codexNotificationKey(method string, params json.RawMessage) (codexTurnKey, 
 		return codexTurnKey{}, false
 	}
 	switch method {
-	case "item/agentMessage/delta", "turn/completed", "error", "turn/started":
+	case "item/agentMessage/delta", "turn/completed", "error", "turn/started", "token_count", "account/updated":
 		return codexTurnKey{threadID: p.ThreadID, turnID: turnID}, true
 	default:
 		return codexTurnKey{}, false
@@ -874,6 +892,74 @@ func codexErrorMessage(params json.RawMessage) string {
 		return "codex error: " + string(raw)
 	}
 	return "codex error"
+}
+
+func codexReplayMessage(history []store.Message, liveMessage string) string {
+	var b strings.Builder
+	b.WriteString("Podium is continuing a durable session in a fresh Codex thread. ")
+	b.WriteString("Use this canonical transcript as prior context, then answer the live user turn.\n\n")
+	b.WriteString("<podium_history>\n")
+	for _, msg := range history {
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s: %s\n", msg.Role, msg.Content)
+	}
+	b.WriteString("</podium_history>\n\n")
+	b.WriteString("Live user turn:\n")
+	b.WriteString(liveMessage)
+	return b.String()
+}
+
+func codexRateLimited(params json.RawMessage) bool {
+	lower := strings.ToLower(string(params))
+	return strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "rate_limit") ||
+		strings.Contains(lower, "usage_limit") ||
+		strings.Contains(lower, "usagelimit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, `"code":429`)
+}
+
+func codexRateStatus(params json.RawMessage) (RateStatus, bool) {
+	var value any
+	if err := json.Unmarshal(params, &value); err != nil {
+		return RateStatus{}, false
+	}
+	max := maxUsedPercent(value)
+	if max <= 0 {
+		return RateStatus{}, false
+	}
+	return RateStatus{UsedPercent: max}, true
+}
+
+func maxUsedPercent(value any) float64 {
+	switch v := value.(type) {
+	case map[string]any:
+		var max float64
+		for key, child := range v {
+			if strings.EqualFold(key, "used_percent") || strings.EqualFold(key, "usedPercent") {
+				if n, ok := child.(float64); ok && n > max {
+					max = n
+				}
+				continue
+			}
+			if childMax := maxUsedPercent(child); childMax > max {
+				max = childMax
+			}
+		}
+		return max
+	case []any:
+		var max float64
+		for _, child := range v {
+			if childMax := maxUsedPercent(child); childMax > max {
+				max = childMax
+			}
+		}
+		return max
+	default:
+		return 0
+	}
 }
 
 func codexIsApprovalRequest(method string) bool {

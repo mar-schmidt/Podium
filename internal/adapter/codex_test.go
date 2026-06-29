@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/store"
 )
 
 func TestCodexParamsUseNativePermissionModes(t *testing.T) {
@@ -60,6 +61,28 @@ func TestCodexParamsUseNativePermissionModes(t *testing.T) {
 	deny := codexApprovalResponse("item/commandExecution/requestApproval", nil, PermissionDecision{Behavior: "deny"}).(map[string]any)
 	if deny["decision"] != "decline" {
 		t.Fatalf("deny decision did not map to decline: %#v", deny)
+	}
+}
+
+func TestCodexReplayMessageIncludesHistoryAndLiveTurn(t *testing.T) {
+	got := codexReplayMessage([]store.Message{
+		{Role: store.RoleUser, Content: "remember alpha"},
+		{Role: store.RoleAssistant, Content: "alpha remembered"},
+	}, "continue")
+	for _, want := range []string{"<podium_history>", "user: remember alpha", "assistant: alpha remembered", "Live user turn:\ncontinue"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("replay message missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestCodexRateStatusAndLimitParsing(t *testing.T) {
+	status, ok := codexRateStatus(json.RawMessage(`{"rate_limits":{"primary":{"used_percent":82.5},"secondary":{"used_percent":20}}}`))
+	if !ok || status.UsedPercent != 82.5 {
+		t.Fatalf("bad rate status: %+v ok=%v", status, ok)
+	}
+	if !codexRateLimited(json.RawMessage(`{"error":{"message":"usage_limit_exceeded"}}`)) {
+		t.Fatal("expected usage limit to be detected")
 	}
 }
 

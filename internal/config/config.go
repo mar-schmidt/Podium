@@ -137,6 +137,9 @@ func (c *Config) Validate() error {
 		if p.Name == "" {
 			return fmt.Errorf("profiles[%d]: name is required", i)
 		}
+		if p.Name == "default" {
+			return fmt.Errorf("profiles[%d]: profile name %q is reserved", i, p.Name)
+		}
 		if _, dup := profileNames[p.Name]; dup {
 			return fmt.Errorf("profiles[%d]: duplicate profile name %q", i, p.Name)
 		}
@@ -155,6 +158,11 @@ func (c *Config) Validate() error {
 		}
 		profileNames[p.Name] = p.Provider
 	}
+	for i, entry := range c.Global.Fallback {
+		if err := validateFallbackEntry(entry, profileNames); err != nil {
+			return fmt.Errorf("global.fallback[%d]: %w", i, err)
+		}
+	}
 
 	agentNames := map[string]bool{}
 	for i, a := range c.Agents {
@@ -170,14 +178,27 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("agents[%d] (%s): %w", i, a.Name, err)
 			}
 		}
+		effectiveProvider := a.Provider
+		if effectiveProvider == "" {
+			effectiveProvider = c.Global.Provider
+		}
 		if a.PermissionMode != "" {
 			if err := validatePermission(a.PermissionMode); err != nil {
 				return fmt.Errorf("agents[%d] (%s): %w", i, a.Name, err)
 			}
 		}
 		if a.Profile != "" {
-			if _, ok := profileNames[a.Profile]; !ok {
+			profileProvider, ok := profileNames[a.Profile]
+			if !ok {
 				return fmt.Errorf("agents[%d] (%s): unknown profile %q", i, a.Name, a.Profile)
+			}
+			if profileProvider != effectiveProvider {
+				return fmt.Errorf("agents[%d] (%s): profile %q belongs to provider %q, not %q", i, a.Name, a.Profile, profileProvider, effectiveProvider)
+			}
+		}
+		for j, entry := range a.Fallback {
+			if err := validateFallbackEntry(entry, profileNames); err != nil {
+				return fmt.Errorf("agents[%d] (%s).fallback[%d]: %w", i, a.Name, j, err)
 			}
 		}
 	}
@@ -204,4 +225,17 @@ func validatePermission(m PermissionMode) error {
 	default:
 		return fmt.Errorf("unknown permission_mode %q (want approve|yolo)", m)
 	}
+}
+
+func validateFallbackEntry(entry string, profileNames map[string]Provider) error {
+	if entry == "" {
+		return fmt.Errorf("entry is required")
+	}
+	if entry == "default" {
+		return nil
+	}
+	if _, ok := profileNames[entry]; !ok {
+		return fmt.Errorf("unknown profile %q", entry)
+	}
+	return nil
 }

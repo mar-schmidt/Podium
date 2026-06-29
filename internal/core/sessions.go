@@ -54,7 +54,7 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 		return store.Session{}, err
 	}
 
-	payload, err := c.ComposeInstructions(ctx, agent)
+	payload, err := c.ComposeInstructionsForProvider(ctx, agent, created.Provider)
 	if err != nil {
 		return store.Session{}, err
 	}
@@ -137,30 +137,6 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 	if err != nil {
 		return nil, err
 	}
-	events, err := c.adapter.SendTurn(ctx, adapter.TurnRequest{
-		SessionID: sessionID,
-		Handle: adapter.Handle{
-			Provider: sess.Provider,
-			ID:       sess.ProviderHandle,
-		},
-		Message: userMessage,
-		History: history,
-		Settings: adapter.TurnSettings{
-			AgentName:        sess.AgentName,
-			Profile:          sess.Profile,
-			ProfileDir:       c.profileDir(sess.Provider, sess.Profile),
-			Model:            sess.Model,
-			Effort:           sess.Effort,
-			PermissionMode:   sess.PermissionMode,
-			WorkspaceDir:     c.AgentPaths(sess.AgentName).Workspace,
-			PermissionTurnID: firstNonEmpty(opts.PermissionTurnID, fmt.Sprintf("%s-%d", sessionID, time.Now().UnixNano())),
-		},
-		Relay: opts.PermissionRelay,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	streamOut := make(chan TurnEvent, 16)
 	go func() {
 		defer close(streamOut)
@@ -170,55 +146,118 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				return
 			}
 		}
-		var assistant strings.Builder
-		for event := range events {
-			switch event.Kind {
-			case adapter.EventAssistantDelta:
-				assistant.WriteString(event.Content)
-				if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, Content: event.Content}) {
-					return
-				}
-			case adapter.EventAssistantMessage:
-				assistant.Reset()
-				assistant.WriteString(event.Content)
-				if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, Content: event.Content}) {
-					return
-				}
-			case adapter.EventPermissionRequest:
-				if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, PermissionRequest: event.PermissionRequest}) {
-					return
-				}
-			case adapter.EventHandleUpdated:
-				if event.Handle != nil {
-					if _, err := c.store.UpdateSessionProviderHandle(ctx, sessionID, event.Handle.ID); err != nil {
-						_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
-						return
-					}
-				}
-			case adapter.EventTurnDone:
-			}
-		}
-		if assistant.Len() == 0 {
-			return
-		}
-		assistantMessages, err := c.store.AppendMessages(ctx, sessionID, []store.Message{{
-			Role:    store.RoleAssistant,
-			Content: assistant.String(),
-		}})
-		if err != nil {
-			_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
-			return
-		}
-		for _, msg := range assistantMessages {
-			msg := msg
-			if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "message_stored", Message: &msg}) {
+
+		current := sess
+		tried := map[string]bool{}
+		for {
+			tried[targetKey(current.Provider, current.Profile)] = true
+			if err := c.ensureSessionInstructions(ctx, current); err != nil {
+				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 				return
 			}
+			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, userMessage, opts))
+			if err != nil {
+				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
+				return
+			}
+			assistant, rateLimited, ok := c.consumeAdapterEvents(ctx, streamOut, sessionID, events)
+			if !ok {
+				return
+			}
+			if rateLimited {
+				next, err := c.nextFallbackSession(ctx, current, tried)
+				if err != nil {
+					_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
+					return
+				}
+				current = next
+				continue
+			}
+			if assistant.Len() == 0 {
+				return
+			}
+			assistantMessages, err := c.store.AppendMessages(ctx, sessionID, []store.Message{{
+				Role:    store.RoleAssistant,
+				Content: assistant.String(),
+			}})
+			if err != nil {
+				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
+				return
+			}
+			for _, msg := range assistantMessages {
+				msg := msg
+				if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "message_stored", Message: &msg}) {
+					return
+				}
+			}
+			go c.autoNameSessionBackground(sessionID)
+			go c.refreshRollingSummaryBackground(sessionID)
+			_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: adapter.EventTurnDone})
+			return
 		}
-		go c.autoNameSessionBackground(sessionID)
-		_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: adapter.EventTurnDone})
 	}()
 	return streamOut, nil
+}
+
+func (c *Core) turnRequest(sess store.Session, history []store.Message, userMessage string, opts TurnOptions) adapter.TurnRequest {
+	return adapter.TurnRequest{
+		SessionID: sess.ID,
+		Handle: adapter.Handle{
+			Provider: sess.Provider,
+			ID:       sess.ProviderHandle,
+		},
+		Message: userMessage,
+		History: replayHistory(sess, history),
+		Settings: adapter.TurnSettings{
+			AgentName:        sess.AgentName,
+			Profile:          sess.Profile,
+			ProfileDir:       c.profileDir(sess.Provider, sess.Profile),
+			Model:            sess.Model,
+			Effort:           sess.Effort,
+			PermissionMode:   sess.PermissionMode,
+			WorkspaceDir:     c.AgentPaths(sess.AgentName).Workspace,
+			PermissionTurnID: firstNonEmpty(opts.PermissionTurnID, fmt.Sprintf("%s-%d", sess.ID, time.Now().UnixNano())),
+		},
+		Relay: opts.PermissionRelay,
+	}
+}
+
+func (c *Core) consumeAdapterEvents(ctx context.Context, streamOut chan<- TurnEvent, sessionID string, events <-chan adapter.Event) (strings.Builder, bool, bool) {
+	var assistant strings.Builder
+	for event := range events {
+		switch event.Kind {
+		case adapter.EventAssistantDelta:
+			assistant.WriteString(event.Content)
+			if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, Content: event.Content}) {
+				return assistant, false, false
+			}
+		case adapter.EventAssistantMessage:
+			assistant.Reset()
+			assistant.WriteString(event.Content)
+			if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, Content: event.Content}) {
+				return assistant, false, false
+			}
+		case adapter.EventPermissionRequest:
+			if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, PermissionRequest: event.PermissionRequest}) {
+				return assistant, false, false
+			}
+		case adapter.EventHandleUpdated:
+			if event.Handle != nil {
+				if _, err := c.store.UpdateSessionProviderHandle(ctx, sessionID, event.Handle.ID); err != nil {
+					_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
+					return assistant, false, false
+				}
+			}
+		case adapter.EventRateStatus:
+			if event.RateStatus != nil && event.RateStatus.UsedPercent >= 80 {
+				go c.refreshRollingSummaryBackground(sessionID)
+			}
+		case adapter.EventRateLimited:
+			return assistant, true, true
+		case adapter.EventTurnDone:
+		}
+	}
+	return assistant, false, true
 }
 
 // History returns a session's canonical history.
@@ -229,13 +268,20 @@ func (c *Core) History(ctx context.Context, sessionID string) ([]store.Message, 
 // ComposeInstructions composes instructions using the session provider's
 // delivery mode without sending them to a real provider.
 func (c *Core) ComposeInstructions(ctx context.Context, agent store.Agent) (InstructionPayload, error) {
-	switch agent.Provider {
+	return c.ComposeInstructionsForProvider(ctx, agent, agent.Provider)
+}
+
+// ComposeInstructionsForProvider composes the same agent identity for a
+// specific provider target. It is used when a session switches provider while
+// staying bound to the same Podium agent.
+func (c *Core) ComposeInstructionsForProvider(ctx context.Context, agent store.Agent, provider config.Provider) (InstructionPayload, error) {
+	switch provider {
 	case "claude":
 		return c.composer.Compose(ctx, agent, DeliveryClaudeImport)
 	case "codex":
 		return c.composer.Compose(ctx, agent, DeliveryCodexBundle)
 	default:
-		return InstructionPayload{}, fmt.Errorf("unknown provider %q", agent.Provider)
+		return InstructionPayload{}, fmt.Errorf("unknown provider %q", provider)
 	}
 }
 

@@ -194,6 +194,156 @@ func TestSlashCommandsUpdateSessionSettingsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestProfileSlashSwitchesTargetAndClearsHandle(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	c, err := New(Options{
+		Paths:   paths,
+		Store:   db,
+		Adapter: adapter.NewFake(),
+		Profiles: []config.Profile{
+			{Name: "work", Provider: config.ProviderClaude, ConfigDir: "/tmp/claude-work"},
+			{Name: "codex-main", Provider: config.ProviderCodex, HomeDir: "/tmp/codex-main"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "switcher", Provider: config.ProviderClaude, Profile: "work"}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "switcher", Origin: store.OriginWeb})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if session.ProviderHandle == "" {
+		t.Fatal("expected initial fake handle")
+	}
+
+	result, err := c.HandleSlashCommand(ctx, session.ID, "/profile codex-main")
+	if err != nil {
+		t.Fatalf("profile slash: %v", err)
+	}
+	if result.Session.Provider != config.ProviderCodex || result.Session.Profile != "codex-main" {
+		t.Fatalf("profile slash did not switch provider/profile: %+v", result.Session)
+	}
+	if result.Session.ProviderHandle != "" {
+		t.Fatalf("profile switch should clear provider handle, got %q", result.Session.ProviderHandle)
+	}
+}
+
+func TestRateLimitFallbackSwitchesProviderWithReplayHistory(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	fake := adapter.NewFake()
+	fake.RateLimitedTurns = 1
+	fake.Responses = []string{"fallback ok"}
+	c, err := New(Options{
+		Paths:   paths,
+		Store:   db,
+		Adapter: fake,
+		Profiles: []config.Profile{
+			{Name: "work", Provider: config.ProviderClaude, ConfigDir: "/tmp/claude-work"},
+			{Name: "codex-main", Provider: config.ProviderCodex, HomeDir: "/tmp/codex-main"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{
+		Name:     "fallbacker",
+		Provider: config.ProviderClaude,
+		Profile:  "work",
+		Fallback: []string{"work", "codex-main"},
+	}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "fallbacker", Origin: store.OriginCLI})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := db.UpdateSessionMetadata(ctx, session.ID, "Manual", "", false); err != nil {
+		t.Fatalf("avoid auto-name: %v", err)
+	}
+	if _, err := db.AppendMessages(ctx, session.ID, []store.Message{
+		{Role: store.RoleUser, Content: "remember alpha"},
+		{Role: store.RoleAssistant, Content: "alpha remembered"},
+	}); err != nil {
+		t.Fatalf("seed history: %v", err)
+	}
+
+	written, err := c.AppendTurn(ctx, session.ID, "continue after limit")
+	if err != nil {
+		t.Fatalf("append turn: %v", err)
+	}
+	if got := written[len(written)-1].Content; got != "fallback ok" {
+		t.Fatalf("unexpected assistant after fallback %q", got)
+	}
+	updated, err := c.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("get updated session: %v", err)
+	}
+	if updated.Provider != config.ProviderCodex || updated.Profile != "codex-main" {
+		t.Fatalf("fallback did not switch target: %+v", updated)
+	}
+	if len(fake.Requests) < 2 {
+		t.Fatalf("expected original and fallback requests, got %d", len(fake.Requests))
+	}
+	if fake.Requests[0].Handle.Provider != config.ProviderClaude {
+		t.Fatalf("first request should use claude: %+v", fake.Requests[0].Handle)
+	}
+	if fake.Requests[1].Handle.Provider != config.ProviderCodex || fake.Requests[1].Settings.Profile != "codex-main" {
+		t.Fatalf("fallback request should use codex profile: %+v", fake.Requests[1])
+	}
+	if len(fake.Requests[1].History) != 2 || fake.Requests[1].History[0].Content != "remember alpha" {
+		t.Fatalf("fallback request did not replay prior history: %+v", fake.Requests[1].History)
+	}
+}
+
+func TestReplayHistoryUsesRollingSummaryAndRecentMessages(t *testing.T) {
+	history := make([]store.Message, 20)
+	for i := range history {
+		history[i] = store.Message{Role: store.RoleUser, Content: "message"}
+	}
+	history[19].Content = "latest"
+	sess := store.Session{RollingSummary: "older summary"}
+
+	got := replayHistory(sess, history)
+	if len(got) != recentReplayMessages+1 {
+		t.Fatalf("expected summary plus recent messages, got %d", len(got))
+	}
+	if !strings.Contains(got[0].Content, "older summary") {
+		t.Fatalf("summary message missing rolling summary: %+v", got[0])
+	}
+	if got[len(got)-1].Content != "latest" {
+		t.Fatalf("recent tail not preserved: %+v", got[len(got)-1])
+	}
+}
+
 func TestAutoNameSessionUsesModelJSON(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()

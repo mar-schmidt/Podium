@@ -19,7 +19,7 @@ Defaults applied across all agents unless overridden per agent.
 | `effort` | `low`\|`medium`\|`high`\|`xhigh`\|`max` | Default reasoning effort. |
 | `permission_mode` | `approve` \| `yolo` | `approve` relays each side effect to you (safe default); `yolo` auto-approves with whole-machine access. |
 | `permission_timeout` | duration | Approve-mode prompt timeout before auto-deny, e.g. `30s` or `2m`. |
-| `fallback` | list of profile names | Optional default fallback chain used when an agent declares none. |
+| `fallback` | list of profile names or `default` | Optional default fallback chain used when an agent declares none. |
 
 ## `profiles`
 
@@ -48,7 +48,7 @@ Named colleagues maintained by Podium. Empty optional fields inherit from
 | `profile` | profile name | Auth context (omit for global login). |
 | `model` / `effort` | string | Per-agent overrides. |
 | `permission_mode` | `approve` \| `yolo` | Per-agent override. |
-| `fallback` | list of profile names | Ordered rate-limit fallback (may cross providers). |
+| `fallback` | list of profile names or `default` | Ordered rate-limit fallback (may cross providers). |
 | `mcp_config` | path | Opt-in per-agent MCP config, additive to native tools. |
 
 ## `server`

@@ -98,6 +98,19 @@
     Codex version reports both paths, avoiding duplicated instructions. Follow-up
     alignment: Codex `approve` uses `read-only` rather than Codex's native
     `workspace-write` Auto preset so workspace writes prompt like Claude.
+- **Phase 6 — Profiles, replay, rolling summary, fallback chain: ✅ COMPLETE
+  (2026-06-29).** Added `/profile <name|default>` with provider-carrying
+  profiles, target validation, and provider-handle clearing so the next turn
+  replays canonical history into a fresh backing session/thread. Added
+  provider-specific rate-limit signals (`api_retry` 429 for Claude, Codex
+  `error`/`token_count` parsing), automatic ordered fallback through configured
+  profile entries including cross-provider Claude→Codex, and end-of-chain
+  surfacing. Added rolling-summary refresh and replay compaction
+  (`summary + recent verbatim`) for long sessions, plus Codex fresh-thread
+  replay context. Docs and web slash chips now include `/profile`.
+  - *Verification:* `go test ./...` green, including fake-adapter tests for
+    cross-provider fallback with intact history, `/profile` handle clearing, and
+    summary-bounded replay.
 
 ## Context
 

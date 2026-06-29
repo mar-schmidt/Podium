@@ -103,6 +103,7 @@ Slash commands can be sent as the message body:
 | --- | --- |
 | `/model <name>` | Set the session model for subsequent turns. |
 | `/effort low|medium|high|xhigh|max` | Set reasoning effort. |
+| `/profile <name|default>` | Switch auth profile. `default` clears the profile; the next turn replays history into a fresh backing session/thread. |
 | `/permission approve|yolo` | Set permission mode. |
 | `/name <text>` | Rename the session. |
 | `/describe <text>` | Set the session description. |
@@ -110,5 +111,5 @@ Slash commands can be sent as the message body:
 
 ---
 
-*More commands and flags (profiles, schedules, projects, richer chat controls)
+*More commands and flags (schedules, projects, richer chat controls)
 are added as later phases land; each gets an entry here when it ships.*

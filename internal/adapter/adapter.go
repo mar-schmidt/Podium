@@ -63,6 +63,11 @@ type TurnSettings struct {
 	PermissionTurnID string
 }
 
+// RateStatus reports provider-exposed rate-limit utilization when available.
+type RateStatus struct {
+	UsedPercent float64
+}
+
 // EventKind classifies streamed adapter output.
 type EventKind string
 
@@ -75,6 +80,11 @@ const (
 	EventPermissionRequest EventKind = "permission_request"
 	// EventHandleUpdated carries a replacement resumable provider handle.
 	EventHandleUpdated EventKind = "handle_updated"
+	// EventRateStatus carries provider rate-limit utilization.
+	EventRateStatus EventKind = "rate_status"
+	// EventRateLimited reports that the active turn cannot continue on this
+	// backing target because the provider rate-limited it.
+	EventRateLimited EventKind = "rate_limited"
 	// EventTurnDone marks the end of a turn stream.
 	EventTurnDone EventKind = "turn_done"
 )
@@ -85,6 +95,7 @@ type Event struct {
 	Content           string
 	Handle            *Handle
 	PermissionRequest *PermissionRequest
+	RateStatus        *RateStatus
 }
 
 // Adapter abstracts over provider process models: per-turn Claude processes and

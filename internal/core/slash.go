@@ -52,6 +52,26 @@ func (c *Core) HandleSlashCommand(ctx context.Context, sessionID, input string) 
 		}
 		updated, err := c.store.UpdateSessionSettings(ctx, sess.ID, sess.Model, sess.Effort, mode)
 		return SlashResult{Handled: true, Session: updated, Notice: fmt.Sprintf("Permission mode set to %s", mode)}, err
+	case "profile":
+		if arg == "" {
+			return SlashResult{Handled: true, Session: sess, Notice: "Usage: /profile <name|default>"}, nil
+		}
+		provider := sess.Provider
+		profile := arg
+		if arg == "default" {
+			profile = ""
+		} else {
+			got, ok := c.profiles[arg]
+			if !ok {
+				return SlashResult{Handled: true, Session: sess, Notice: fmt.Sprintf("Unknown profile %q", arg)}, nil
+			}
+			provider = got.Provider
+		}
+		updated, err := c.switchSessionTarget(ctx, sess, provider, profile)
+		if err != nil {
+			return SlashResult{Handled: true, Session: sess, Notice: err.Error()}, err
+		}
+		return SlashResult{Handled: true, Session: updated, Notice: fmt.Sprintf("Profile set to %s; next turn will replay history", profileNotice(updated.Profile))}, nil
 	case "name":
 		if arg == "" {
 			return SlashResult{Handled: true, Session: sess, Notice: "Usage: /name <session name>"}, nil
@@ -68,11 +88,18 @@ func (c *Core) HandleSlashCommand(ctx context.Context, sessionID, input string) 
 		return SlashResult{
 			Handled: true,
 			Session: sess,
-			Notice:  "/model <name>, /effort <level>, /permission <approve|yolo>, /name <text>, /describe <text>",
+			Notice:  "/model <name>, /effort <level>, /profile <name|default>, /permission <approve|yolo>, /name <text>, /describe <text>",
 		}, nil
 	default:
 		return SlashResult{Handled: true, Session: sess, Notice: fmt.Sprintf("Unknown command /%s. Try /help.", command)}, nil
 	}
+}
+
+func profileNotice(profile string) string {
+	if profile == "" {
+		return "default"
+	}
+	return profile
 }
 
 func validEffort(effort string) bool {

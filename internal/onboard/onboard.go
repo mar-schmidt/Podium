@@ -2,7 +2,6 @@
 package onboard
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -11,13 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
 	"golang.org/x/term"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
+	"github.com/mar-schmidt/Podium/internal/autostart"
 	"github.com/mar-schmidt/Podium/internal/client"
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/providercheck"
@@ -82,56 +82,86 @@ func Run(ctx context.Context, opts Options) error {
 			saneState = st
 		}
 	}
-	p := prompter{in: bufio.NewReader(in), out: out, tty: ttyFile, sane: saneState}
-	fmt.Fprintln(out, "Welcome to Podium.")
-	fmt.Fprintln(out, "Let's wake the stage, check your agent CLIs, and shape your first agent together.")
-	fmt.Fprintln(out)
+	u := newUI(ttyFile, out, saneState)
 
+	// huh needs a real terminal to drive the wizard. install.sh already gates the
+	// launch on /dev/tty; if we still landed here without one (e.g. CI piping into
+	// `podium onboard`), guide the user rather than invent answers or hang.
+	if !u.interactive() {
+		fmt.Fprintln(out, warnStyle.Render("Onboarding needs an interactive terminal. Run 'podium onboard' directly in a terminal."))
+		return ErrNoTTY
+	}
+
+	clear := isTerminalWriter(out)
+	banner(out, clear)
+
+	section(out, "Checking your agent CLIs")
 	statuses := providercheck.CheckAll(ctx, providercheck.Options{})
 	printDoctor(out, statuses)
 	ready := readyProviders(statuses)
 	for len(ready) == 0 {
-		fmt.Fprintln(out, "Podium needs Claude or Codex before it can generate a SOUL.md.")
+		fmt.Fprintln(out, warnStyle.Render("Podium needs Claude or Codex before it can generate a SOUL.md."))
 		for _, s := range statuses {
 			if !s.Found {
 				fmt.Fprintf(out, "\n%s not found.\n  %s\n", titleProvider(s.Provider), s.InstallHint)
 				continue
 			}
-			if p.confirm(fmt.Sprintf("Open the native %s login now?", titleProvider(s.Provider)), true) {
+			ok, err := u.confirm(fmt.Sprintf("Open the native %s login now?", titleProvider(s.Provider)), true)
+			if err != nil {
+				return err
+			}
+			if ok {
 				_ = providercheck.RunNativeLogin(ctx, s.Provider, s.Path)
 			}
 		}
 		statuses = providercheck.CheckAll(ctx, providercheck.Options{})
 		printDoctor(out, statuses)
 		ready = readyProviders(statuses)
-		if len(ready) == 0 && !p.confirm("Try provider checks again?", true) {
-			return errors.New("no working provider available; run `podium doctor` after installing or logging in")
+		if len(ready) == 0 {
+			again, err := u.confirm("Try provider checks again?", true)
+			if err != nil {
+				return err
+			}
+			if !again {
+				return errors.New("no working provider available; run `podium doctor` after installing or logging in")
+			}
 		}
 	}
 
-	provider := chooseProvider(p, ready)
-	if err := confirmProviderLogin(ctx, p, provider, statuses); err != nil {
+	section(out, "Choosing a provider")
+	provider, err := chooseProvider(u, ready)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "\nGreat. %s will help draft this agent's SOUL.md.\n", titleProvider(provider))
+	if err := confirmProviderLogin(ctx, u, provider, statuses); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, noticeStyle.Render(fmt.Sprintf("Great. %s will help draft this agent's SOUL.md.", titleProvider(provider))))
 
+	section(out, "Waking the stage")
 	c, addr, err := ensureDaemon(ctx, opts.Addr, out, errOut)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Podium daemon is live at %s.\n", addr)
+	fmt.Fprintln(out, noticeStyle.Render(fmt.Sprintf("Podium daemon is live at %s.", addr)))
 
-	ans := collectAnswers(p)
-	name := chooseName(p, ans)
-	permission := config.PermissionApprove
-	model := ""
-	effort := "medium"
+	section(out, "Shaping your agent")
+	ans, err := collectAnswers(u)
+	if err != nil {
+		return err
+	}
+
+	section(out, "Naming")
+	name, err := chooseName(u, ans)
+	if err != nil {
+		return err
+	}
 	agent, err := c.CreateAgent(ctx, client.AgentCreateRequest{
 		Name:           name,
 		Provider:       provider,
-		Model:          model,
-		Effort:         effort,
-		PermissionMode: permission,
+		Model:          "",
+		Effort:         "medium",
+		PermissionMode: config.PermissionApprove,
 	})
 	if err != nil {
 		return fmt.Errorf("create agent: %w", err)
@@ -140,42 +170,106 @@ func Run(ctx context.Context, opts Options) error {
 	if _, err := c.UpdateAgent(ctx, name, client.AgentUpdateRequest{Soul: &placeholder}); err != nil {
 		return fmt.Errorf("write placeholder SOUL.md: %w", err)
 	}
-	fmt.Fprintf(out, "\n%s exists. Now we'll ask %s to write the first SOUL.md draft.\n", agent.Name, titleProvider(provider))
 
-	soul, err := generateSoul(ctx, c, name, ans, out)
-	if err != nil {
-		fmt.Fprintf(out, "\nLLM generation did not complete: %v\n", err)
+	section(out, "Drafting SOUL.md")
+	var soul string
+	draft := func() error {
+		s, e := generateSoul(ctx, c, name, ans)
+		if e == nil {
+			soul = s
+		}
+		return e
+	}
+	if err := u.spinnerWhile(fmt.Sprintf("Asking %s to draft %s's SOUL.md…", titleProvider(provider), agent.Name), draft); err != nil {
+		fmt.Fprintln(out, warnStyle.Render(fmt.Sprintf("LLM generation did not complete: %v", err)))
 		soul = deterministicSoul(name, ans, false)
 	}
 	for {
-		fmt.Fprintln(out, "\n--- SOUL.md preview ---")
-		fmt.Fprintln(out, soul)
-		fmt.Fprintln(out, "--- end preview ---")
-		switch p.choice("What should we do with this soul?", []string{"accept", "regenerate", "edit"}, "accept") {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, soulBoxStyle.Width(soulWidth(out)).Render(soul))
+		action, err := u.selectOne("What should we do with this soul?", []string{"accept", "regenerate", "edit"}, "accept")
+		if err != nil {
+			return err
+		}
+		switch action {
 		case "accept":
 			if _, err := c.UpdateAgent(ctx, name, client.AgentUpdateRequest{Soul: &soul}); err != nil {
 				return fmt.Errorf("save SOUL.md: %w", err)
 			}
-			fmt.Fprintf(out, "\n%s is ready. Try: podium chat --agent %s \"hello\"\n", name, name)
+			if err := offerAutostart(u); err != nil {
+				return err
+			}
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, noticeStyle.Render(fmt.Sprintf("%s is ready. Try: podium chat --agent %s \"hello\"", name, name)))
 			return nil
 		case "regenerate":
-			next, err := generateSoul(ctx, c, name, ans, out)
-			if err != nil {
-				fmt.Fprintf(out, "Regeneration failed: %v\n", err)
-				continue
+			if err := u.spinnerWhile(fmt.Sprintf("Asking %s to redraft SOUL.md…", titleProvider(provider)), draft); err != nil {
+				fmt.Fprintln(out, warnStyle.Render(fmt.Sprintf("Regeneration failed: %v", err)))
 			}
-			soul = next
 		case "edit":
+			u.restoreTTY()
 			edited, err := editText(soul)
 			if err != nil {
-				fmt.Fprintf(out, "Editor unavailable: %v\n", err)
-				edited = p.multiline("Paste the SOUL.md you want to save. End with a single dot on its own line.")
+				fmt.Fprintln(out, warnStyle.Render(fmt.Sprintf("Editor unavailable: %v", err)))
+				edited, err = u.multiline("Paste the SOUL.md you want to save.", soul)
+				if err != nil {
+					return err
+				}
 			}
 			if strings.TrimSpace(edited) != "" {
 				soul = CleanSoulMarkdown(edited)
 			}
 		}
 	}
+}
+
+// offerAutostart asks, as the final wizard step, whether to launch Podium on
+// login and configures it if so. Suppressed when the installer already handled
+// autostart (PODIUM_OFFER_AUTOSTART=0). Failures warn but never fail onboarding.
+func offerAutostart(u *ui) error {
+	if os.Getenv("PODIUM_OFFER_AUTOSTART") == "0" {
+		return nil
+	}
+	section(u.out, "Autostart")
+	ok, err := u.confirm("Start Podium automatically when your computer starts?", true)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	podiumd, err := findPodiumd()
+	if err != nil {
+		fmt.Fprintln(u.out, warnStyle.Render("Could not locate podiumd for autostart: "+err.Error()))
+		return nil
+	}
+	if err := autostart.Install(autostart.Options{PodiumdPath: podiumd, PodiumHome: os.Getenv(config.EnvHome)}); err != nil {
+		fmt.Fprintln(u.out, warnStyle.Render("Could not configure autostart: "+err.Error()))
+		return nil
+	}
+	fmt.Fprintln(u.out, noticeStyle.Render("Autostart enabled."))
+	return nil
+}
+
+// isTerminalWriter reports whether w is a terminal we can safely clear.
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// soulWidth picks a readable width for the SOUL.md preview box, clamped to the
+// terminal size.
+func soulWidth(w io.Writer) int {
+	width := 76
+	if f, ok := w.(*os.File); ok {
+		if cw, _, err := term.GetSize(int(f.Fd())); err == nil && cw > 0 && cw-4 < width {
+			width = cw - 4
+		}
+	}
+	if width < 24 {
+		width = 24
+	}
+	return width
 }
 
 func ensureDaemon(ctx context.Context, addr string, out, errOut io.Writer) (*client.Client, string, error) {
@@ -226,13 +320,12 @@ func findPodiumd() (string, error) {
 }
 
 func printDoctor(out io.Writer, statuses []providercheck.Status) {
-	fmt.Fprintln(out, "Provider check:")
 	for _, s := range statuses {
-		state := "missing"
+		state := warnStyle.Render("missing")
 		if s.Ready {
-			state = "ready"
+			state = noticeStyle.Render("ready")
 		} else if s.Found {
-			state = "found"
+			state = goldStyle.Render("found")
 		}
 		fmt.Fprintf(out, "  %s: %s", titleProvider(s.Provider), state)
 		if s.Version != "" {
@@ -258,19 +351,22 @@ func readyProviders(statuses []providercheck.Status) []config.Provider {
 	return out
 }
 
-func chooseProvider(p prompter, providers []config.Provider) config.Provider {
+func chooseProvider(u *ui, providers []config.Provider) (config.Provider, error) {
 	if len(providers) == 1 {
-		return providers[0]
+		return providers[0], nil
 	}
 	labels := make([]string, 0, len(providers))
 	for _, provider := range providers {
 		labels = append(labels, string(provider))
 	}
-	choice := p.choice("Which provider do you want to start using?", labels, labels[0])
-	return config.Provider(choice)
+	choice, err := u.selectOne("Which provider do you want to start using?", labels, labels[0])
+	if err != nil {
+		return "", err
+	}
+	return config.Provider(choice), nil
 }
 
-func confirmProviderLogin(ctx context.Context, p prompter, provider config.Provider, statuses []providercheck.Status) error {
+func confirmProviderLogin(ctx context.Context, u *ui, provider config.Provider, statuses []providercheck.Status) error {
 	var status providercheck.Status
 	for _, candidate := range statuses {
 		if candidate.Provider == provider {
@@ -281,10 +377,14 @@ func confirmProviderLogin(ctx context.Context, p prompter, provider config.Provi
 	if status.Path == "" {
 		return fmt.Errorf("%s is not available", titleProvider(provider))
 	}
-	if p.confirm(fmt.Sprintf("Is %s logged in and ready to run?", titleProvider(provider)), true) {
+	ok, err := u.confirm(fmt.Sprintf("Is %s logged in and ready to run?", titleProvider(provider)), true)
+	if err != nil {
+		return err
+	}
+	if ok {
 		return nil
 	}
-	fmt.Fprintf(p.out, "Opening %s's native login flow.\n", titleProvider(provider))
+	fmt.Fprintf(u.out, "Opening %s's native login flow.\n", titleProvider(provider))
 	if err := providercheck.RunNativeLogin(ctx, provider, status.Path); err != nil {
 		return err
 	}
@@ -295,24 +395,61 @@ func confirmProviderLogin(ctx context.Context, p prompter, provider config.Provi
 	return nil
 }
 
-func collectAnswers(p prompter) answers {
-	fmt.Fprintln(p.out, "\nNow for the fun part: this agent should feel like someone you influenced.")
-	return answers{
-		Role:          p.choice("What should this agent gravitate toward?", []string{"builder", "researcher", "operator", "creative partner", "reviewer"}, "builder"),
-		Temperament:   p.choice("What temperament should it have?", []string{"calm and precise", "warm and curious", "bold and proactive", "playful and inventive"}, "warm and curious"),
-		Collaboration: p.choice("How should it collaborate with you?", []string{"ask before big moves", "make reasonable calls", "challenge me thoughtfully", "keep momentum high"}, "make reasonable calls"),
-		Autonomy:      p.choice("How much autonomy should it take?", []string{"low", "medium", "high"}, "medium"),
-		Strengths:     p.ask("What strengths should it lean into?", "systems thinking, clear writing, careful implementation"),
-		Boundaries:    p.ask("What boundaries should it respect?", "avoid destructive changes, explain risky choices, keep user data private"),
-		Playfulness:   p.choice("How much playfulness belongs in its voice?", []string{"subtle", "moderate", "sparkly"}, "moderate"),
-		CaresAbout:    p.ask("What should this agent care about most?", "helping me finish meaningful work with less friction"),
-		Extra:         p.ask("Anything else you want woven into the soul?", ""),
+func collectAnswers(u *ui) (answers, error) {
+	const (
+		strengthsDef  = "systems thinking, clear writing, careful implementation"
+		boundariesDef = "avoid destructive changes, explain risky choices, keep user data private"
+		caresDef      = "helping me finish meaningful work with less friction"
+	)
+	ans := answers{
+		Role:          "builder",
+		Temperament:   "warm and curious",
+		Collaboration: "make reasonable calls",
+		Autonomy:      "medium",
+		Playfulness:   "moderate",
 	}
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().Title("What should this agent gravitate toward?").
+				Options(huh.NewOptions("builder", "researcher", "operator", "creative partner", "reviewer")...).Value(&ans.Role),
+			huh.NewSelect[string]().Title("What temperament should it have?").
+				Options(huh.NewOptions("calm and precise", "warm and curious", "bold and proactive", "playful and inventive")...).Value(&ans.Temperament),
+			huh.NewSelect[string]().Title("How should it collaborate with you?").
+				Options(huh.NewOptions("ask before big moves", "make reasonable calls", "challenge me thoughtfully", "keep momentum high")...).Value(&ans.Collaboration),
+			huh.NewSelect[string]().Title("How much autonomy should it take?").
+				Options(huh.NewOptions("low", "medium", "high")...).Value(&ans.Autonomy),
+			huh.NewSelect[string]().Title("How much playfulness belongs in its voice?").
+				Options(huh.NewOptions("subtle", "moderate", "sparkly")...).Value(&ans.Playfulness),
+		).Title("Personality").Description("This agent should feel like someone you influenced."),
+		huh.NewGroup(
+			huh.NewInput().Title("What strengths should it lean into?").Placeholder(strengthsDef).Value(&ans.Strengths),
+			huh.NewInput().Title("What boundaries should it respect?").Placeholder(boundariesDef).Value(&ans.Boundaries),
+			huh.NewInput().Title("What should this agent care about most?").Placeholder(caresDef).Value(&ans.CaresAbout),
+			huh.NewInput().Title("Anything else you want woven into the soul?").Value(&ans.Extra),
+		).Title("Details"),
+	)
+	if err := u.run(form); err != nil {
+		return ans, err
+	}
+	if strings.TrimSpace(ans.Strengths) == "" {
+		ans.Strengths = strengthsDef
+	}
+	if strings.TrimSpace(ans.Boundaries) == "" {
+		ans.Boundaries = boundariesDef
+	}
+	if strings.TrimSpace(ans.CaresAbout) == "" {
+		ans.CaresAbout = caresDef
+	}
+	return ans, nil
 }
 
-func chooseName(p prompter, ans answers) string {
+func chooseName(u *ui, ans answers) (string, error) {
 	suggestions := suggestNames(ans)
-	return sanitizeName(p.choice("Choose a name, or type your own", suggestions, suggestions[0]))
+	choice, err := u.selectOrCustom("Choose a name, or type your own", suggestions, suggestions[0])
+	if err != nil {
+		return "", err
+	}
+	return sanitizeName(choice), nil
 }
 
 func suggestNames(ans answers) []string {
@@ -353,7 +490,7 @@ func sanitizeName(name string) string {
 	return out
 }
 
-func generateSoul(ctx context.Context, c *client.Client, name string, ans answers, out io.Writer) (string, error) {
+func generateSoul(ctx context.Context, c *client.Client, name string, ans answers) (string, error) {
 	session, err := c.CreateSession(ctx, client.SessionCreateRequest{AgentName: name, Origin: store.OriginOnboarding})
 	if err != nil {
 		return "", err
@@ -366,7 +503,6 @@ func generateSoul(ctx context.Context, c *client.Client, name string, ans answer
 		case "delta":
 			gotDelta = true
 			b.WriteString(event.Delta)
-			fmt.Fprint(out, ".")
 		case "assistant":
 			if !gotDelta {
 				b.WriteString(event.Delta)
@@ -385,7 +521,6 @@ func generateSoul(ctx context.Context, c *client.Client, name string, ans answer
 	if err := <-errs; err != nil {
 		return "", err
 	}
-	fmt.Fprintln(out)
 	soul := CleanSoulMarkdown(b.String())
 	if strings.TrimSpace(soul) == "" {
 		return "", errors.New("provider returned an empty SOUL.md draft")
@@ -559,91 +694,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-type prompter struct {
-	in   *bufio.Reader
-	out  io.Writer
-	tty  *os.File
-	sane *term.State
-}
-
-// restoreTTY re-applies the saved canonical terminal state. It's a no-op when
-// onboarding isn't attached to a terminal. We call it before every read so a
-// TUI provider CLI that left the terminal in raw mode can't break our prompts.
-func (p prompter) restoreTTY() {
-	if p.tty != nil && p.sane != nil {
-		_ = term.Restore(int(p.tty.Fd()), p.sane)
-	}
-}
-
-func (p prompter) ask(prompt, def string) string {
-	p.restoreTTY()
-	if def != "" {
-		fmt.Fprintf(p.out, "%s [%s]: ", prompt, def)
-	} else {
-		fmt.Fprintf(p.out, "%s: ", prompt)
-	}
-	line, _ := p.in.ReadString('\n')
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return def
-	}
-	return line
-}
-
-func (p prompter) confirm(prompt string, def bool) bool {
-	defText := "Y/n"
-	if !def {
-		defText = "y/N"
-	}
-	for {
-		answer := strings.ToLower(p.ask(prompt+" "+defText, ""))
-		if answer == "" {
-			return def
-		}
-		switch answer {
-		case "y", "yes", "j", "ja":
-			return true
-		case "n", "no", "nej":
-			return false
-		}
-	}
-}
-
-func (p prompter) choice(prompt string, options []string, def string) string {
-	for {
-		fmt.Fprintf(p.out, "%s\n", prompt)
-		for i, opt := range options {
-			fmt.Fprintf(p.out, "  %d. %s\n", i+1, opt)
-		}
-		answer := p.ask("Choose a number or type your own", def)
-		if idx, err := strconv.Atoi(answer); err == nil && idx >= 1 && idx <= len(options) {
-			return options[idx-1]
-		}
-		if strings.TrimSpace(answer) != "" {
-			return answer
-		}
-	}
-}
-
-func (p prompter) multiline(prompt string) string {
-	p.restoreTTY()
-	fmt.Fprintln(p.out, prompt)
-	var lines []string
-	for {
-		line, err := p.in.ReadString('\n')
-		if err != nil && line == "" {
-			break
-		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "." {
-			break
-		}
-		lines = append(lines, line)
-		if err != nil {
-			break
-		}
-	}
-	return strings.Join(lines, "\n")
 }

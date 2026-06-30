@@ -179,18 +179,32 @@ PLIST
   fi
 }
 
+# When the onboarding wizard will run interactively, it owns the autostart
+# question (asked at the end, styled to match the wizard). In that case the
+# installer must not prompt or configure autostart itself — it only signals the
+# wizard via PODIUM_OFFER_AUTOSTART. Otherwise (no tty / --no-onboard / CI) the
+# installer keeps handling autostart as before.
+WIZARD_WILL_RUN="no"
+if [ "$RUN_ONBOARD" = "yes" ] && [ -e /dev/tty ] && [ -r /dev/tty ]; then
+  WIZARD_WILL_RUN="yes"
+fi
+
 if [ "$AUTOSTART" = "ask" ]; then
-  # Read from the controlling terminal so prompts work even under `curl | bash`,
-  # where stdin is the script pipe rather than the keyboard. With no tty
-  # (e.g. CI), fall back to the default; use --autostart yes|no to be explicit.
-  if [ -r /dev/tty ]; then
+  if [ "$WIZARD_WILL_RUN" = "yes" ]; then
+    export PODIUM_OFFER_AUTOSTART=1
+    AUTOSTART="defer"
+  elif [ -r /dev/tty ]; then
     printf 'Start Podium automatically when your system starts? [Y/n] ' > /dev/tty
     read -r reply < /dev/tty || reply=""
+    case "${reply:-Y}" in y|Y|yes|YES|"") AUTOSTART="yes" ;; *) AUTOSTART="no" ;; esac
   else
-    reply=""
     say "Non-interactive install: enabling autostart (pass --autostart no to disable)."
+    AUTOSTART="yes"
   fi
-  case "${reply:-Y}" in y|Y|yes|YES|"") AUTOSTART="yes" ;; *) AUTOSTART="no" ;; esac
+else
+  # Explicit --autostart yes|no: the installer configures it below; tell the
+  # wizard to stay quiet so it doesn't re-ask or double-configure.
+  export PODIUM_OFFER_AUTOSTART=0
 fi
 [ "$AUTOSTART" = "yes" ] && install_autostart
 

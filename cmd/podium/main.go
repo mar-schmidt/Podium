@@ -252,12 +252,24 @@ func newOnboardCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return onboard.Run(cmd.Context(), onboard.Options{
+			err = onboard.Run(cmd.Context(), onboard.Options{
 				Addr: resolved,
 				In:   os.Stdin,
 				Out:  os.Stdout,
 				Err:  os.Stderr,
 			})
+			// A deliberate Ctrl-C/Esc is a clean cancel, not a failure: the wizard
+			// already printed its own message, so exit 0 without cobra noise.
+			if errors.Is(err, onboard.ErrAborted) {
+				fmt.Fprintln(os.Stderr, "Onboarding cancelled. Run `podium onboard` to resume.")
+				return nil
+			}
+			// No-tty already printed guidance; silence cobra's duplicate Error line.
+			if errors.Is(err, onboard.ErrNoTTY) {
+				cmd.SilenceErrors = true
+				return err
+			}
+			return err
 		},
 	}
 }

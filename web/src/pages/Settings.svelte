@@ -1,0 +1,784 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { getConfig, listProfiles, updateConfig } from "../lib/api";
+  import type { GlobalConfig, Health, PermissionMode, ProfileInfo, Provider, UpdateStatus } from "../lib/types";
+  import Logs from "./Logs.svelte";
+
+  type UpdateState = "idle" | "checking" | "available" | "current" | "updating" | "restarting" | "failed";
+
+  let {
+    health,
+    update,
+    updateState,
+    updateError,
+    onCheckUpdate,
+    onRunUpdate,
+  }: {
+    health: Health | null;
+    update: UpdateStatus | null;
+    updateState: UpdateState;
+    updateError: string | null;
+    onCheckUpdate: () => void;
+    onRunUpdate: () => void;
+  } = $props();
+
+  const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+  const PERMISSIONS: PermissionMode[] = ["approve", "yolo"];
+  function modelsFor(p: Provider): string[] {
+    return p === "codex" ? ["gpt-5.1", "gpt-5.1-mini", "o4"] : ["sonnet", "opus", "haiku"];
+  }
+
+  let loading = $state(true);
+  let error = $state<string | null>(null);
+  let saving = $state(false);
+  let saved = $state(false);
+  let profiles = $state<ProfileInfo[]>([]);
+
+  // Editable default config + fallback.
+  let provider = $state<Provider>("claude");
+  let model = $state(""); // "" = provider default
+  let effort = $state("medium");
+  let permission = $state<PermissionMode>("approve");
+  let fbTarget = $state<"none" | Provider>("none");
+  let fbProfile = $state<string | null>(null);
+
+  // Canonical JSON snapshot of the last-saved state, for dirty tracking.
+  let baseline = $state("");
+
+  onMount(load);
+
+  async function load() {
+    loading = true;
+    error = null;
+    try {
+      const [cfg, profs] = await Promise.all([getConfig(), listProfiles()]);
+      profiles = profs;
+      applyConfig(cfg);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function applyConfig(cfg: GlobalConfig) {
+    provider = cfg.provider;
+    model = cfg.model;
+    effort = cfg.effort || "medium";
+    permission = cfg.permission_mode;
+    const fb = cfg.fallback ?? [];
+    if (fb.length === 0) {
+      fbTarget = "none";
+      fbProfile = null;
+    } else {
+      const first = fb[0];
+      if (first === "claude" || first === "codex") {
+        fbTarget = first;
+        fbProfile = null;
+      } else if (first === "default") {
+        fbTarget = cfg.provider;
+        fbProfile = null;
+      } else {
+        const prof = profiles.find((p) => p.Name === first);
+        fbTarget = prof ? prof.Provider : "claude";
+        fbProfile = first;
+      }
+    }
+    baseline = canonical();
+    saved = false;
+  }
+
+  const modelChips = $derived(modelsFor(provider));
+  const fbProfileOptions = $derived(
+    fbTarget === "none" ? [] : profiles.filter((p) => p.Provider === fbTarget).map((p) => p.Name),
+  );
+  const fbHasProfiles = $derived(fbProfileOptions.length > 0);
+
+  function buildFallback(): string[] {
+    if (fbTarget === "none") return [];
+    if (fbProfile && fbProfileOptions.includes(fbProfile)) return [fbProfile];
+    return [fbTarget];
+  }
+
+  function canonical(): string {
+    return JSON.stringify({ provider, model, effort, permission, fallback: buildFallback() });
+  }
+
+  const dirty = $derived(canonical() !== baseline);
+
+  function setProvider(p: Provider) {
+    if (p === provider) return;
+    provider = p;
+    saved = false;
+    if (!modelsFor(p).includes(model)) model = ""; // fall back to provider default
+  }
+  function setModel(m: string) {
+    model = m;
+    saved = false;
+  }
+  function setEffort(e: string) {
+    effort = e;
+    saved = false;
+  }
+  function setPermission(m: PermissionMode) {
+    permission = m;
+    saved = false;
+  }
+  function setFbTarget(t: "none" | Provider) {
+    fbTarget = t;
+    saved = false;
+    if (t === "none") {
+      fbProfile = null;
+    } else {
+      const opts = profiles.filter((p) => p.Provider === t).map((p) => p.Name);
+      if (fbProfile && !opts.includes(fbProfile)) fbProfile = null;
+    }
+  }
+  function setFbProfile(name: string) {
+    fbProfile = name;
+    saved = false;
+  }
+
+  async function save() {
+    saving = true;
+    error = null;
+    try {
+      const cfg = await updateConfig({
+        provider,
+        model,
+        effort,
+        permission_mode: permission,
+        fallback: buildFallback(),
+      });
+      applyConfig(cfg);
+      saved = true;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      saved = false;
+    } finally {
+      saving = false;
+    }
+  }
+
+  // ---- Version & updates: presentation of App.svelte's update state ----
+  const primaryLabel = $derived(model ? `${provider} · ${model}` : `${provider} · provider default`);
+  const fbRouteLabel = $derived(
+    fbTarget === "none"
+      ? "pause · retry on reset"
+      : fbProfile && fbProfileOptions.includes(fbProfile)
+        ? `${fbTarget} · ${fbProfile}`
+        : fbTarget,
+  );
+  const canCheck = $derived(updateState === "idle" || updateState === "current" || updateState === "failed");
+  const updateBadge = $derived(updateBadgeFor(updateState));
+  function updateBadgeFor(state: UpdateState): { label: string; tone: "neutral" | "green" | "amber" } {
+    switch (state) {
+      case "checking":
+        return { label: "checking…", tone: "neutral" };
+      case "current":
+        return { label: "up to date", tone: "green" };
+      case "available":
+        return { label: `${update?.latest_version ?? ""} available`, tone: "amber" };
+      case "updating":
+      case "restarting":
+        return { label: "updating…", tone: "amber" };
+      case "failed":
+        return { label: "check failed", tone: "amber" };
+      default:
+        return { label: "not checked", tone: "neutral" };
+    }
+  }
+</script>
+
+<div class="page settings">
+  <div class="settings-inner">
+    <header class="settings-head">
+      <h1>Settings</h1>
+      <p>
+        The engine every new agent, task and session inherits unless overridden — and where Podium turns when a provider
+        can't take the work.
+      </p>
+    </header>
+
+    {#if error}
+      <div class="error-banner" style="margin-bottom:16px">{error}</div>
+    {/if}
+
+    <!-- ===== DEFAULT CONFIGURATION ===== -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-icon teal">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10"/><path d="M20 6h-2"/><circle cx="16" cy="6" r="2"/><path d="M4 12h2"/><path d="M12 12h8"/><circle cx="9" cy="12" r="2"/><path d="M4 18h10"/><path d="M20 18h-2"/><circle cx="16" cy="18" r="2"/></svg>
+        </div>
+        <div>
+          <div class="card-title">Default configuration</div>
+          <div class="card-sub">Applied to every new colleague and ad-hoc run.</div>
+        </div>
+      </div>
+
+      {#if loading}
+        <div class="empty-note">Loading defaults…</div>
+      {:else}
+        <div class="rows">
+          <div class="row">
+            <span class="row-key">provider</span>
+            <div class="seg-group">
+              <button class="seg" class:on={provider === "claude"} onclick={() => setProvider("claude")}>Claude</button>
+              <button class="seg" class:on={provider === "codex"} onclick={() => setProvider("codex")}>Codex</button>
+            </div>
+          </div>
+          <div class="row top">
+            <span class="row-key">model</span>
+            <div class="chips">
+              <button class="chip" class:on={model === ""} onclick={() => setModel("")}>✦ default</button>
+              {#each modelChips as m}
+                <button class="chip" class:on={model === m} onclick={() => setModel(m)}>{m}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="row top">
+            <span class="row-key">effort</span>
+            <div class="chips">
+              {#each EFFORTS as e}
+                <button class="chip" class:on={effort === e} onclick={() => setEffort(e)}>{e}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="row top">
+            <span class="row-key">permission</span>
+            <div class="chips">
+              {#each PERMISSIONS as m}
+                <button class="chip" class:on={permission === m} onclick={() => setPermission(m)}>{m}</button>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/if}
+    </section>
+
+    <!-- ===== FALLBACK PROVIDER ===== -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-icon gold">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"/><path d="M3 4v4h4"/></svg>
+        </div>
+        <div>
+          <div class="card-title">Fallback provider</div>
+          <div class="card-sub">Where runs re-route when your provider is rate-limited or unreachable.</div>
+        </div>
+      </div>
+
+      <div class="route">
+        <div class="route-end">
+          <div class="route-tag">primary</div>
+          <div class="route-val">{primaryLabel}</div>
+        </div>
+        <div class="route-arrow">
+          <span class="route-cond">429 · limited</span>
+          <svg width="36" height="14" viewBox="0 0 36 14" fill="none" stroke="#c9a24e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7h30"/><path d="M27 2l6 5-6 5"/></svg>
+        </div>
+        <div class="route-end right">
+          <div class="route-tag">fallback</div>
+          <div class="route-val" class:muted={fbTarget === "none"}>{fbRouteLabel}</div>
+        </div>
+      </div>
+
+      <div class="rows">
+        <div class="row">
+          <span class="row-key">route to</span>
+          <div class="seg-group">
+            <button class="seg" class:on={fbTarget === "none"} onclick={() => setFbTarget("none")}>None</button>
+            <button class="seg" class:on={fbTarget === "claude"} onclick={() => setFbTarget("claude")}>Claude</button>
+            <button class="seg" class:on={fbTarget === "codex"} onclick={() => setFbTarget("codex")}>Codex</button>
+          </div>
+        </div>
+        {#if fbTarget !== "none" && fbHasProfiles}
+          <div class="row top">
+            <span class="row-key">profile</span>
+            <div class="chips-col">
+              <div class="chips">
+                {#each fbProfileOptions as name}
+                  <button class="chip" class:on={fbProfile === name} onclick={() => setFbProfile(name)}>{name}</button>
+                {/each}
+              </div>
+              <div class="hint">Which account on the fallback provider to run under.</div>
+            </div>
+          </div>
+        {/if}
+        {#if fbTarget === "none"}
+          <div class="fb-disabled"><span class="dot-amber">●</span>No fallback — rate-limited runs pause and retry automatically when the limit resets. Nothing is dropped.</div>
+        {/if}
+      </div>
+    </section>
+
+    <!-- ===== SAVE ===== -->
+    <div class="save-row">
+      <button class="btn-save" disabled={saving || loading} onclick={save}>{saving ? "Saving…" : "Save defaults"}</button>
+      {#if saved && !dirty}
+        <span class="save-ok"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Saved to config.yaml</span>
+      {:else}
+        <span class="save-hint">Changes apply to new runs immediately.</span>
+      {/if}
+    </div>
+
+    <!-- ===== VERSION & UPDATES ===== -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-icon teal">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v5h-5"/></svg>
+        </div>
+        <div class="grow">
+          <div class="card-title">Version &amp; updates</div>
+          <div class="card-sub">Releases from github.com/podium/podium.</div>
+        </div>
+        <span class="badge {updateBadge.tone}">{updateBadge.label}</span>
+      </div>
+
+      <div class="ver-row">
+        <div class="grow">
+          <div class="route-tag">installed</div>
+          <div class="ver-num">{health ? health.version : "—"}</div>
+        </div>
+        {#if updateState === "checking"}
+          <span class="spinner-note"><span class="spinner"></span>Contacting GitHub…</span>
+        {:else if updateState === "updating" || updateState === "restarting"}
+          <span class="spinner-note amber"><span class="spinner amber"></span>Installing {update?.latest_version ?? ""}…</span>
+        {:else if canCheck}
+          <button class="btn-ghost" onclick={onCheckUpdate}>Check for updates</button>
+        {/if}
+      </div>
+
+      {#if updateState === "current"}
+        <div class="ver-note"><span class="ok">✓</span>You're running the latest release.</div>
+      {/if}
+      {#if updateState === "failed" && updateError}
+        <div class="ver-note"><span class="dot-amber">●</span>{updateError}</div>
+      {/if}
+      {#if updateState === "available" && update}
+        <div class="upd-actions">
+          <button class="btn-save" onclick={onRunUpdate}>Update to {update.latest_version}</button>
+          {#if update.blocking_reason}
+            <span class="save-hint">{update.blocking_reason}</span>
+          {/if}
+          {#if update.release_url}
+            <a class="rel-link" href={update.release_url} target="_blank" rel="noreferrer">Release notes ↗</a>
+          {/if}
+        </div>
+      {/if}
+    </section>
+
+    <!-- ===== LOGS ===== -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-icon violet">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+        </div>
+        <div>
+          <div class="card-title">Logs</div>
+          <div class="card-sub">Live tail of the daemon log.</div>
+        </div>
+      </div>
+      <div class="logs-wrap">
+        <Logs embedded />
+      </div>
+    </section>
+  </div>
+</div>
+
+<style>
+  .settings-inner {
+    max-width: 740px;
+    margin: 0 auto;
+  }
+
+  .settings-head {
+    margin-bottom: 24px;
+  }
+
+  .settings-head h1 {
+    margin: 0;
+    font: 800 24px "Hanken Grotesk";
+    letter-spacing: -0.02em;
+  }
+
+  .settings-head p {
+    margin: 6px 0 0;
+    font: 400 13.5px/1.5 "Hanken Grotesk";
+    color: var(--muted-2);
+    max-width: 560px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: 20px;
+    padding: 24px 26px;
+    margin-bottom: 18px;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .card-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+  }
+
+  .card-icon.teal {
+    background: #eaf2ee;
+    color: #2f6e60;
+  }
+
+  .card-icon.gold {
+    background: #fbf1dd;
+    color: #9a6e1e;
+  }
+
+  .card-icon.violet {
+    background: #f0edf9;
+    color: #5847b8;
+  }
+
+  .card-title {
+    font: 800 17px "Hanken Grotesk";
+    letter-spacing: -0.01em;
+  }
+
+  .card-sub {
+    font: 400 12.5px "Hanken Grotesk";
+    color: var(--muted-2);
+  }
+
+  .grow {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-top: 22px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .row.top {
+    align-items: flex-start;
+  }
+
+  .row-key {
+    font: 600 10.5px "JetBrains Mono", monospace;
+    letter-spacing: 0.07em;
+    color: var(--faint);
+    text-transform: uppercase;
+    width: 84px;
+    flex: none;
+    padding-top: 7px;
+  }
+
+  .row:not(.top) .row-key {
+    padding-top: 0;
+  }
+
+  .seg-group {
+    flex: 1;
+    display: flex;
+    gap: 9px;
+  }
+
+  .seg {
+    flex: 1;
+    padding: 11px;
+    border-radius: 11px;
+    font: 600 13.5px "Hanken Grotesk";
+    border: 1px solid var(--field-line);
+    background: #fff;
+    color: var(--muted);
+  }
+
+  .seg.on {
+    border-color: #bfe0d6;
+    background: #e3f1ec;
+    color: var(--teal-deep);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+
+  .chips-col {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .chip {
+    padding: 6px 12px;
+    border-radius: 9px;
+    font: 600 12px "JetBrains Mono", monospace;
+    border: 1px solid var(--field-line);
+    background: #fff;
+    color: var(--muted);
+  }
+
+  .chip.on {
+    border-color: #bfe0d6;
+    background: #e3f1ec;
+    color: var(--teal-deep);
+  }
+
+  .hint {
+    font: 400 11.5px/1.45 "Hanken Grotesk";
+    color: var(--muted-2);
+  }
+
+  /* fallback route summary */
+  .route {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface-3);
+    border: 1px solid var(--line-3);
+    border-radius: 14px;
+    padding: 15px 18px;
+    margin-top: 20px;
+  }
+
+  .route-end {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .route-end.right {
+    text-align: right;
+  }
+
+  .route-tag {
+    font: 600 9.5px "JetBrains Mono", monospace;
+    letter-spacing: 0.12em;
+    color: var(--faint);
+    text-transform: uppercase;
+  }
+
+  .route-val {
+    font: 700 14.5px "Hanken Grotesk";
+    color: var(--ink);
+    margin-top: 3px;
+  }
+
+  .route-val.muted {
+    color: var(--muted-2);
+  }
+
+  .route-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    padding: 0 6px;
+  }
+
+  .route-cond {
+    font: 600 9.5px "JetBrains Mono", monospace;
+    color: #b07a22;
+    letter-spacing: 0.03em;
+  }
+
+  .fb-disabled {
+    font: 400 12.5px/1.5 "Hanken Grotesk";
+    color: var(--muted-2);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .dot-amber {
+    color: #c9a24e;
+    flex: none;
+  }
+
+  /* save row */
+  .save-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin: 4px 0 18px;
+  }
+
+  .btn-save {
+    border: none;
+    border-radius: 13px;
+    padding: 13px 26px;
+    background: var(--teal);
+    color: #fff;
+    font: 700 14.5px "Hanken Grotesk";
+    box-shadow: 0 10px 22px -8px rgba(63, 143, 126, 0.7);
+  }
+
+  .save-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: 600 13px "Hanken Grotesk";
+    color: #3f7a5f;
+  }
+
+  .save-hint {
+    font: 400 12.5px "Hanken Grotesk";
+    color: var(--faint);
+  }
+
+  /* version & updates */
+  .badge {
+    padding: 5px 11px;
+    border-radius: 999px;
+    font: 600 10.5px "JetBrains Mono", monospace;
+    white-space: nowrap;
+    border: 1px solid var(--line-2);
+    flex: none;
+  }
+
+  .badge.neutral {
+    background: #f1eadf;
+    color: var(--muted-2);
+    border-color: #e6dbcb;
+  }
+
+  .badge.green {
+    background: #eaf1ed;
+    color: #3f7a5f;
+    border-color: #cfe3d8;
+  }
+
+  .badge.amber {
+    background: #fbf1dd;
+    color: #9a6e1e;
+    border-color: #ecd9ae;
+  }
+
+  .ver-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--surface-3);
+    border: 1px solid var(--line-3);
+    border-radius: 14px;
+    padding: 15px 18px;
+    margin-top: 20px;
+  }
+
+  .ver-num {
+    font: 800 18px "Hanken Grotesk";
+    color: var(--ink);
+    margin-top: 2px;
+  }
+
+  .btn-ghost {
+    border: 1px solid #cfe3d8;
+    border-radius: 12px;
+    padding: 10px 18px;
+    background: #fff;
+    color: #2f6e60;
+    font: 700 13px "Hanken Grotesk";
+    flex: none;
+  }
+
+  .spinner-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font: 600 13px "Hanken Grotesk";
+    color: var(--muted-2);
+    flex: none;
+  }
+
+  .spinner-note.amber {
+    color: #9a6e1e;
+  }
+
+  .spinner {
+    width: 15px;
+    height: 15px;
+    border: 2px solid #d8cdbd;
+    border-top-color: #2f6e60;
+    border-radius: 99px;
+    display: inline-block;
+    animation: pdSpin 0.7s linear infinite;
+  }
+
+  .spinner.amber {
+    border-color: #ecd9ae;
+    border-top-color: #9a6e1e;
+  }
+
+  @keyframes pdSpin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .ver-note {
+    font: 400 12.5px/1.5 "Hanken Grotesk";
+    color: var(--muted-2);
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ver-note .ok {
+    color: #3f7a5f;
+  }
+
+  .upd-actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+
+  .rel-link {
+    font: 600 12.5px "Hanken Grotesk";
+    color: #2f6e60;
+    text-decoration: none;
+  }
+
+  .rel-link:hover {
+    text-decoration: underline;
+  }
+
+  .logs-wrap {
+    margin-top: 18px;
+  }
+
+  @media (max-width: 768px) {
+    .row,
+    .row.top {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+    }
+
+    .row-key {
+      width: auto;
+      padding-top: 0;
+    }
+  }
+</style>

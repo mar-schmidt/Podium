@@ -47,7 +47,7 @@ func (c *Core) nextFallbackSession(ctx context.Context, sess store.Session, trie
 	}
 	chain := agent.Fallback
 	if len(chain) == 0 {
-		chain = c.global.Fallback
+		chain = c.GetGlobal().Fallback
 	}
 	if len(chain) == 0 {
 		return store.Session{}, fmt.Errorf("rate limited on %s; no fallback chain configured", targetLabel(sess.Provider, sess.Profile))

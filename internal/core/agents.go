@@ -313,20 +313,21 @@ func (c *Core) WriteAgentSoul(name, content string) error {
 }
 
 func (c *Core) applyAgentDefaults(agent *store.Agent) {
+	g := c.GetGlobal()
 	if agent.Provider == "" {
-		agent.Provider = c.global.Provider
+		agent.Provider = g.Provider
 	}
 	if agent.Model == "" {
-		agent.Model = c.global.Model
+		agent.Model = g.Model
 	}
 	if agent.Effort == "" {
-		agent.Effort = c.global.Effort
+		agent.Effort = g.Effort
 	}
 	if agent.PermissionMode == "" {
-		agent.PermissionMode = c.global.PermissionMode
+		agent.PermissionMode = g.PermissionMode
 	}
 	if len(agent.Fallback) == 0 {
-		agent.Fallback = append([]string(nil), c.global.Fallback...)
+		agent.Fallback = g.Fallback
 	}
 }
 

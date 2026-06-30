@@ -8,9 +8,9 @@
   import Schedules from "./pages/Schedules.svelte";
   import Projects from "./pages/Projects.svelte";
   import Skills from "./pages/Skills.svelte";
-  import Logs from "./pages/Logs.svelte";
+  import Settings from "./pages/Settings.svelte";
 
-  type Route = "chat" | "roadmap" | "projects" | "agents" | "schedules" | "skills" | "logs";
+  type Route = "chat" | "roadmap" | "projects" | "agents" | "schedules" | "skills" | "settings";
 
   interface ChatTarget {
     sessionId?: string;
@@ -49,12 +49,11 @@
       label: "Skills",
       icon: '<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
     },
-    {
-      key: "logs",
-      label: "Logs",
-      icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h6"/>',
-    },
   ];
+
+  // Gear icon for the Settings entry pinned in the sidebar footer.
+  const SETTINGS_ICON =
+    '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>';
 
   let route = $state<Route>("chat");
   let health = $state<Health | null>(null);
@@ -246,6 +245,10 @@
     </nav>
 
     <div class="nav-foot">
+      <button class="nav-link settings-link" class:active={route === "settings"} onclick={() => (route = "settings")}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html SETTINGS_ICON}</svg>
+        Settings
+      </button>
       <div class="daemon">
         <span class="daemon-dot" class:live={daemonStatus === "live"}></span>
         <div class="daemon-text mono">
@@ -291,8 +294,14 @@
       <Schedules {agents} onOpenChat={openChat} />
     {:else if route === "skills"}
       <Skills />
-    {:else if route === "logs"}
-      <Logs />
+    {:else if route === "settings"}
+      <Settings
+        {health}
+        {update}
+        {updateState}
+        {updateError}
+        onCheckUpdate={() => refreshUpdate()}
+        onRunUpdate={runUpdate} />
     {/if}
   </div>
 

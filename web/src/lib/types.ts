@@ -42,6 +42,28 @@ export interface LogStreamEvent {
 
 export type Provider = "claude" | "codex";
 export type PermissionMode = "approve" | "yolo";
+
+// GlobalConfig mirrors GET /api/config: the daemon-wide defaults every new
+// agent and ad-hoc run inherits unless overridden. `fallback` is the ordered
+// re-route chain (profile names, bare providers, or "default").
+export interface GlobalConfig {
+  provider: Provider;
+  model: string;
+  effort: string;
+  permission_mode: PermissionMode;
+  permission_timeout: string;
+  fallback: string[];
+}
+
+// GlobalConfigPatch is the PATCH /api/config body. Omitted fields keep their
+// current value; a present-but-empty fallback clears the chain.
+export interface GlobalConfigPatch {
+  provider?: Provider;
+  model?: string;
+  effort?: string;
+  permission_mode?: PermissionMode;
+  fallback?: string[];
+}
 export type SessionOrigin = "web" | "cli" | "onboarding" | "schedule" | "roadmap";
 export type MessageRole = "user" | "assistant";
 

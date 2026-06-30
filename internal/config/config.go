@@ -299,6 +299,31 @@ func rejectExplicitInvalidLogging(raw []byte) error {
 	return nil
 }
 
+// ValidateGlobal checks a standalone Global block (provider, permission, and
+// fallback chain) against the configured profile names. It mirrors the global
+// checks in Validate so the Settings API can validate an edit without
+// reconstructing a full Config. profileNames maps profile name -> its provider;
+// pass nil when no named profiles are configured.
+func ValidateGlobal(g Global, profileNames map[string]Provider) error {
+	if err := validateProvider(g.Provider); err != nil {
+		return fmt.Errorf("provider: %w", err)
+	}
+	if err := validatePermission(g.PermissionMode); err != nil {
+		return fmt.Errorf("permission_mode: %w", err)
+	}
+	if g.PermissionTimeout != "" {
+		if _, err := time.ParseDuration(g.PermissionTimeout); err != nil {
+			return fmt.Errorf("permission_timeout: %w", err)
+		}
+	}
+	for i, entry := range g.Fallback {
+		if err := validateFallbackEntry(entry, profileNames); err != nil {
+			return fmt.Errorf("fallback[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
 func validateProvider(p Provider) error {
 	switch p {
 	case ProviderClaude, ProviderCodex:

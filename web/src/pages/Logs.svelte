@@ -3,6 +3,10 @@
   import { followLogs, getLogs } from "../lib/api";
   import type { LogStreamEvent } from "../lib/types";
 
+  // When embedded (e.g. inside the Settings page) the page chrome is dropped and
+  // the viewport is height-constrained so it sits inside a card.
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let path = $state("");
   let lines = $state<string[]>([]);
   let error = $state<string | null>(null);
@@ -77,15 +81,22 @@
     await tick();
     if (viewport) viewport.scrollTop = viewport.scrollHeight;
   }
+
+  function clear() {
+    lines = [];
+  }
 </script>
 
-<div class="logs-page">
+<div class="logs-page" class:embedded>
   <div class="logs-head">
-    <div>
-      <div class="logs-title">Logs</div>
+    <div class="logs-head-text">
+      {#if !embedded}
+        <div class="logs-title">Logs</div>
+      {/if}
       <div class="logs-path mono">{path || "$PODIUM_HOME/logs/podiumd.log"}</div>
     </div>
     <div class="logs-actions">
+      <button class="log-btn" onclick={clear} disabled={lines.length === 0}>Clear</button>
       <button class="log-btn" onclick={() => void refresh(following)} disabled={loading}>Refresh</button>
       {#if following}
         <button class="log-btn primary" onclick={pause}>Pause</button>
@@ -130,12 +141,23 @@
     min-height: 0;
   }
 
+  /* Embedded inside the Settings card: shed the full-height page chrome. */
+  .logs-page.embedded {
+    height: auto;
+    padding: 0;
+    gap: 12px;
+  }
+
   .logs-head {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
     flex-wrap: wrap;
+  }
+
+  .logs-head-text {
+    min-width: 0;
   }
 
   .logs-title {
@@ -190,6 +212,13 @@
     border-radius: 8px;
     overflow: hidden;
     box-shadow: 0 1px 2px rgba(43, 37, 32, 0.04);
+  }
+
+  /* Constrain to a scrolling panel rather than filling the viewport. */
+  .embedded .log-shell {
+    flex: none;
+    height: 280px;
+    border-radius: 14px;
   }
 
   .log-toolbar {

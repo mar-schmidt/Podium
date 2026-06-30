@@ -4,6 +4,8 @@
 import type {
   Agent,
   AgentDetail,
+  GlobalConfig,
+  GlobalConfigPatch,
   Health,
   LogSnapshot,
   LogStreamEvent,
@@ -55,6 +57,20 @@ export async function listSkills(): Promise<Skill[]> {
 
 export async function listProfiles(): Promise<ProfileInfo[]> {
   return (await asJSON<ProfileInfo[] | null>(await fetch("/api/profiles"))) ?? [];
+}
+
+export async function getConfig(): Promise<GlobalConfig> {
+  return asJSON(await fetch("/api/config"));
+}
+
+export async function updateConfig(patch: GlobalConfigPatch): Promise<GlobalConfig> {
+  return asJSON(
+    await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
 }
 
 export async function getLogs(lines = 200): Promise<LogSnapshot> {

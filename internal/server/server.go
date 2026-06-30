@@ -80,6 +80,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/permissions/", s.handlePermissionRequest)
 	mux.HandleFunc("/api/update", s.handleUpdate)
 	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
+	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.Handle("/", spaHandler())
 
 	s.httpSrv = &http.Server{

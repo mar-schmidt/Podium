@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
@@ -36,9 +37,12 @@ type Options struct {
 // Core coordinates typed persistence, filesystem scaffolding, instruction
 // composition, and adapter calls.
 type Core struct {
-	paths    config.Paths
-	store    *store.Store
-	adapter  adapter.Adapter
+	paths config.Paths
+	store *store.Store
+
+	adapter adapter.Adapter
+	// mu guards global, which the Settings API mutates at runtime via SetGlobal.
+	mu       sync.RWMutex
 	global   config.Global
 	profiles map[string]config.Profile
 	composer InstructionComposer
@@ -143,6 +147,25 @@ func (c *Core) profileDir(provider config.Provider, name string) string {
 type ProfileInfo struct {
 	Name     string          `json:"Name"`
 	Provider config.Provider `json:"Provider"`
+}
+
+// GetGlobal returns a copy of the daemon-wide defaults. The Fallback slice is
+// deep-copied so callers can't mutate Core's state through the alias.
+func (c *Core) GetGlobal() config.Global {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	g := c.global
+	g.Fallback = append([]string(nil), c.global.Fallback...)
+	return g
+}
+
+// SetGlobal replaces the daemon-wide defaults applied to new agents and runs.
+// Persisting to config.yaml is the caller's responsibility (see config.SetGlobal).
+func (c *Core) SetGlobal(g config.Global) {
+	g.Fallback = append([]string(nil), g.Fallback...)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.global = g
 }
 
 // ListProfiles returns the configured profiles (name + provider only), sorted

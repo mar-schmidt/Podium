@@ -71,6 +71,8 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/projects/", s.handleProject)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/", s.handleTask)
+	mux.HandleFunc("/api/skills", s.handleSkills)
+	mux.HandleFunc("/api/skills/relink", s.handleSkillsRelink)
 	mux.HandleFunc("/api/permission-decisions/", s.handlePermissionDecision)
 	mux.HandleFunc("/api/permissions/", s.handlePermissionRequest)
 	mux.HandleFunc("/api/update", s.handleUpdate)

@@ -22,6 +22,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/core"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
+	"github.com/mar-schmidt/Podium/internal/skills"
 	"github.com/mar-schmidt/Podium/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -80,6 +81,21 @@ func run() error {
 		"agents", len(cfg.Agents),
 		"profiles", len(cfg.Profiles),
 	)
+
+	// Refresh the skills union on start so the catalogue and provider exposure
+	// stay current without a manual `podium skills relink` (S12). Best-effort:
+	// a failure here must not stop the daemon from serving.
+	if rep, err := skills.Sync(); err != nil {
+		log.Warn("skills union refresh failed", "error", err)
+	} else {
+		linked := 0
+		for _, a := range rep.Actions {
+			if a.Status == "linked" {
+				linked++
+			}
+		}
+		log.Info("skills union refreshed", "canonical", rep.Canonical, "new_links", linked)
+	}
 
 	db, err := store.Open(paths.DB)
 	if err != nil {

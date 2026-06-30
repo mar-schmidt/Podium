@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/skills"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -50,8 +51,15 @@ func (c *Core) CreateAgent(ctx context.Context, req CreateAgentRequest) (store.A
 		MCPConfig:      req.MCPConfig,
 	}
 	c.applyAgentDefaults(&agent)
-	if err := scaffoldAgent(c.AgentPaths(agent.Name), agent.Name); err != nil {
+	paths := c.AgentPaths(agent.Name)
+	if err := scaffoldAgent(paths, agent.Name); err != nil {
 		return store.Agent{}, err
+	}
+	// Expose the skills union to this agent's Claude turns via a workspace
+	// .claude/skills link (S6/S10). Non-fatal: a missing link must not block
+	// agent creation (e.g. symlinks unavailable on Windows without perms).
+	if err := skills.EnsureClaudeWorkspaceLink(paths.Workspace); err != nil {
+		c.log.Warn("could not link skills into agent workspace", "agent", agent.Name, "error", err)
 	}
 	return c.store.CreateAgent(ctx, agent)
 }

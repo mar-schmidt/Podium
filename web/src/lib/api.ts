@@ -9,6 +9,7 @@ import type {
   ScheduleStatus,
   Session,
   SessionDetail,
+  Skill,
   Task,
   TaskStatus,
   UpdateApplyResult,
@@ -43,6 +44,10 @@ export async function applyUpdate(force = false): Promise<UpdateApplyResult> {
 
 export async function listAgents(): Promise<Agent[]> {
   return (await asJSON<Agent[] | null>(await fetch("/api/agents"))) ?? [];
+}
+
+export async function listSkills(): Promise<Skill[]> {
+  return (await asJSON<Skill[] | null>(await fetch("/api/skills"))) ?? [];
 }
 
 export interface HireRequest {

@@ -170,6 +170,12 @@ func (c *Claude) args(req TurnRequest) ([]string, func(), error) {
 		"--verbose",
 		"--replay-user-messages",
 	}
+	// Expose the skills union: the agent's workspace contains a .claude/skills
+	// link to ~/.agents/skills, and --add-dir brings that scope into Claude's
+	// discovery without touching CLAUDE_CONFIG_DIR (S6/S7).
+	if req.Settings.WorkspaceDir != "" {
+		args = append(args, "--add-dir", req.Settings.WorkspaceDir)
+	}
 	if req.Settings.Model != "" {
 		args = append(args, "--model", req.Settings.Model)
 	}

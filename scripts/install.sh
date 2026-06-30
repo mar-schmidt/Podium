@@ -129,6 +129,21 @@ if [ -n "$PODIUM_HOME_VALUE" ]; then
   export PODIUM_HOME="$PODIUM_HOME_VALUE"
 fi
 
+# Provision the skills topology so the feature works regardless of install order
+# (S24-S26): ensure ~/.agents/skills, ~/.claude, ~/.codex exist and build the
+# union links from whatever providers are present. `podium skills relink` runs
+# Provision+Relink directly (no daemon needed), is idempotent, and never
+# clobbers an existing real skills dir — it just reports what it linked.
+provision_skills() {
+  if [ "$DRY_RUN" = "yes" ]; then
+    say "[dry-run] podium skills relink"
+    return 0
+  fi
+  PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/podium" skills relink || \
+    say "Note: could not build the skills union now — run 'podium skills relink' later."
+}
+provision_skills
+
 install_autostart() {
   podiumd_path="$INSTALL_DIR/podiumd"
   if [ "$os" = "darwin" ]; then

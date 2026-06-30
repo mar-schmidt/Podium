@@ -7,8 +7,9 @@
   import Agents from "./pages/Agents.svelte";
   import Schedules from "./pages/Schedules.svelte";
   import Projects from "./pages/Projects.svelte";
+  import Skills from "./pages/Skills.svelte";
 
-  type Route = "chat" | "roadmap" | "projects" | "agents" | "schedules";
+  type Route = "chat" | "roadmap" | "projects" | "agents" | "schedules" | "skills";
 
   interface ChatTarget {
     sessionId?: string;
@@ -41,6 +42,11 @@
       key: "schedules",
       label: "Schedules",
       icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    },
+    {
+      key: "skills",
+      label: "Skills",
+      icon: '<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
     },
   ];
 
@@ -256,6 +262,8 @@
       <Agents {agents} onHire={openHire} onOpenChat={openChat} onChanged={refreshAgents} />
     {:else if route === "schedules"}
       <Schedules {agents} onOpenChat={openChat} />
+    {:else if route === "skills"}
+      <Skills />
     {/if}
   </div>
 

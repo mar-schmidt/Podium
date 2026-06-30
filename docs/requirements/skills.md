@@ -225,6 +225,17 @@ install order.
   sufficient for v1).
 - **Stance 1** (making the union visible to standalone CLIs too) — deliberately
   not chosen, to preserve clean standalone operation.
+- **Codex cross-provider exposure (S5) — deferred.** Implementation found that the
+  installed Codex (0.142.4) scans only `$CODEX_HOME/skills` with no config key for
+  additional roots. Linking the union into the real `~/.codex/skills` would leak
+  `.claude`-origin skills to standalone Codex (violating S8), and repointing
+  `CODEX_HOME` wholesale would orphan Codex's auth/session/cache state. The clean
+  fix is a Podium-managed "overlay" `CODEX_HOME` (mirror every entry as a symlink
+  except `skills`, which composes the union + `.system` built-ins). This is left as
+  a follow-up. Acceptance checks #1/#2 are therefore met for the **Claude** side
+  (a Codex/agents-origin skill is usable by a Podium Claude turn) but not yet for
+  the **Codex** side. Skill discovery, the catalogue (CLI + dashboard), and Claude
+  exposure all ship in v1.
 
 ---
 

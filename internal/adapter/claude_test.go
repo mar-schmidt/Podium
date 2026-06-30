@@ -62,11 +62,12 @@ func TestClaudeArgsApproveWritesPermissionMCPConfig(t *testing.T) {
 
 func TestClaudeArgsYoloBypassesPermissions(t *testing.T) {
 	c := &Claude{}
+	workspace := t.TempDir()
 	args, cleanup, err := c.args(TurnRequest{
 		Handle: Handle{ID: "claude-session"},
 		Settings: TurnSettings{
 			PermissionMode: config.PermissionYolo,
-			WorkspaceDir:   t.TempDir(),
+			WorkspaceDir:   workspace,
 		},
 	})
 	defer cleanup()
@@ -79,6 +80,11 @@ func TestClaudeArgsYoloBypassesPermissions(t *testing.T) {
 	}
 	if !strings.Contains(got, "--resume claude-session") {
 		t.Fatalf("expected resume handle in args: %q", got)
+	}
+	// Skills exposure: the workspace (holding .claude/skills) is added so Claude
+	// discovers the union (S6).
+	if !strings.Contains(got, "--add-dir "+workspace) {
+		t.Fatalf("expected --add-dir %s in args: %q", workspace, got)
 	}
 }
 

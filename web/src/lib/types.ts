@@ -200,3 +200,26 @@ export interface ServerMessage {
   request?: PermissionRequest;
   error?: string;
 }
+
+// Skills catalogue (read-only). Mirrors internal/skills.Skill. `agents` is the
+// shared union (~/.agents/skills); `claude`/`codex` are the providers' own dirs.
+export type SkillSource = "agents" | "claude" | "codex";
+
+export interface SkillLocation {
+  source: SkillSource;
+  path: string;
+}
+
+export interface SkillContent {
+  source?: SkillSource; // set per-source only when the skill is in conflict
+  body: string;
+}
+
+export interface Skill {
+  name: string;
+  description: string;
+  sources: SkillSource[];
+  conflict: boolean;
+  locations: SkillLocation[];
+  contents: SkillContent[];
+}

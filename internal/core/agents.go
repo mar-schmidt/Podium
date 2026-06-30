@@ -51,6 +51,9 @@ func (c *Core) CreateAgent(ctx context.Context, req CreateAgentRequest) (store.A
 		MCPConfig:      req.MCPConfig,
 	}
 	c.applyAgentDefaults(&agent)
+	if err := c.validateAgentTargets(agent); err != nil {
+		return store.Agent{}, err
+	}
 	paths := c.AgentPaths(agent.Name)
 	if err := scaffoldAgent(paths, agent.Name); err != nil {
 		return store.Agent{}, err
@@ -81,10 +84,46 @@ func (c *Core) UpdateAgent(ctx context.Context, agent store.Agent) (store.Agent,
 		return store.Agent{}, err
 	}
 	c.applyAgentDefaults(&agent)
+	if err := c.validateAgentTargets(agent); err != nil {
+		return store.Agent{}, err
+	}
 	if err := scaffoldAgent(c.AgentPaths(agent.Name), agent.Name); err != nil {
 		return store.Agent{}, err
 	}
 	return c.store.UpdateAgent(ctx, agent)
+}
+
+// validateAgentTargets checks an agent's provider, profile, and fallback chain
+// against the configured profiles — the same referential rules config.Validate
+// enforces at load time, applied here so create/update over the API/UI can't
+// persist an unresolvable target. The agent's own profile must match its
+// provider; fallback entries may be a profile name, a bare provider token, or
+// "default" (and a profile entry may target a different provider).
+func (c *Core) validateAgentTargets(agent store.Agent) error {
+	if agent.Provider != config.ProviderClaude && agent.Provider != config.ProviderCodex {
+		return fmt.Errorf("unknown provider %q (want claude|codex)", agent.Provider)
+	}
+	if agent.Profile != "" {
+		p, ok := c.profiles[agent.Profile]
+		if !ok {
+			return fmt.Errorf("unknown profile %q", agent.Profile)
+		}
+		if p.Provider != agent.Provider {
+			return fmt.Errorf("profile %q belongs to provider %q, not %q", agent.Profile, p.Provider, agent.Provider)
+		}
+	}
+	for _, entry := range agent.Fallback {
+		if entry == "" {
+			return fmt.Errorf("fallback entry is required")
+		}
+		if entry == "default" || entry == string(config.ProviderClaude) || entry == string(config.ProviderCodex) {
+			continue
+		}
+		if _, ok := c.profiles[entry]; !ok {
+			return fmt.Errorf("unknown fallback profile %q", entry)
+		}
+	}
+	return nil
 }
 
 // DeleteAgent removes the durable agent definition. Files on disk are left in

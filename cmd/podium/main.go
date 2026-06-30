@@ -19,6 +19,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/buildinfo"
 	"github.com/mar-schmidt/Podium/internal/client"
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/onboard"
 	"github.com/mar-schmidt/Podium/internal/providercheck"
 	"github.com/mar-schmidt/Podium/internal/updater"
@@ -54,6 +55,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newProjectsCmd(&addr))
 	root.AddCommand(newTasksCmd(&addr))
 	root.AddCommand(newSkillsCmd())
+	root.AddCommand(newLogsCmd())
 	root.AddCommand(newDoctorCmd(&addr))
 	root.AddCommand(newOnboardCmd(&addr))
 	root.AddCommand(newUpdateCmd(&addr))
@@ -376,6 +378,76 @@ func newStatusCmd(addr *string) *cobra.Command {
 	}
 }
 
+func newLogsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "Inspect podiumd logs",
+		Long:  "Inspect daemon-owned logs under $PODIUM_HOME/logs (default ~/.podium/logs).",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:     "path",
+		Short:   "Print the active daemon log path",
+		Example: "  podium logs path",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := activeLogPath()
+			if err != nil {
+				return err
+			}
+			fmt.Println(path)
+			return nil
+		},
+	})
+	cmd.AddCommand(newLogsFollowCmd())
+	return cmd
+}
+
+func newLogsFollowCmd() *cobra.Command {
+	var lines int
+	var noFollow bool
+	cmd := &cobra.Command{
+		Use:     "follow",
+		Aliases: []string{"tail"},
+		Short:   "Print and follow the active daemon log",
+		Example: "  podium logs follow\n  podium logs follow -n 200\n  podium logs follow --no-follow",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := activeLogPath()
+			if err != nil {
+				return err
+			}
+			if noFollow {
+				tail, err := podiumlog.Tail(path, lines)
+				if err != nil {
+					return err
+				}
+				for _, line := range tail {
+					fmt.Println(line)
+				}
+				return nil
+			}
+			for event := range podiumlog.Follow(cmd.Context(), path, lines, 0) {
+				switch event.Type {
+				case "line":
+					fmt.Println(event.Line)
+				case "reopen":
+					fmt.Fprintln(os.Stderr, "[podium logs reopened]")
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVarP(&lines, "lines", "n", 100, "number of recent lines to print first")
+	cmd.Flags().BoolVar(&noFollow, "no-follow", false, "print recent lines and exit")
+	return cmd
+}
+
+func activeLogPath() (string, error) {
+	home, err := config.ResolveHome()
+	if err != nil {
+		return "", err
+	}
+	return podiumlog.Path(config.NewPaths(home).LogsDir), nil
+}
+
 func newAgentsCmd(addr *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agents",
@@ -407,8 +479,9 @@ func newAgentsListCmd(addr *string) *cobra.Command {
 				return err
 			}
 			for _, agent := range agents {
-				fmt.Printf("%s\tprovider=%s\tmodel=%s\teffort=%s\tpermission=%s\n",
-					agent.Name, agent.Provider, agent.Model, agent.Effort, agent.PermissionMode)
+				fmt.Printf("%s\tprovider=%s\tprofile=%s\tmodel=%s\teffort=%s\tpermission=%s\tfallback=%s\n",
+					agent.Name, agent.Provider, agent.Profile, agent.Model, agent.Effort, agent.PermissionMode,
+					formatFallback(agent.Fallback))
 			}
 			return nil
 		},
@@ -416,14 +489,18 @@ func newAgentsListCmd(addr *string) *cobra.Command {
 }
 
 func newAgentsCreateCmd(addr *string) *cobra.Command {
-	var provider, model, effort, permission string
+	var provider, profile, model, effort, permission string
+	var fallback []string
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create an agent",
 		Long: "Creates a durable agent through podiumd and scaffolds its SOUL.md and workspace/.\n" +
-			"The optional per-agent AGENTS.md is left for you to create manually.",
+			"The optional per-agent AGENTS.md is left for you to create manually.\n\n" +
+			"Each --fallback entry is tried in order when the provider rate-limits: a\n" +
+			"profile name, a bare provider (claude|codex, no profile), or \"default\".",
 		Example: "  podium agents create jared\n" +
-			"  podium agents create builder --provider claude --model sonnet --effort medium --permission approve",
+			"  podium agents create builder --provider claude --model sonnet --effort medium --permission approve\n" +
+			"  podium agents create builder --provider claude --profile work --fallback work --fallback codex",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := daemonClient(*addr)
@@ -433,9 +510,11 @@ func newAgentsCreateCmd(addr *string) *cobra.Command {
 			agent, err := c.CreateAgent(cmd.Context(), client.AgentCreateRequest{
 				Name:           args[0],
 				Provider:       config.Provider(provider),
+				Profile:        profile,
 				Model:          model,
 				Effort:         effort,
 				PermissionMode: config.PermissionMode(permission),
+				Fallback:       fallback,
 			})
 			if err != nil {
 				return err
@@ -449,10 +528,20 @@ func newAgentsCreateCmd(addr *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&provider, "provider", "", "provider: claude or codex (default from config)")
+	cmd.Flags().StringVar(&profile, "profile", "", "auth profile name (must exist and match provider)")
 	cmd.Flags().StringVar(&model, "model", "", "default model")
 	cmd.Flags().StringVar(&effort, "effort", "", "default effort: low, medium, high, xhigh, max")
 	cmd.Flags().StringVar(&permission, "permission", "", "permission mode: approve or yolo")
+	cmd.Flags().StringArrayVar(&fallback, "fallback", nil, "ordered fallback target (repeatable): profile name, claude|codex, or default")
 	return cmd
+}
+
+// formatFallback renders an agent's fallback chain for list output.
+func formatFallback(chain []string) string {
+	if len(chain) == 0 {
+		return "-"
+	}
+	return strings.Join(chain, ",")
 }
 
 func newAgentsDeleteCmd(addr *string) *cobra.Command {

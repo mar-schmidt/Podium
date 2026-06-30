@@ -79,8 +79,11 @@ only the auth state that stays isolated.)
 
 ## Structured run logging (R11.5)
 
-`podiumd` logs structured records (Go `slog`, text handler, to stderr) for both
-**interactive** and **scheduled** runs, so every agent run is auditable.
+`podiumd` logs structured records (Go `slog`, text handler) for both
+**interactive** and **scheduled** runs, so every agent run is auditable. Logs are
+written to stderr and `$PODIUM_HOME/logs/podiumd.log` (default
+`~/.podium/logs/podiumd.log`), rotate daily, and keep `logging.retention_days`
+calendar days (default 7).
 
 Interactive turns (`internal/core`, tagged `event=run`):
 
@@ -99,6 +102,11 @@ linked to the durable session and run record.
 Log records intentionally carry **identifiers and outcomes, not payloads** — no
 message bodies, instructions, or MCP config — consistent with the redaction rules
 above.
+
+The CLI can inspect logs with `podium logs path` and `podium logs follow`. The
+web UI reads the same log through loopback-only `/api/logs` endpoints; these are
+not available to non-loopback clients because provider diagnostics may include
+sensitive local troubleshooting details even after redaction.
 
 ## Cross-platform process control (R10.1–R10.4)
 

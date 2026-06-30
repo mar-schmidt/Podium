@@ -101,10 +101,9 @@ func renderPlist(opts Options, home string) []byte {
   <key>ProgramArguments</key><array><string>%s</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-%s  <key>StandardOutPath</key><string>%s/Library/Logs/podiumd.log</string>
-  <key>StandardErrorPath</key><string>%s/Library/Logs/podiumd.err.log</string>
+%s
 </dict></plist>
-`, opts.PodiumdPath, env, home, home)
+`, opts.PodiumdPath, env)
 	return []byte(plist)
 }
 

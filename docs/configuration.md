@@ -59,3 +59,13 @@ present, after archiving its sessions into the preserved agent workspace.
 | --- | --- | --- |
 | `bind` | `127.0.0.1` | Web UI / API bind address (keep on loopback unless intentionally exposing). |
 | `port` | `8787` | Web UI / API port. |
+
+## `logging`
+
+Daemon-owned structured logs live under `$PODIUM_HOME/logs` (default
+`~/.podium/logs`).
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `level` | `info` | Minimum log level: `debug`, `info`, `warn`, or `error`. |
+| `retention_days` | `7` | Number of calendar days of daemon logs to keep. |

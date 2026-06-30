@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/config"
 	podiumexec "github.com/mar-schmidt/Podium/internal/exec"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -27,6 +29,7 @@ type ClaudeOptions struct {
 	DaemonAddr        string
 	PermissionTimeout time.Duration
 	MCPCommand        string
+	Logger            *slog.Logger
 }
 
 // Claude drives Claude Code as a per-turn process.
@@ -35,6 +38,7 @@ type Claude struct {
 	daemonAddr        string
 	permissionTimeout time.Duration
 	mcpCommand        string
+	log               *slog.Logger
 }
 
 // NewClaude discovers the Claude Code CLI and returns an adapter.
@@ -58,6 +62,7 @@ func NewClaude(opts ClaudeOptions) (*Claude, error) {
 		daemonAddr:        opts.DaemonAddr,
 		permissionTimeout: timeout,
 		mcpCommand:        mcpCommand,
+		log:               loggerOrDefault(opts.Logger),
 	}, nil
 }
 
@@ -85,6 +90,7 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 	}
 	args, cleanup, err := c.args(req)
 	if err != nil {
+		c.providerLog(req).Warn("provider turn setup failed", "stage", "args", "error", err)
 		return nil, err
 	}
 	cmd := podiumexec.Command(ctx, c.bin, args...)
@@ -94,26 +100,32 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cleanup()
+		c.providerLog(req).Warn("provider process pipe failed", "stage", "stdin", "error", err)
 		return nil, fmt.Errorf("claude stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cleanup()
+		c.providerLog(req).Warn("provider process pipe failed", "stage", "stdout", "error", err)
 		return nil, fmt.Errorf("claude stdout: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		cleanup()
+		c.providerLog(req).Warn("provider process pipe failed", "stage", "stderr", "error", err)
 		return nil, fmt.Errorf("claude stderr: %w", err)
 	}
+	c.providerLog(req).Debug("provider process starting", "stage", "start", "command", c.bin, "resuming", req.Handle.ID != "")
 	if err := cmd.Start(); err != nil {
 		cleanup()
+		c.providerLog(req).Warn("provider process start failed", "stage", "start", "error", err)
 		return nil, fmt.Errorf("start claude: %w", err)
 	}
 
 	if err := writeClaudeInput(stdin, req.Message, req.History, req.Handle.ID != ""); err != nil {
 		_ = podiumexec.Kill(cmd)
 		cleanup()
+		c.providerLog(req).Warn("provider stdin write failed", "stage", "write_input", "error", err)
 		return nil, err
 	}
 
@@ -132,15 +144,18 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 			return
 		}
 		if parseErr != nil {
+			c.providerLog(req).Warn("provider stream parse failed", "stage", "parse_stdout", "error", podiumlog.Redact(parseErr.Error()))
 			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: fmt.Sprintf("claude stream error: %v", parseErr)})
 			return
 		}
 		if stderrResult.err != nil {
+			c.providerLog(req).Warn("provider stderr read failed", "stage", "read_stderr", "error", stderrResult.err, "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
 			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: fmt.Sprintf("claude stderr error: %v", stderrResult.err)})
 			return
 		}
 		if waitErr != nil {
 			if claudeRateLimitedText(stderrResult.text) {
+				c.providerLog(req).Warn("provider rate limited", "stage", "wait", "rate_limited", true, "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
 				sendAdapterEvent(ctx, out, Event{Kind: EventRateLimited, Content: stderrResult.text})
 				return
 			}
@@ -148,12 +163,22 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 			if stderrResult.text != "" {
 				message += ": " + stderrResult.text
 			}
+			c.providerLog(req).Warn("provider process exited with error", "stage", "wait", "exit_error", waitErr, "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
 			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: message})
 			return
 		}
 		sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
 	}()
 	return out, nil
+}
+
+func (c *Claude) providerLog(req TurnRequest) *slog.Logger {
+	return c.log.With(
+		"provider", string(config.ProviderClaude),
+		"profile", req.Settings.Profile,
+		"session", req.SessionID,
+		"agent", req.Settings.AgentName,
+	)
 }
 
 // Teardown has no persistent Claude process to stop.

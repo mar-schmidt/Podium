@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
@@ -129,4 +130,23 @@ func (c *Core) profileDir(provider config.Provider, name string) string {
 	default:
 		return ""
 	}
+}
+
+// ProfileInfo is the credential-free projection of a configured profile, safe
+// to expose over the API: it carries only the name and its provider, never the
+// underlying config/home directory.
+type ProfileInfo struct {
+	Name     string          `json:"Name"`
+	Provider config.Provider `json:"Provider"`
+}
+
+// ListProfiles returns the configured profiles (name + provider only), sorted
+// by name for a stable response.
+func (c *Core) ListProfiles() []ProfileInfo {
+	out := make([]ProfileInfo, 0, len(c.profiles))
+	for _, p := range c.profiles {
+		out = append(out, ProfileInfo{Name: p.Name, Provider: p.Provider})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }

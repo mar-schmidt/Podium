@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -35,6 +36,7 @@ type Config struct {
 	Profiles []Profile `yaml:"profiles"`
 	Agents   []Agent   `yaml:"agents"`
 	Server   Server    `yaml:"server"`
+	Logging  Logging   `yaml:"logging"`
 }
 
 // Global holds defaults applied across agents unless overridden per agent.
@@ -77,6 +79,12 @@ type Server struct {
 	Port int    `yaml:"port"`
 }
 
+// Logging configures daemon-owned structured log files under Paths.LogsDir.
+type Logging struct {
+	RetentionDays int    `yaml:"retention_days"`
+	Level         string `yaml:"level"`
+}
+
 // Load reads and validates config.yaml at the given path. The file is expected
 // to exist (Scaffold writes it on first run); a missing file is an error so the
 // daemon fails loudly rather than running on invisible defaults.
@@ -88,6 +96,9 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := rejectExplicitInvalidLogging(raw); err != nil {
+		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
@@ -117,6 +128,12 @@ func (c *Config) applyDefaults() {
 	if c.Server.Port == 0 {
 		c.Server.Port = 8787
 	}
+	if c.Logging.RetentionDays == 0 {
+		c.Logging.RetentionDays = 7
+	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
 }
 
 // Validate checks structural and referential integrity: known enums, unique
@@ -137,7 +154,7 @@ func (c *Config) Validate() error {
 		if p.Name == "" {
 			return fmt.Errorf("profiles[%d]: name is required", i)
 		}
-		if p.Name == "default" {
+		if p.Name == "default" || p.Name == string(ProviderClaude) || p.Name == string(ProviderCodex) {
 			return fmt.Errorf("profiles[%d]: profile name %q is reserved", i, p.Name)
 		}
 		if _, dup := profileNames[p.Name]; dup {
@@ -206,6 +223,46 @@ func (c *Config) Validate() error {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port out of range: %d", c.Server.Port)
 	}
+	if c.Logging.RetentionDays < 0 {
+		return fmt.Errorf("logging.retention_days must be greater than 0")
+	}
+	if level := strings.ToLower(strings.TrimSpace(c.Logging.Level)); level != "" {
+		switch level {
+		case "debug", "info", "warn", "warning", "error":
+		default:
+			return fmt.Errorf("logging.level %q is invalid (want debug|info|warn|error)", c.Logging.Level)
+		}
+	}
+	return nil
+}
+
+func rejectExplicitInvalidLogging(raw []byte) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return err
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	doc := root.Content[0]
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		if doc.Content[i].Value != "logging" || doc.Content[i+1].Kind != yaml.MappingNode {
+			continue
+		}
+		logging := doc.Content[i+1]
+		for j := 0; j+1 < len(logging.Content); j += 2 {
+			if logging.Content[j].Value != "retention_days" {
+				continue
+			}
+			var days int
+			if err := logging.Content[j+1].Decode(&days); err != nil {
+				return fmt.Errorf("logging.retention_days: %w", err)
+			}
+			if days <= 0 {
+				return fmt.Errorf("logging.retention_days must be greater than 0")
+			}
+		}
+	}
 	return nil
 }
 
@@ -231,7 +288,9 @@ func validateFallbackEntry(entry string, profileNames map[string]Provider) error
 	if entry == "" {
 		return fmt.Errorf("entry is required")
 	}
-	if entry == "default" {
+	// "default" = agent's own provider; a bare provider token = that provider
+	// with no profile. Both resolve without referencing a named profile.
+	if entry == "default" || entry == string(ProviderClaude) || entry == string(ProviderCodex) {
 		return nil
 	}
 	if _, ok := profileNames[entry]; !ok {

@@ -213,6 +213,9 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				runLog.Info("turn fallback",
 					"from", targetLabel(current.Provider, current.Profile),
 					"to", targetLabel(next.Provider, next.Profile),
+					"fallback_from", targetLabel(current.Provider, current.Profile),
+					"fallback_to", targetLabel(next.Provider, next.Profile),
+					"rate_limited", true,
 				)
 				current = next
 				continue

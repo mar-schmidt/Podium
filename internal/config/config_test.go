@@ -24,6 +24,15 @@ func TestLoadDefaultConfigIsValid(t *testing.T) {
 	if cfg.Global.PermissionMode != PermissionApprove {
 		t.Errorf("default permission mode = %q, want approve", cfg.Global.PermissionMode)
 	}
+	if cfg.Logging.RetentionDays != 7 {
+		t.Errorf("default log retention = %d, want 7", cfg.Logging.RetentionDays)
+	}
+	if cfg.Logging.Level != "info" {
+		t.Errorf("default log level = %q, want info", cfg.Logging.Level)
+	}
+	if _, err := os.Stat(p.LogsDir); err != nil {
+		t.Errorf("logs dir not scaffolded: %v", err)
+	}
 }
 
 func TestValidateRejectsUnknownProfileReference(t *testing.T) {
@@ -61,6 +70,34 @@ func TestValidateChecksFallbackEntries(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsBareProviderFallback(t *testing.T) {
+	// A fallback entry may be a bare provider token (provider with no profile),
+	// not only "default" or a named profile.
+	c := &Config{
+		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+		Agents: []Agent{{Name: "a", Provider: ProviderClaude, Fallback: []string{"codex", "claude"}}},
+		Server: Server{Bind: "127.0.0.1", Port: 8787},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("expected bare provider fallback to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsReservedProfileName(t *testing.T) {
+	// Provider tokens are reserved profile names so fallback entries stay
+	// unambiguous.
+	for _, name := range []string{"claude", "codex"} {
+		c := &Config{
+			Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+			Profiles: []Profile{{Name: name, Provider: ProviderClaude, ConfigDir: "/tmp/claude"}},
+			Server:   Server{Bind: "127.0.0.1", Port: 8787},
+		}
+		if err := c.Validate(); err == nil {
+			t.Fatalf("expected reserved profile name %q to be rejected, got nil", name)
+		}
+	}
+}
+
 func TestValidateRejectsDuplicateAgentNames(t *testing.T) {
 	c := &Config{
 		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove},
@@ -69,6 +106,37 @@ func TestValidateRejectsDuplicateAgentNames(t *testing.T) {
 	}
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected error for duplicate agent names, got nil")
+	}
+}
+
+func TestValidateChecksLoggingConfig(t *testing.T) {
+	c := &Config{
+		Global:  Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+		Server:  Server{Bind: "127.0.0.1", Port: 8787},
+		Logging: Logging{RetentionDays: -1, Level: "info"},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected invalid retention to be rejected")
+	}
+	c.Logging.RetentionDays = 7
+	c.Logging.Level = "verbose"
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected invalid log level to be rejected")
+	}
+	c.Logging.Level = "WARN"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("expected uppercase log level to validate, got %v", err)
+	}
+}
+
+func TestLoadRejectsExplicitZeroLogRetention(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte("global:\n  provider: claude\n  permission_mode: approve\nlogging:\n  retention_days: 0\nserver:\n  bind: 127.0.0.1\n  port: 8787\n")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected explicit zero retention to be rejected")
 	}
 }
 

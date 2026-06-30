@@ -12,12 +12,13 @@ func TestRenderPlistContainsRequiredKeys(t *testing.T) {
 		"<string>/usr/local/bin/podiumd</string>",
 		"<key>RunAtLoad</key><true/>",
 		"<key>KeepAlive</key><true/>",
-		"/Users/test/Library/Logs/podiumd.log",
-		"/Users/test/Library/Logs/podiumd.err.log",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("plist missing %q\n---\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "StandardOutPath") || strings.Contains(out, "StandardErrorPath") {
+		t.Errorf("plist should let podiumd own $PODIUM_HOME/logs:\n%s", out)
 	}
 	if strings.Contains(out, "EnvironmentVariables") {
 		t.Errorf("plist should omit EnvironmentVariables when PodiumHome is empty:\n%s", out)

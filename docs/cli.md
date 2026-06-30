@@ -99,6 +99,32 @@ The command never reads credentials. It locates `claude` and `codex`, prints
 versions when available, and gives install/login hints when a provider is not
 ready.
 
+### `podium logs path`
+
+Print the active daemon log path.
+
+```
+podium logs path
+```
+
+Logs live under `$PODIUM_HOME/logs` (default `~/.podium/logs`).
+
+### `podium logs follow`
+
+Print recent daemon log lines and keep following the active log across daily
+rotation.
+
+```
+podium logs follow
+podium logs follow -n 200
+podium logs follow --no-follow
+```
+
+| Flag | Description |
+| --- | --- |
+| `--lines`, `-n` | Number of recent lines to print first (default 100). |
+| `--no-follow` | Print recent lines and exit. |
+
 ### `podium update check`
 
 Check GitHub Releases for a newer Podium build. This works without a running

@@ -5,6 +5,9 @@ import type {
   Agent,
   AgentDetail,
   Health,
+  LogSnapshot,
+  LogStreamEvent,
+  ProfileInfo,
   Project,
   ScheduleStatus,
   Session,
@@ -50,6 +53,41 @@ export async function listSkills(): Promise<Skill[]> {
   return (await asJSON<Skill[] | null>(await fetch("/api/skills"))) ?? [];
 }
 
+export async function listProfiles(): Promise<ProfileInfo[]> {
+  return (await asJSON<ProfileInfo[] | null>(await fetch("/api/profiles"))) ?? [];
+}
+
+export async function getLogs(lines = 200): Promise<LogSnapshot> {
+  return asJSON(await fetch(`/api/logs?lines=${encodeURIComponent(String(lines))}`));
+}
+
+export async function followLogs(lines: number, signal: AbortSignal, onEvent: (event: LogStreamEvent) => void): Promise<void> {
+  const res = await fetch(`/api/logs/follow?lines=${encodeURIComponent(String(lines))}`, { signal });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `${res.status} ${res.statusText}`);
+  }
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line) continue;
+      onEvent(JSON.parse(line) as LogStreamEvent);
+    }
+  }
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer) as LogStreamEvent);
+  }
+}
+
 export interface HireRequest {
   name: string;
   provider: string;
@@ -78,6 +116,7 @@ export interface AgentUpdate {
   model?: string;
   effort?: string;
   permission_mode?: string;
+  fallback?: string[];
   soul?: string;
 }
 

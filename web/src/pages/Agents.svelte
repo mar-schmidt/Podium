@@ -1,7 +1,11 @@
 <script lang="ts">
-  import { deleteAgent, getAgent, updateAgent } from "../lib/api";
+  import { deleteAgent, getAgent, listProfiles, updateAgent } from "../lib/api";
   import { agentGradient, avatarStyle, initial, modeChip, providerChip } from "../lib/theme";
-  import type { Agent } from "../lib/types";
+  import type { Agent, ProfileInfo } from "../lib/types";
+
+  // A fallback chain row: a provider plus an optional profile. Encodes to a
+  // single token (profile name when set, otherwise the bare provider).
+  type FbRow = { provider: string; profile: string };
 
   interface ChatTarget {
     sessionId?: string;
@@ -32,6 +36,8 @@
   let edProfile = $state("");
   let edPermission = $state("approve");
   let edSoul = $state("");
+  let edFallback = $state<FbRow[]>([]);
+  let profiles = $state<ProfileInfo[]>([]);
   let saving = $state(false);
   let editError = $state<string | null>(null);
 
@@ -50,6 +56,53 @@
     return `${a.Model || a.Provider} · ${a.Effort || "medium"} · profile: ${a.Profile || "default"}`;
   }
 
+  // Decode a stored fallback chain into editable rows. A profile name resolves
+  // to its provider; a bare provider token (or legacy "default") becomes a
+  // profile-less row pinned to that provider.
+  function decodeFallback(tokens: string[], agentProvider: string): FbRow[] {
+    return (tokens ?? []).map((tok) => {
+      if (tok === "claude" || tok === "codex") return { provider: tok, profile: "" };
+      if (tok === "default") return { provider: agentProvider, profile: "" };
+      const p = profiles.find((pr) => pr.Name === tok);
+      return { provider: p ? p.Provider : agentProvider, profile: tok };
+    });
+  }
+
+  function encodeFallback(rows: FbRow[]): string[] {
+    return rows.map((r) => r.profile || r.provider);
+  }
+
+  // Profiles selectable for a row's provider, plus the row's current value if
+  // it isn't in that set (so stale/unknown profiles survive a round-trip).
+  function profileOptions(provider: string, current: string): string[] {
+    const names = profiles.filter((p) => p.Provider === provider).map((p) => p.Name);
+    if (current && !names.includes(current)) names.push(current);
+    return names;
+  }
+
+  function setRowProvider(i: number, provider: string) {
+    const row = edFallback[i];
+    // Drop the profile if it doesn't belong to the newly chosen provider.
+    const valid = profiles.some((p) => p.Name === row.profile && p.Provider === provider);
+    edFallback[i] = { provider, profile: valid ? row.profile : "" };
+  }
+
+  function addRow() {
+    edFallback = [...edFallback, { provider: edProvider, profile: "" }];
+  }
+
+  function removeRow(i: number) {
+    edFallback = edFallback.filter((_, idx) => idx !== i);
+  }
+
+  function moveRow(i: number, delta: number) {
+    const j = i + delta;
+    if (j < 0 || j >= edFallback.length) return;
+    const next = [...edFallback];
+    [next[i], next[j]] = [next[j], next[i]];
+    edFallback = next;
+  }
+
   async function openEdit(a: Agent) {
     editError = null;
     edName = a.Name;
@@ -59,7 +112,15 @@
     edProfile = a.Profile;
     edPermission = a.PermissionMode;
     edSoul = "";
+    edFallback = decodeFallback(a.Fallback, a.Provider);
     editOpen = true;
+    try {
+      profiles = await listProfiles();
+      // Re-decode now that provider info is available for profile tokens.
+      edFallback = decodeFallback(a.Fallback, a.Provider);
+    } catch {
+      // Profiles are optional; dropdowns just stay empty.
+    }
     try {
       const detail = await getAgent(a.Name);
       edSoul = detail.Soul;
@@ -78,6 +139,7 @@
         effort: edEffort,
         profile: edProfile,
         permission_mode: edPermission,
+        fallback: encodeFallback(edFallback),
         soul: edSoul,
       });
       // Reflect the saved engine fields in the detail view.
@@ -88,6 +150,7 @@
         Model: detail.Model,
         Effort: detail.Effort,
         PermissionMode: detail.PermissionMode,
+        Fallback: detail.Fallback,
       };
       editOpen = false;
       onChanged();
@@ -206,6 +269,7 @@
         <div class="ad-spec"><span>Model</span><span class="mono">{a.Model || "provider default"}</span></div>
         <div class="ad-spec"><span>Effort</span><span class="mono">{a.Effort || "medium"}</span></div>
         <div class="ad-spec"><span>Profile</span><span class="mono">{a.Profile || "default"}</span></div>
+        <div class="ad-spec"><span>Fallback</span><span class="mono">{a.Fallback && a.Fallback.length ? a.Fallback.join(" → ") : "none"}</span></div>
         <div class="ad-spec"><span>Permission</span><span class="mono">{a.PermissionMode}</span></div>
         <div class="ad-spec"><span>Workspace</span><span class="mono">~/.podium/agents/{a.Name}</span></div>
       </div>
@@ -250,6 +314,28 @@
           <span class="ed-key">profile</span>
           <input class="field-input" style="flex:1" bind:value={edProfile} placeholder="auth profile (optional)" />
         </div>
+
+        <div class="label-mono" style="margin:18px 0 4px">fallback chain</div>
+        <div class="fb-hint">Tried in order when the provider rate-limits. Pick a provider; add a profile if one exists.</div>
+        {#each edFallback as row, i (i)}
+          <div class="fb-row">
+            <div class="fb-provs">
+              <button style={chip(row.provider === "claude")} onclick={() => setRowProvider(i, "claude")}>claude</button>
+              <button style={chip(row.provider === "codex")} onclick={() => setRowProvider(i, "codex")}>codex</button>
+            </div>
+            <select class="fb-select" bind:value={row.profile}>
+              <option value="">no profile</option>
+              {#each profileOptions(row.provider, row.profile) as p}
+                <option value={p}>{p}</option>
+              {/each}
+            </select>
+            <button class="fb-move" title="Move up" disabled={i === 0} onclick={() => moveRow(i, -1)} aria-label="Move up">↑</button>
+            <button class="fb-move" title="Move down" disabled={i === edFallback.length - 1} onclick={() => moveRow(i, 1)} aria-label="Move down">↓</button>
+            <button class="fb-x" title="Remove" onclick={() => removeRow(i)} aria-label="Remove">×</button>
+          </div>
+        {/each}
+        <button class="fb-add" onclick={addRow}>+ Add fallback</button>
+
         <div class="ed-row">
           <span class="ed-key">permission</span>
           <div class="ed-chips">
@@ -482,6 +568,72 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+  }
+
+  .fb-hint {
+    font: 400 11.5px "Hanken Grotesk";
+    color: #9a8e80;
+    margin-bottom: 10px;
+  }
+
+  .fb-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 8px;
+  }
+
+  .fb-provs {
+    display: flex;
+    gap: 6px;
+    flex: none;
+  }
+
+  .fb-select {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 10px;
+    border: 1px solid var(--field-line);
+    border-radius: 9px;
+    background: #fff;
+    color: var(--ink);
+    font: 500 12px "JetBrains Mono", monospace;
+    cursor: pointer;
+  }
+
+  .fb-move,
+  .fb-x {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--field-line);
+    border-radius: 9px;
+    background: #fff;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .fb-x {
+    border-color: #e7c3b5;
+    color: #a23e22;
+  }
+
+  .fb-move:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .fb-add {
+    margin-top: 2px;
+    padding: 8px 14px;
+    border: 1.5px dashed #decfbe;
+    border-radius: 10px;
+    background: rgba(255, 253, 251, 0.5);
+    color: #a8825e;
+    font: 600 12.5px "Hanken Grotesk";
+    cursor: pointer;
   }
 
   .ed-cancel {

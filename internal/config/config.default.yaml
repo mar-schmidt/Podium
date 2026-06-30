@@ -18,10 +18,11 @@ global:
   permission_mode: approve    # approve (relay each side-effect to you) | yolo (auto-approve, whole-machine)
   permission_timeout: 2m       # approve-mode prompt timeout before auto-deny (Go duration, e.g. 30s, 2m)
   # Optional global fallback chain used when an agent declares none of its own.
-  # Each entry is a profile name (or "default" for the CLI's global login).
+  # Each entry is a profile name, a bare provider ("claude"/"codex", no profile),
+  # or "default" (the agent's own provider with the CLI's global login).
   # On rate limit, Podium steps to the next target and replays history. A chain
   # may mix providers (Claude -> Codex). See docs for details.
-  fallback: []                # e.g. [work, personal, codex-main]
+  fallback: []                # e.g. [work, personal, codex-main, codex]
 
 # ---------------------------------------------------------------------------
 # profiles: OPTIONAL named auth contexts, each 1:1 with one underlying account.
@@ -54,7 +55,8 @@ agents: []
   #   model: ""
   #   effort: medium
   #   permission_mode: approve    # per-agent override of the global default
-  #   fallback: [work, personal, codex-main]   # ordered; rate-limit -> next target
+  #   fallback: [work, personal, codex]   # ordered; rate-limit -> next target
+  #                                       # entries: profile name | claude | codex | default
   #   # mcp_config: ./config/jared-mcp.json     # opt-in per-agent MCP, additive
 
 # ---------------------------------------------------------------------------
@@ -64,3 +66,11 @@ agents: []
 server:
   bind: 127.0.0.1
   port: 8787
+
+# ---------------------------------------------------------------------------
+# logging: daemon-owned structured logs. Logs are written under
+# ~/.podium/logs/ by default, or $PODIUM_HOME/logs when PODIUM_HOME is set.
+# ---------------------------------------------------------------------------
+logging:
+  level: info                 # debug | info | warn | error
+  retention_days: 7           # keep this many calendar days of daemon logs

@@ -6,6 +6,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/config"
@@ -135,4 +136,11 @@ type PermissionDecision struct {
 // PermissionRelay receives permission requests and waits for user decisions.
 type PermissionRelay interface {
 	RequestPermission(context.Context, PermissionRequest, time.Duration) (PermissionDecision, error)
+}
+
+func loggerOrDefault(log *slog.Logger) *slog.Logger {
+	if log != nil {
+		return log
+	}
+	return slog.Default()
 }

@@ -161,8 +161,6 @@ install_autostart() {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 $(if [ -n "${PODIUM_HOME_VALUE}" ]; then printf '  <key>EnvironmentVariables</key><dict><key>PODIUM_HOME</key><string>%s</string></dict>\n' "$PODIUM_HOME_VALUE"; fi)
-  <key>StandardOutPath</key><string>${HOME}/Library/Logs/podiumd.log</string>
-  <key>StandardErrorPath</key><string>${HOME}/Library/Logs/podiumd.err.log</string>
 </dict></plist>
 PLIST
       launchctl unload "$plist" >/dev/null 2>&1 || true

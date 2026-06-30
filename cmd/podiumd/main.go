@@ -20,6 +20,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/buildinfo"
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
 	"github.com/mar-schmidt/Podium/internal/skills"
@@ -59,27 +60,40 @@ func run() error {
 		return fmt.Errorf("resolve storage root: %w", err)
 	}
 	paths := config.NewPaths(home)
-	log.Info("storage root", "home", paths.Home)
 
 	res, err := config.Scaffold(paths)
 	if err != nil {
 		return fmt.Errorf("scaffold: %w", err)
-	}
-	if res.CreatedHome {
-		log.Info("initialized fresh storage root", "home", paths.Home)
-	}
-	if res.CreatedConfig {
-		log.Info("wrote default config", "path", paths.ConfigYAML)
 	}
 
 	cfg, err := config.Load(paths.ConfigYAML)
 	if err != nil {
 		return err
 	}
+	fileLog, closer, err := podiumlog.Open(podiumlog.Options{
+		Dir:           paths.LogsDir,
+		RetentionDays: cfg.Logging.RetentionDays,
+		Level:         cfg.Logging.Level,
+		Stderr:        os.Stderr,
+	})
+	if err != nil {
+		return fmt.Errorf("open daemon log: %w", err)
+	}
+	defer closer.Close()
+	log = fileLog
+	log.Info("storage root", "home", paths.Home)
+	if res.CreatedHome {
+		log.Info("initialized fresh storage root", "home", paths.Home)
+	}
+	if res.CreatedConfig {
+		log.Info("wrote default config", "path", paths.ConfigYAML)
+	}
 	log.Info("config loaded",
 		"provider", cfg.Global.Provider,
 		"agents", len(cfg.Agents),
 		"profiles", len(cfg.Profiles),
+		"log_dir", paths.LogsDir,
+		"log_retention_days", cfg.Logging.RetentionDays,
 	)
 
 	// Refresh the skills union on start so the catalogue and provider exposure
@@ -113,6 +127,7 @@ func run() error {
 	claude, err := adapter.NewClaude(adapter.ClaudeOptions{
 		DaemonAddr:        addr,
 		PermissionTimeout: permissionTimeout,
+		Logger:            log,
 	})
 	if err != nil {
 		log.Warn("claude adapter unavailable", "error", err)
@@ -122,6 +137,7 @@ func run() error {
 	}
 	codex, err := adapter.NewCodex(adapter.CodexOptions{
 		PermissionTimeout: permissionTimeout,
+		Logger:            log,
 	})
 	if err != nil {
 		log.Warn("codex adapter unavailable", "error", err)

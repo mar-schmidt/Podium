@@ -23,6 +23,7 @@ type agentCreateRequest struct {
 	Model          string                `json:"model,omitempty"`
 	Effort         string                `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	Fallback       []string              `json:"fallback,omitempty"`
 }
 
 type sessionCreateRequest struct {
@@ -69,11 +70,27 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			Model:          req.Model,
 			Effort:         req.Effort,
 			PermissionMode: req.PermissionMode,
+			Fallback:       req.Fallback,
 		})
 		writeJSON(w, agent, err)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleProfiles serves GET /api/profiles: the configured auth profiles as
+// name + provider pairs (no directories), so the web UI can offer them as
+// fallback targets.
+func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
+	if s.core == nil {
+		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, s.core.ListProfiles(), nil)
 }
 
 // agentDetail bundles an agent's durable defaults with its editable SOUL.md
@@ -93,6 +110,7 @@ type agentUpdateRequest struct {
 	Model          *string               `json:"model,omitempty"`
 	Effort         *string               `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	Fallback       *[]string             `json:"fallback,omitempty"`
 	Soul           *string               `json:"soul,omitempty"`
 }
 
@@ -149,6 +167,9 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.PermissionMode != "" {
 			agent.PermissionMode = req.PermissionMode
+		}
+		if req.Fallback != nil {
+			agent.Fallback = *req.Fallback
 		}
 		updated, err := s.core.UpdateAgent(r.Context(), agent)
 		if err != nil {

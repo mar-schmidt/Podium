@@ -83,6 +83,10 @@ func (c *Core) resolveFallbackTarget(agent store.Agent, entry string) (config.Pr
 	if entry == "default" {
 		return agent.Provider, "", nil
 	}
+	// A bare provider token falls back to that provider with no profile env.
+	if entry == string(config.ProviderClaude) || entry == string(config.ProviderCodex) {
+		return config.Provider(entry), "", nil
+	}
 	profile, ok := c.profiles[entry]
 	if !ok {
 		return "", "", fmt.Errorf("unknown fallback profile %q", entry)

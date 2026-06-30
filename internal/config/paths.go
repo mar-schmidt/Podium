@@ -28,6 +28,7 @@ type Paths struct {
 	ProjectsYAML string // projects/projects.yaml
 	SchedulesDir string // schedules/
 	ProfilesDir  string // profiles/
+	LogsDir      string // logs/
 }
 
 // ResolveHome returns the absolute storage root. Precedence:
@@ -64,6 +65,7 @@ func NewPaths(home string) Paths {
 		ProjectsYAML: filepath.Join(home, "projects", "projects.yaml"),
 		SchedulesDir: filepath.Join(home, "schedules"),
 		ProfilesDir:  filepath.Join(home, "profiles"),
+		LogsDir:      filepath.Join(home, "logs"),
 	}
 }
 

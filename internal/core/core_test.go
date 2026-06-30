@@ -328,6 +328,60 @@ func TestRateLimitFallbackSwitchesProviderWithReplayHistory(t *testing.T) {
 	}
 }
 
+func TestCreateAgentValidatesFallbackTargets(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	c, err := New(Options{
+		Paths:    paths,
+		Store:    db,
+		Adapter:  adapter.NewFake(),
+		Profiles: []config.Profile{{Name: "work", Provider: config.ProviderClaude, ConfigDir: "/tmp/claude-work"}},
+	})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+
+	// A profile name plus a bare provider token are both valid fallback entries.
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{
+		Name:     "ok",
+		Provider: config.ProviderClaude,
+		Fallback: []string{"work", "codex"},
+	}); err != nil {
+		t.Fatalf("expected valid fallback chain to be accepted, got %v", err)
+	}
+
+	// An unknown fallback profile must be rejected at create time, not deferred
+	// to a rate-limit event.
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{
+		Name:     "bad",
+		Provider: config.ProviderClaude,
+		Fallback: []string{"ghost"},
+	}); err == nil {
+		t.Fatal("expected unknown fallback profile to be rejected, got nil")
+	}
+
+	// The agent's own profile must match its provider.
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{
+		Name:     "mismatch",
+		Provider: config.ProviderCodex,
+		Profile:  "work",
+	}); err == nil {
+		t.Fatal("expected provider/profile mismatch to be rejected, got nil")
+	}
+}
+
 func TestReplayHistoryUsesRollingSummaryAndRecentMessages(t *testing.T) {
 	history := make([]store.Message, 20)
 	for i := range history {

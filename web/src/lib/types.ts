@@ -30,6 +30,16 @@ export interface UpdateApplyResult {
   message: string;
 }
 
+export interface LogSnapshot {
+  path: string;
+  lines: string[];
+}
+
+export interface LogStreamEvent {
+  type: "line" | "reopen";
+  line?: string;
+}
+
 export type Provider = "claude" | "codex";
 export type PermissionMode = "approve" | "yolo";
 export type SessionOrigin = "web" | "cli" | "onboarding" | "schedule" | "roadmap";
@@ -42,6 +52,16 @@ export interface Agent {
   Model: string;
   Effort: string;
   PermissionMode: PermissionMode;
+  // Ordered fallback chain. Each entry is a profile name, a bare provider
+  // ("claude"/"codex", no profile), or "default" (the agent's own provider).
+  Fallback: string[];
+}
+
+// ProfileInfo mirrors the GET /api/profiles response: configured auth profiles
+// as name + provider, with no directory/credential detail.
+export interface ProfileInfo {
+  Name: string;
+  Provider: Provider;
 }
 
 export interface Session {

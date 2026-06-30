@@ -78,6 +78,7 @@ type AgentCreateRequest struct {
 	Model          string                `json:"model,omitempty"`
 	Effort         string                `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	Fallback       []string              `json:"fallback,omitempty"`
 }
 
 // CreateAgent creates an agent through the daemon.
@@ -111,6 +112,7 @@ type AgentUpdateRequest struct {
 	Model          *string               `json:"model,omitempty"`
 	Effort         *string               `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	Fallback       *[]string             `json:"fallback,omitempty"`
 	Soul           *string               `json:"soul,omitempty"`
 }
 

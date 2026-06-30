@@ -134,11 +134,18 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 		defer cleanup()
 		defer close(out)
 		parsec := make(chan error, 1)
+		trackc := make(chan claudeStreamTrack, 1)
 		stderrc := make(chan stderrResult, 1)
-		go func() { parsec <- parseClaudeStream(ctx, stdout, out) }()
+		parsed := make(chan Event, 32)
+		go func() {
+			parsec <- parseClaudeStream(ctx, stdout, parsed)
+			close(parsed)
+		}()
+		go trackClaudeStream(ctx, parsed, out, trackc)
 		go func() { stderrc <- collectStderr(stderr, claudeStderrTailLimit) }()
 		waitErr := cmd.Wait()
 		parseErr := <-parsec
+		track := <-trackc
 		stderrResult := <-stderrc
 		if ctx.Err() != nil {
 			return
@@ -154,26 +161,60 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 			return
 		}
 		if waitErr != nil {
-			if claudeRateLimitedText(stderrResult.text) {
+			if event, send := claudeWaitEvent(waitErr, stderrResult.text, track); send && event.Kind == EventRateLimited {
 				c.providerLog(req).Warn("provider rate limited", "stage", "wait", "rate_limited", true, "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
-				sendAdapterEvent(ctx, out, Event{Kind: EventRateLimited, Content: stderrResult.text})
+				sendAdapterEvent(ctx, out, event)
+				return
+			} else if !send {
+				c.providerLog(req).Warn("provider process exited after provider message", "stage", "wait", "exit_error", waitErr, "provider_message", podiumlog.RedactTail(track.lastMessage, 4096), "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
+				return
+			} else {
+				c.providerLog(req).Warn("provider process exited with error", "stage", "wait", "exit_error", waitErr, "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
+				sendAdapterEvent(ctx, out, event)
 				return
 			}
-			message := fmt.Sprintf("claude exited with error: %v", waitErr)
-			if stderrResult.text != "" {
-				message += ": " + stderrResult.text
-			}
-			c.providerLog(req).Warn("provider process exited with error", "stage", "wait", "exit_error", waitErr, "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
-			sendAdapterEvent(ctx, out, Event{Kind: EventAssistantMessage, Content: message})
-			return
 		}
 		sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
 	}()
 	return out, nil
 }
 
+type claudeStreamTrack struct {
+	lastMessage string
+}
+
+func trackClaudeStream(ctx context.Context, in <-chan Event, out chan<- Event, done chan<- claudeStreamTrack) {
+	var track claudeStreamTrack
+	for event := range in {
+		if event.Kind == EventAssistantMessage && strings.TrimSpace(event.Content) != "" {
+			track.lastMessage = event.Content
+		}
+		if !sendAdapterEvent(ctx, out, event) {
+			break
+		}
+	}
+	done <- track
+}
+
+func claudeWaitEvent(waitErr error, stderrText string, track claudeStreamTrack) (Event, bool) {
+	if waitErr == nil {
+		return Event{}, false
+	}
+	if claudeRateLimitedText(stderrText) {
+		return Event{Kind: EventRateLimited, Content: stderrText}, true
+	}
+	if track.lastMessage != "" {
+		return Event{}, false
+	}
+	message := fmt.Sprintf("claude exited with error: %v", waitErr)
+	if stderrText != "" {
+		message += ": " + stderrText
+	}
+	return Event{Kind: EventAssistantMessage, Content: message}, true
+}
+
 func (c *Claude) providerLog(req TurnRequest) *slog.Logger {
-	return c.log.With(
+	return loggerOrDefault(c.log).With(
 		"provider", string(config.ProviderClaude),
 		"profile", req.Settings.Profile,
 		"session", req.SessionID,

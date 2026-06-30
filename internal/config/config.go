@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -101,6 +102,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
+	if err := cfg.resolveProfilePaths(); err != nil {
+		return nil, fmt.Errorf("invalid config %s: %w", path, err)
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
@@ -134,6 +138,35 @@ func (c *Config) applyDefaults() {
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
+}
+
+func (c *Config) resolveProfilePaths() error {
+	for i := range c.Profiles {
+		p := &c.Profiles[i]
+		if p.ConfigDir != "" {
+			resolved, err := resolveConfigPath(p.ConfigDir)
+			if err != nil {
+				return fmt.Errorf("profiles[%d] (%s).config_dir: %w", i, p.Name, err)
+			}
+			p.ConfigDir = resolved
+		}
+		if p.HomeDir != "" {
+			resolved, err := resolveConfigPath(p.HomeDir)
+			if err != nil {
+				return fmt.Errorf("profiles[%d] (%s).home_dir: %w", i, p.Name, err)
+			}
+			p.HomeDir = resolved
+		}
+	}
+	return nil
+}
+
+func resolveConfigPath(path string) (string, error) {
+	expanded, err := expandTilde(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(expanded)
 }
 
 // Validate checks structural and referential integrity: known enums, unique

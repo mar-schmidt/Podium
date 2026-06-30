@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -151,6 +152,23 @@ func TestClaudeRateLimitedText(t *testing.T) {
 	}
 	if claudeRateLimitedText("authentication failed") {
 		t.Fatal("auth failure should not be classified as a rate limit")
+	}
+}
+
+func TestClaudeWaitErrorKeepsProviderMessage(t *testing.T) {
+	event, send := claudeWaitEvent(errors.New("exit status 1"), "", claudeStreamTrack{lastMessage: "claude error: not logged in"})
+	if send {
+		t.Fatalf("expected provider message to be preserved without generic replacement, got send=%v event=%+v", send, event)
+	}
+}
+
+func TestClaudeWaitErrorUsesStderrWhenNoProviderMessage(t *testing.T) {
+	event, send := claudeWaitEvent(errors.New("exit status 1"), "not logged in", claudeStreamTrack{})
+	if !send {
+		t.Fatal("expected generic event when no provider message was emitted")
+	}
+	if event.Kind != EventAssistantMessage || !strings.Contains(event.Content, "not logged in") {
+		t.Fatalf("unexpected event: %+v", event)
 	}
 }
 

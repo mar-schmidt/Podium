@@ -140,6 +140,41 @@ func TestLoadRejectsExplicitZeroLogRetention(t *testing.T) {
 	}
 }
 
+func TestLoadExpandsProfileDirs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte(`global:
+  provider: claude
+  permission_mode: approve
+profiles:
+  - name: personal
+    provider: claude
+    config_dir: ~/.claude-personal
+  - name: codex-main
+    provider: codex
+    home_dir: ~/.codex-main
+server:
+  bind: 127.0.0.1
+  port: 8787
+`)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Profiles[0].ConfigDir != filepath.Join(home, ".claude-personal") {
+		t.Fatalf("config_dir = %q", cfg.Profiles[0].ConfigDir)
+	}
+	if cfg.Profiles[1].HomeDir != filepath.Join(home, ".codex-main") {
+		t.Fatalf("home_dir = %q", cfg.Profiles[1].HomeDir)
+	}
+}
+
 func TestScaffoldIsIdempotentAndPreservesEdits(t *testing.T) {
 	dir := t.TempDir()
 	p := NewPaths(dir)

@@ -61,7 +61,7 @@
   let update = $state<UpdateStatus | null>(null);
   let updateState = $state<"idle" | "checking" | "available" | "current" | "updating" | "restarting" | "failed">("idle");
   let updateError = $state<string | null>(null);
-  let chatStatus = $state<"connecting" | "live" | "offline">("connecting");
+  let daemonStatus = $state<"connecting" | "live" | "offline">("connecting");
   let agents = $state<Agent[]>([]);
   let chatTarget = $state<ChatTarget | null>(null);
 
@@ -73,14 +73,31 @@
   let hireError = $state<string | null>(null);
 
   onMount(async () => {
-    try {
-      health = await getHealth();
-    } catch {
-      health = null;
-    }
+    await refreshHealth();
     await refreshAgents();
     await refreshUpdate();
   });
+
+  // Keep the daemon indicator and update status fresh independently of the
+  // chat socket: health is the source of truth for "live", and we poll for new
+  // releases every 5 minutes.
+  onMount(() => {
+    const healthTimer = window.setInterval(refreshHealth, 10_000);
+    const updateTimer = window.setInterval(() => refreshUpdate(true), 5 * 60 * 1000);
+    return () => {
+      window.clearInterval(healthTimer);
+      window.clearInterval(updateTimer);
+    };
+  });
+
+  async function refreshHealth() {
+    try {
+      health = await getHealth();
+      daemonStatus = "live";
+    } catch {
+      daemonStatus = "offline";
+    }
+  }
 
   async function refreshAgents() {
     try {
@@ -90,9 +107,13 @@
     }
   }
 
-  async function refreshUpdate() {
-    updateState = "checking";
-    updateError = null;
+  async function refreshUpdate(silent = false) {
+    // Don't let a background poll clobber an update that's mid-flight.
+    if (silent && (updateState === "updating" || updateState === "restarting")) return;
+    if (!silent) {
+      updateState = "checking";
+      updateError = null;
+    }
     try {
       update = await checkUpdate();
       updateState = update.update_available ? "available" : "current";
@@ -168,8 +189,15 @@
     }
   }
 
-  const daemonLabel = $derived(chatStatus === "live" ? "podiumd live" : `podiumd ${chatStatus}`);
+  const daemonLabel = $derived(daemonStatus === "live" ? "podiumd live" : `podiumd ${daemonStatus}`);
   const daemonAddr = $derived(health ? `${health.version} · ${health.commit}` : "127.0.0.1:8787");
+  // Only surface the update box when there's actually something to act on.
+  const showUpdateBox = $derived(
+    updateState === "available" ||
+      updateState === "updating" ||
+      updateState === "restarting" ||
+      Boolean(update?.blocking_reason),
+  );
 
   function seg(on: boolean): string {
     return (
@@ -219,39 +247,32 @@
 
     <div class="nav-foot">
       <div class="daemon">
-        <span class="daemon-dot" class:live={chatStatus === "live"}></span>
+        <span class="daemon-dot" class:live={daemonStatus === "live"}></span>
         <div class="daemon-text mono">
           {daemonLabel}<br /><span class="daemon-addr">{daemonAddr}</span>
         </div>
       </div>
-      <div class="update-box">
-        <div class="update-line mono">
-          {#if updateState === "checking"}
-            checking updates
-          {:else if updateState === "available" && update}
-            update {update.latest_version}
-          {:else if updateState === "updating"}
-            updating
-          {:else if updateState === "restarting"}
-            restarting
-          {:else if updateState === "failed"}
-            update check failed
-          {:else}
-            up to date
+      {#if showUpdateBox}
+        <div class="update-box">
+          <div class="update-line mono">
+            {#if updateState === "updating"}
+              updating
+            {:else if updateState === "restarting"}
+              restarting
+            {:else}
+              update {update?.latest_version}
+            {/if}
+          </div>
+          {#if update?.blocking_reason}
+            <div class="update-note">{update.blocking_reason}</div>
+          {:else if updateError}
+            <div class="update-note">{updateError}</div>
           {/if}
-        </div>
-        {#if update?.blocking_reason}
-          <div class="update-note">{update.blocking_reason}</div>
-        {:else if updateError}
-          <div class="update-note">{updateError}</div>
-        {/if}
-        <div class="update-actions">
-          <button class="update-btn" disabled={updateState === "checking" || updateState === "updating" || updateState === "restarting"} onclick={refreshUpdate}>Check</button>
-          {#if updateState === "available" || update?.blocking_reason}
+          <div class="update-actions">
             <button class="update-btn primary" disabled={updateState === "updating" || updateState === "restarting"} onclick={runUpdate}>Update</button>
-          {/if}
+          </div>
         </div>
-      </div>
+      {/if}
       <button class="hire-btn" onclick={openHire}><span class="hire-plus">+</span> Hire agent</button>
     </div>
   </aside>
@@ -259,7 +280,7 @@
   <!-- ============ MAIN ============ -->
   <div class="main">
     {#if route === "chat"}
-      <Chat {agents} target={chatTarget} onConsumeTarget={() => (chatTarget = null)} onStatus={(s) => (chatStatus = s)} />
+      <Chat {agents} target={chatTarget} onConsumeTarget={() => (chatTarget = null)} />
     {:else if route === "roadmap"}
       <Roadmap {agents} onOpenChat={openChat} />
     {:else if route === "projects"}

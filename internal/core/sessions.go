@@ -239,8 +239,10 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 					return
 				}
 			}
-			go c.autoNameSessionBackground(sessionID)
-			go c.refreshRollingSummaryBackground(sessionID)
+			if !c.noBg {
+				go c.autoNameSessionBackground(sessionID)
+				go c.refreshRollingSummaryBackground(sessionID)
+			}
 			runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", assistant.Len())
 			_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: adapter.EventTurnDone})
 			return

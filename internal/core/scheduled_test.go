@@ -27,7 +27,7 @@ func newScheduledTestCore(t *testing.T) (*Core, *adapter.Fake, func()) {
 		t.Fatalf("open store: %v", err)
 	}
 	fake := adapter.NewFake()
-	c, err := New(Options{Paths: paths, Store: db, Adapter: fake})
+	c, err := New(Options{Paths: paths, Store: db, Adapter: fake, DisableBackgroundWork: true})
 	if err != nil {
 		t.Fatalf("new core: %v", err)
 	}

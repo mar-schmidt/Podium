@@ -28,6 +28,9 @@ type Options struct {
 	Profiles []config.Profile
 	// Logger receives structured run logging (R11.5). Defaults to slog.Default().
 	Logger *slog.Logger
+	// DisableBackgroundWork suppresses post-turn helper goroutines in tests that
+	// need deterministic teardown of temporary storage.
+	DisableBackgroundWork bool
 }
 
 // Core coordinates typed persistence, filesystem scaffolding, instruction
@@ -41,6 +44,7 @@ type Core struct {
 	composer InstructionComposer
 	ledger   *projects.Ledger
 	log      *slog.Logger
+	noBg     bool
 }
 
 // New creates a Core service.
@@ -75,6 +79,7 @@ func New(opts Options) (*Core, error) {
 		composer: NewFileComposer(opts.Paths),
 		ledger:   projects.New(opts.Paths.ProjectsDir),
 		log:      logger,
+		noBg:     opts.DisableBackgroundWork,
 	}
 	for _, profile := range opts.Profiles {
 		c.profiles[profile.Name] = profile

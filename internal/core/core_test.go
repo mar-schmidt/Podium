@@ -106,7 +106,7 @@ func TestAppendTurnHistorySurvivesReopen(t *testing.T) {
 	}
 	fake := adapter.NewFake()
 	fake.Responses = []string{"assistant one"}
-	c, err := New(Options{Paths: paths, Store: db, Adapter: fake})
+	c, err := New(Options{Paths: paths, Store: db, Adapter: fake, DisableBackgroundWork: true})
 	if err != nil {
 		t.Fatalf("new core: %v", err)
 	}
@@ -267,9 +267,10 @@ func TestRateLimitFallbackSwitchesProviderWithReplayHistory(t *testing.T) {
 	fake.RateLimitedTurns = 1
 	fake.Responses = []string{"fallback ok"}
 	c, err := New(Options{
-		Paths:   paths,
-		Store:   db,
-		Adapter: fake,
+		Paths:                 paths,
+		Store:                 db,
+		Adapter:               fake,
+		DisableBackgroundWork: true,
 		Profiles: []config.Profile{
 			{Name: "work", Provider: config.ProviderClaude, ConfigDir: "/tmp/claude-work"},
 			{Name: "codex-main", Provider: config.ProviderCodex, HomeDir: "/tmp/codex-main"},

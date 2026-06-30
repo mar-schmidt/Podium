@@ -206,6 +206,34 @@ export interface PermissionDecision {
   message?: string;
 }
 
+export interface UserInputOption {
+  label: string;
+  description?: string;
+}
+
+export interface UserInputQuestion {
+  id: string;
+  header?: string;
+  question: string;
+  options?: UserInputOption[];
+  multi_select?: boolean;
+  is_other?: boolean;
+  is_secret?: boolean;
+}
+
+export interface UserInputRequest {
+  id: string;
+  turn_id?: string;
+  provider?: Provider;
+  item_id?: string;
+  questions: UserInputQuestion[];
+  auto_resolution_ms?: number;
+}
+
+export interface UserInputDecision {
+  answers: Record<string, string[]>;
+}
+
 export type ClientMessage =
   | { type: "list"; request_id?: string }
   | { type: "create_session"; request_id: string; agent_name: string }
@@ -216,7 +244,8 @@ export type ClientMessage =
       session_id?: string;
       message: string;
     }
-  | { type: "permission_decision"; request_id: string; decision: PermissionDecision };
+  | { type: "permission_decision"; request_id: string; decision: PermissionDecision }
+  | { type: "user_input_decision"; request_id: string; input: UserInputDecision };
 
 export interface ServerMessage {
   type:
@@ -228,6 +257,7 @@ export interface ServerMessage {
     | "delta"
     | "assistant"
     | "permission_request"
+    | "user_input_request"
     | "notice"
     | "done"
     | "error";
@@ -240,6 +270,7 @@ export interface ServerMessage {
   delta?: string;
   notice?: string;
   request?: PermissionRequest;
+  input?: UserInputRequest;
   error?: string;
 }
 

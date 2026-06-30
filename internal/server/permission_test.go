@@ -49,3 +49,35 @@ func TestPermissionBrokerTimeoutAutoDenies(t *testing.T) {
 		t.Fatalf("expected auto deny, got %+v", decision)
 	}
 }
+
+func TestUserInputBrokerDecision(t *testing.T) {
+	b := newUserInputBroker()
+	requests, unsubscribe := b.subscribe("turn-1")
+	defer unsubscribe()
+
+	done := make(chan adapter.UserInputDecision, 1)
+	go func() {
+		decision, _ := b.RequestUserInput(context.Background(), adapter.UserInputRequest{
+			ID:     "input-1",
+			TurnID: "turn-1",
+			Questions: []adapter.UserInputQuestion{{
+				ID:       "intent",
+				Question: "Pick one",
+			}},
+		}, time.Second)
+		done <- decision
+	}()
+
+	req := <-requests
+	if req.ID != "input-1" || req.Questions[0].ID != "intent" {
+		t.Fatalf("bad relayed request: %+v", req)
+	}
+	decision := adapter.UserInputDecision{Answers: map[string][]string{"intent": []string{"Draft"}}}
+	if !b.decide("input-1", decision) {
+		t.Fatalf("decision was not accepted")
+	}
+	got := <-done
+	if got.Answers["intent"][0] != "Draft" {
+		t.Fatalf("bad decision: %+v", got)
+	}
+}

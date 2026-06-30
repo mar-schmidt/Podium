@@ -123,6 +123,14 @@ func (s *Server) handleWSMessage(ctx context.Context, writer *wsWriter, msg Clie
 			return errors.New("permission request not found")
 		}
 		return nil
+	case "user_input_decision":
+		if msg.Input == nil {
+			return errors.New("user input decision is required")
+		}
+		if !s.input.decide(msg.RequestID, *msg.Input) {
+			return errors.New("user input request not found")
+		}
+		return nil
 	default:
 		return errors.New("unknown websocket message type")
 	}
@@ -173,19 +181,22 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 	}
 
 	turnID := uuid.NewString()
-	requests, unsubscribe := s.broker.subscribe(turnID)
-	defer unsubscribe()
+	requests, unsubscribePermissions := s.broker.subscribe(turnID)
+	inputs, unsubscribeInputs := s.input.subscribe(turnID)
+	defer unsubscribePermissions()
+	defer unsubscribeInputs()
 
 	events, err := s.core.StreamTurn(ctx, session.ID, msg.Message, core.TurnOptions{
 		PermissionTurnID: turnID,
 		PermissionRelay:  s.broker,
+		UserInputRelay:   s.input,
 	})
 	if err != nil {
 		_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, Error: err.Error()})
 		return
 	}
 
-	for events != nil || requests != nil {
+	for events != nil || requests != nil || inputs != nil {
 		select {
 		case <-ctx.Done():
 			return
@@ -195,10 +206,17 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 				continue
 			}
 			_ = writer.write(ctx, ServerMessage{Type: "permission_request", RequestID: msg.RequestID, Request: &request})
+		case input, ok := <-inputs:
+			if !ok {
+				inputs = nil
+				continue
+			}
+			_ = writer.write(ctx, ServerMessage{Type: "user_input_request", RequestID: msg.RequestID, Input: &input})
 		case event, ok := <-events:
 			if !ok {
 				events = nil
 				requests = nil
+				inputs = nil
 				continue
 			}
 			if err := writeTurnEvent(ctx, writer, msg.RequestID, event); err != nil {
@@ -220,6 +238,8 @@ func writeTurnEvent(ctx context.Context, writer *wsWriter, requestID string, eve
 		return writer.write(ctx, ServerMessage{Type: "assistant", RequestID: requestID, Delta: event.Content})
 	case adapter.EventPermissionRequest:
 		return writer.write(ctx, ServerMessage{Type: "permission_request", RequestID: requestID, Request: event.PermissionRequest})
+	case adapter.EventUserInputRequest:
+		return writer.write(ctx, ServerMessage{Type: "user_input_request", RequestID: requestID, Input: event.UserInputRequest})
 	case adapter.EventTurnDone:
 		return writer.write(ctx, ServerMessage{Type: "done", RequestID: requestID})
 	case "error":

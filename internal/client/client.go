@@ -180,6 +180,7 @@ type StreamEvent struct {
 	Delta   string                     `json:"delta,omitempty"`
 	Notice  string                     `json:"notice,omitempty"`
 	Request *adapter.PermissionRequest `json:"request,omitempty"`
+	Input   *adapter.UserInputRequest  `json:"input,omitempty"`
 	Error   string                     `json:"error,omitempty"`
 }
 
@@ -235,6 +236,11 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent,
 // request.
 func (c *Client) DecidePermission(ctx context.Context, id string, decision adapter.PermissionDecision) error {
 	return c.postJSON(ctx, "/api/permission-decisions/"+id, decision, nil)
+}
+
+// DecideUserInput sends answers for a pending provider clarification request.
+func (c *Client) DecideUserInput(ctx context.Context, id string, decision adapter.UserInputDecision) error {
+	return c.postJSON(ctx, "/api/user-input-decisions/"+id, decision, nil)
 }
 
 // ListSchedules fetches schedule status (next run + recent run history) from the

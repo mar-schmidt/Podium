@@ -604,43 +604,67 @@ func newChatCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			events, errs := c.Chat(cmd.Context(), client.ChatRequest{
+			chatReq := client.ChatRequest{
 				AgentName: agentName,
 				SessionID: sessionID,
 				Message:   args[0],
-			})
-			printedDelta := false
-			for event := range events {
-				switch event.Type {
-				case "session":
-					if event.Session != nil {
-						fmt.Fprintf(os.Stderr, "session %s (%s)\n", event.Session.ID, event.Session.AgentName)
-					}
-				case "delta":
-					fmt.Print(event.Delta)
-					printedDelta = true
-				case "assistant":
-					if !printedDelta {
+			}
+			for {
+				events, errs := c.Chat(cmd.Context(), chatReq)
+				printedDelta := false
+				followup := ""
+				for event := range events {
+					switch event.Type {
+					case "session":
+						if event.Session != nil {
+							chatReq.SessionID = event.Session.ID
+							chatReq.AgentName = ""
+							fmt.Fprintf(os.Stderr, "session %s (%s)\n", event.Session.ID, event.Session.AgentName)
+						}
+					case "delta":
 						fmt.Print(event.Delta)
 						printedDelta = true
-					}
-				case "notice":
-					fmt.Fprintf(os.Stderr, "%s\n", event.Notice)
-				case "permission_request":
-					if event.Request != nil {
-						if err := promptPermission(cmd.Context(), c, *event.Request); err != nil {
-							return err
+					case "assistant":
+						if !printedDelta {
+							fmt.Print(event.Delta)
+							printedDelta = true
 						}
+					case "notice":
+						fmt.Fprintf(os.Stderr, "%s\n", event.Notice)
+					case "permission_request":
+						if event.Request != nil {
+							if err := promptPermission(cmd.Context(), c, *event.Request); err != nil {
+								return err
+							}
+						}
+					case "user_input_request":
+						if event.Input != nil {
+							decision, text, err := promptUserInput(*event.Input)
+							if err != nil {
+								return err
+							}
+							if event.Input.Provider == config.ProviderClaude {
+								followup = text
+							} else if err := c.DecideUserInput(cmd.Context(), event.Input.ID, decision); err != nil {
+								return err
+							}
+						}
+					case "error":
+						return errors.New(event.Error)
 					}
-				case "error":
-					return errors.New(event.Error)
 				}
+				if err := <-errs; err != nil {
+					return err
+				}
+				if followup == "" {
+					fmt.Println()
+					return nil
+				}
+				if chatReq.SessionID == "" {
+					return errors.New("cannot answer provider question without a session")
+				}
+				chatReq.Message = followup
 			}
-			if err := <-errs; err != nil {
-				return err
-			}
-			fmt.Println()
-			return nil
 		},
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent name for a new session")
@@ -745,6 +769,85 @@ func promptPermission(ctx context.Context, c *client.Client, req adapter.Permiss
 		decision = adapter.PermissionDecision{Behavior: behavior, Message: "Denied by user"}
 	}
 	return c.DecidePermission(ctx, req.ID, decision)
+}
+
+func promptUserInput(req adapter.UserInputRequest) (adapter.UserInputDecision, string, error) {
+	reader := bufio.NewReader(os.Stdin)
+	answers := map[string][]string{}
+	for _, q := range req.Questions {
+		if q.Header != "" {
+			fmt.Fprintf(os.Stderr, "\n%s\n", q.Header)
+		} else {
+			fmt.Fprintln(os.Stderr)
+		}
+		fmt.Fprintf(os.Stderr, "%s\n", q.Question)
+		for i, option := range q.Options {
+			if option.Description != "" {
+				fmt.Fprintf(os.Stderr, "  %d. %s — %s\n", i+1, option.Label, option.Description)
+			} else {
+				fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, option.Label)
+			}
+		}
+		if len(q.Options) == 0 {
+			fmt.Fprint(os.Stderr, "Answer: ")
+			line, _ := reader.ReadString('\n')
+			answers[q.ID] = []string{strings.TrimSpace(line)}
+			continue
+		}
+		if q.MultiSelect {
+			fmt.Fprint(os.Stderr, "Choose one or more numbers, comma-separated: ")
+		} else {
+			fmt.Fprint(os.Stderr, "Choose a number: ")
+		}
+		line, _ := reader.ReadString('\n')
+		selected, err := selectedUserInputOptions(q, line)
+		if err != nil {
+			return adapter.UserInputDecision{}, "", err
+		}
+		answers[q.ID] = selected
+	}
+	decision := adapter.UserInputDecision{Answers: answers}
+	return decision, formatUserInputFollowup(req, answers), nil
+}
+
+func selectedUserInputOptions(q adapter.UserInputQuestion, line string) ([]string, error) {
+	parts := []string{strings.TrimSpace(line)}
+	if q.MultiSelect {
+		parts = strings.Split(line, ",")
+	}
+	var selected []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 1 || n > len(q.Options) {
+			return nil, fmt.Errorf("invalid choice %q", part)
+		}
+		selected = append(selected, q.Options[n-1].Label)
+	}
+	if len(selected) == 0 {
+		return nil, errors.New("at least one answer is required")
+	}
+	if !q.MultiSelect && len(selected) > 1 {
+		return nil, errors.New("choose only one answer")
+	}
+	return selected, nil
+}
+
+func formatUserInputFollowup(req adapter.UserInputRequest, answers map[string][]string) string {
+	var b strings.Builder
+	if len(req.Questions) == 1 {
+		q := req.Questions[0]
+		fmt.Fprintf(&b, "Answer to %q: %s", q.Question, strings.Join(answers[q.ID], ", "))
+		return b.String()
+	}
+	b.WriteString("Answers:\n")
+	for _, q := range req.Questions {
+		fmt.Fprintf(&b, "- %s: %s\n", q.Question, strings.Join(answers[q.ID], ", "))
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func daemonClient(flagAddr string) (*client.Client, error) {

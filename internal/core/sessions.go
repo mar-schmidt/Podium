@@ -110,6 +110,7 @@ func (c *Core) GetSession(ctx context.Context, id string) (store.Session, error)
 type TurnOptions struct {
 	PermissionTurnID string
 	PermissionRelay  adapter.PermissionRelay
+	UserInputRelay   adapter.UserInputRelay
 	// Unattended marks a turn with no human approver (a scheduled run). It and
 	// AllowedTools select the provider's preapproved policy (§7.7).
 	Unattended   bool
@@ -121,6 +122,7 @@ type TurnEvent struct {
 	Kind              adapter.EventKind
 	Content           string
 	PermissionRequest *adapter.PermissionRequest
+	UserInputRequest  *adapter.UserInputRequest
 	Message           *store.Message
 }
 
@@ -273,6 +275,7 @@ func (c *Core) turnRequest(sess store.Session, history []store.Message, userMess
 			AllowedTools:     opts.AllowedTools,
 		},
 		Relay: opts.PermissionRelay,
+		Input: opts.UserInputRelay,
 	}
 }
 
@@ -293,6 +296,10 @@ func (c *Core) consumeAdapterEvents(ctx context.Context, streamOut chan<- TurnEv
 			}
 		case adapter.EventPermissionRequest:
 			if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, PermissionRequest: event.PermissionRequest}) {
+				return assistant, false, false
+			}
+		case adapter.EventUserInputRequest:
+			if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: event.Kind, UserInputRequest: event.UserInputRequest}) {
 				return assistant, false, false
 			}
 		case adapter.EventHandleUpdated:

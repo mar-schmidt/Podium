@@ -139,6 +139,61 @@ func TestParseClaudeRateLimitErrorEvent(t *testing.T) {
 	}
 }
 
+func TestParseClaudeRawQuestionsText(t *testing.T) {
+	input := strings.NewReader(`{"type":"assistant","message":{"content":[{"type":"text","text":"questions: [{\"question\":\"What do you want from \\\"testing roadmap\\\"?\",\"header\":\"Intent\",\"options\":[{\"label\":\"Draft a testing roadmap\",\"description\":\"Create a phased plan/document for what testing to build over time.\"},{\"label\":\"Roadmap for a specific project\",\"description\":\"Analyze an existing codebase and produce a tailored testing strategy.\"}],\"multiSelect\":false}]"}]}}
+`)
+	out := make(chan Event, 2)
+	if err := parseClaudeStream(context.Background(), input, out); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	close(out)
+	event := <-out
+	if event.Kind != EventUserInputRequest || event.UserInputRequest == nil {
+		t.Fatalf("expected user input request, got %+v", event)
+	}
+	req := event.UserInputRequest
+	if req.Provider != config.ProviderClaude || len(req.Questions) != 1 {
+		t.Fatalf("bad request: %+v", req)
+	}
+	q := req.Questions[0]
+	if q.ID != "q1" || q.Header != "Intent" || q.MultiSelect {
+		t.Fatalf("bad question metadata: %+v", q)
+	}
+	if len(q.Options) != 2 || q.Options[0].Label != "Draft a testing roadmap" {
+		t.Fatalf("bad options: %+v", q.Options)
+	}
+	select {
+	case extra, ok := <-out:
+		if !ok {
+			return
+		}
+		t.Fatalf("raw question text should be suppressed, got extra event %+v", extra)
+	default:
+	}
+}
+
+func TestParseClaudeToolUseQuestions(t *testing.T) {
+	input := strings.NewReader(`{"type":"assistant","session_id":"claude-session","message":{"content":[{"type":"tool_use","id":"toolu_question","name":"AskUserQuestion","input":{"questions":[{"id":"intent","question":"Pick one","header":"Intent","multiSelect":true,"options":[{"label":"A","description":"Alpha"},{"label":"B","description":"Beta"}]}],"autoResolutionMs":120000}}]}}
+`)
+	out := make(chan Event, 3)
+	if err := parseClaudeStream(context.Background(), input, out); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	close(out)
+	<-out // handle update
+	event := <-out
+	if event.Kind != EventUserInputRequest || event.UserInputRequest == nil {
+		t.Fatalf("expected user input request, got %+v", event)
+	}
+	req := event.UserInputRequest
+	if req.ItemID != "toolu_question" || req.AutoResolutionMS != 120000 {
+		t.Fatalf("bad request metadata: %+v", req)
+	}
+	if !req.Questions[0].MultiSelect || req.Questions[0].ID != "intent" {
+		t.Fatalf("bad question: %+v", req.Questions[0])
+	}
+}
+
 func TestClaudeRateLimitedText(t *testing.T) {
 	for _, message := range []string{
 		"rate limit exceeded",

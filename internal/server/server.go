@@ -31,6 +31,7 @@ type Server struct {
 	core      *core.Core
 	scheduler *schedule.Scheduler
 	broker    *permissionBroker
+	input     *userInputBroker
 	paths     config.Paths
 }
 
@@ -55,6 +56,7 @@ func New(opts Options) *Server {
 		core:      opts.Core,
 		scheduler: opts.Scheduler,
 		broker:    newPermissionBroker(),
+		input:     newUserInputBroker(),
 		paths:     opts.Paths,
 	}
 	mux := http.NewServeMux()
@@ -77,6 +79,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/logs/follow", s.handleLogsFollow)
 	mux.HandleFunc("/api/permission-decisions/", s.handlePermissionDecision)
+	mux.HandleFunc("/api/user-input-decisions/", s.handleUserInputDecision)
 	mux.HandleFunc("/api/permissions/", s.handlePermissionRequest)
 	mux.HandleFunc("/api/update", s.handleUpdate)
 	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)

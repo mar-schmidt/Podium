@@ -15,6 +15,7 @@ type ClientMessage struct {
 	SessionID string                      `json:"session_id,omitempty"`
 	Message   string                      `json:"message,omitempty"`
 	Decision  *adapter.PermissionDecision `json:"decision,omitempty"`
+	Input     *adapter.UserInputDecision  `json:"input,omitempty"`
 }
 
 // ServerMessage is the daemon-to-browser WebSocket contract.
@@ -29,6 +30,7 @@ type ServerMessage struct {
 	Delta     string                     `json:"delta,omitempty"`
 	Notice    string                     `json:"notice,omitempty"`
 	Request   *adapter.PermissionRequest `json:"request,omitempty"`
+	Input     *adapter.UserInputRequest  `json:"input,omitempty"`
 	Error     string                     `json:"error,omitempty"`
 }
 

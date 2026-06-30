@@ -131,6 +131,57 @@ func TestCodexStreamsTurnAndRelaysApproval(t *testing.T) {
 	}
 }
 
+func TestCodexStreamsTurnAndRelaysUserInput(t *testing.T) {
+	t.Setenv("PODIUM_CODEX_FAKE_MODE", "user_input")
+	codex := newTestCodex(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("workspace instructions\n"), 0o644); err != nil {
+		t.Fatalf("write agents: %v", err)
+	}
+
+	handle, err := codex.Start(ctx, StartRequest{
+		SessionID:      "session-1",
+		Provider:       config.ProviderCodex,
+		PermissionMode: config.PermissionApprove,
+		WorkspaceDir:   workspace,
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	input := &recordingInputRelay{
+		answers:  map[string][]string{"intent": []string{"Draft a testing roadmap"}},
+		requests: make(chan UserInputRequest, 1),
+	}
+	events, err := codex.SendTurn(ctx, TurnRequest{
+		SessionID: "session-1",
+		Handle:    handle,
+		Message:   "testing roadmap",
+		Settings: TurnSettings{
+			PermissionMode:   config.PermissionApprove,
+			WorkspaceDir:     workspace,
+			PermissionTurnID: "podium-turn-1",
+		},
+		Input: input,
+	})
+	if err != nil {
+		t.Fatalf("send turn: %v", err)
+	}
+
+	text := collectCodexText(t, events)
+	if text != "Draft a testing roadmap" {
+		t.Fatalf("unexpected assistant text %q", text)
+	}
+	req := <-input.requests
+	if req.TurnID != "podium-turn-1" || req.Provider != config.ProviderCodex || req.ItemID != "item-question" {
+		t.Fatalf("bad input request: %+v", req)
+	}
+	if len(req.Questions) != 1 || req.Questions[0].ID != "intent" || req.Questions[0].MultiSelect {
+		t.Fatalf("bad input question: %+v", req.Questions)
+	}
+}
+
 func TestCodexResumesThreadAfterAppServerRestart(t *testing.T) {
 	t.Setenv("PODIUM_CODEX_FAKE_MODE", "normal")
 	codex := newTestCodex(t)
@@ -191,6 +242,20 @@ func (r *recordingRelay) RequestPermission(ctx context.Context, req PermissionRe
 	return PermissionDecision{Behavior: r.behavior}, nil
 }
 
+type recordingInputRelay struct {
+	answers  map[string][]string
+	requests chan UserInputRequest
+}
+
+func (r *recordingInputRelay) RequestUserInput(ctx context.Context, req UserInputRequest, timeout time.Duration) (UserInputDecision, error) {
+	select {
+	case r.requests <- req:
+	case <-ctx.Done():
+		return UserInputDecision{}, ctx.Err()
+	}
+	return UserInputDecision{Answers: r.answers}, nil
+}
+
 func newTestCodex(t *testing.T) *Codex {
 	t.Helper()
 	wrapper := filepath.Join(t.TempDir(), "codex")
@@ -232,6 +297,11 @@ func runFakeCodexAppServer() {
 		turnID   string
 		active   bool
 	}
+	var pendingInput struct {
+		threadID string
+		turnID   string
+		active   bool
+	}
 	for scanner.Scan() {
 		var msg codexRPCMessage
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
@@ -252,6 +322,23 @@ func runFakeCodexAppServer() {
 				writeFakeDelta(enc, pendingApproval.threadID, pendingApproval.turnID, final)
 				writeFakeCompleted(enc, pendingApproval.threadID, pendingApproval.turnID, final)
 				pendingApproval.active = false
+			}
+			if pendingInput.active {
+				var inputResp struct {
+					Result struct {
+						Answers map[string]struct {
+							Answers []string `json:"answers"`
+						} `json:"answers"`
+					} `json:"result"`
+				}
+				_ = json.Unmarshal(scanner.Bytes(), &inputResp)
+				final := strings.Join(inputResp.Result.Answers["intent"].Answers, ", ")
+				if final == "" {
+					final = "empty"
+				}
+				writeFakeDelta(enc, pendingInput.threadID, pendingInput.turnID, final)
+				writeFakeCompleted(enc, pendingInput.threadID, pendingInput.turnID, final)
+				pendingInput.active = false
 			}
 			continue
 		}
@@ -307,6 +394,28 @@ func runFakeCodexAppServer() {
 					"startedAtMs": time.Now().UnixMilli(),
 					"command":     "echo ok",
 					"cwd":         "/tmp",
+				})
+			} else if os.Getenv("PODIUM_CODEX_FAKE_MODE") == "user_input" {
+				pendingInput = struct {
+					threadID string
+					turnID   string
+					active   bool
+				}{threadID: params.ThreadID, turnID: turnID, active: true}
+				writeFakeRequest(enc, json.RawMessage("101"), "item/tool/requestUserInput", map[string]any{
+					"threadId":         params.ThreadID,
+					"turnId":           turnID,
+					"itemId":           "item-question",
+					"autoResolutionMs": 60000,
+					"questions": []map[string]any{{
+						"id":          "intent",
+						"header":      "Intent",
+						"question":    "What do you want from \"testing roadmap\"?",
+						"multiSelect": false,
+						"options": []map[string]any{{
+							"label":       "Draft a testing roadmap",
+							"description": "Create a phased testing plan.",
+						}},
+					}},
 				})
 			} else {
 				writeFakeDelta(enc, params.ThreadID, turnID, "res")

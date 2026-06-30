@@ -19,6 +19,8 @@
     ServerMessage,
     Session,
     SessionOrigin,
+    UserInputQuestion,
+    UserInputRequest,
   } from "../lib/types";
 
   interface ChatTarget {
@@ -46,6 +48,8 @@
   let messages = $state<Message[]>([]);
   let pendingAssistant = $state("");
   let pendingPermission = $state<PermissionRequest | null>(null);
+  let pendingUserInput = $state<UserInputRequest | null>(null);
+  let userInputAnswers = $state<Record<string, string[]>>({});
   let permissionRemaining = $state(0);
   let messageText = $state("");
   let selectedAgent = $state("");
@@ -209,6 +213,7 @@
       case "history":
         messages = msg.history ?? [];
         pendingAssistant = "";
+        pendingUserInput = null;
         break;
       case "message":
         if (msg.message && !messages.some((e) => sameMessage(e, msg.message))) {
@@ -226,12 +231,17 @@
         pendingPermission = msg.request ?? null;
         updatePermissionRemaining();
         break;
+      case "user_input_request":
+        pendingUserInput = msg.input ?? null;
+        userInputAnswers = initialUserInputAnswers(pendingUserInput);
+        break;
       case "notice":
         notice = msg.notice ?? null;
         sending = false;
         break;
       case "done":
         pendingPermission = null;
+        if (pendingUserInput?.provider !== "claude") pendingUserInput = null;
         sending = false;
         window.setTimeout(() => send({ type: "list" }), 1200);
         break;
@@ -255,6 +265,7 @@
       messages = detail.history ?? [];
       projectName = detail.project_name ?? "";
       pendingAssistant = "";
+      pendingUserInput = null;
       if (isPhone) sessOpen = false;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -271,6 +282,7 @@
     notice = null;
     sending = true;
     pendingAssistant = "";
+    pendingUserInput = null;
     send({
       type: "send_turn",
       request_id: crypto.randomUUID(),
@@ -286,6 +298,7 @@
     messages = [];
     projectName = "";
     pendingAssistant = "";
+    pendingUserInput = null;
     notice = null;
     error = null;
     if (isPhone) sessOpen = false;
@@ -316,6 +329,59 @@
         : { behavior: "deny", message: "Denied from web" },
     });
     pendingPermission = null;
+  }
+
+  function initialUserInputAnswers(req: UserInputRequest | null): Record<string, string[]> {
+    const answers: Record<string, string[]> = {};
+    for (const q of req?.questions ?? []) answers[q.id] = [];
+    return answers;
+  }
+
+  function toggleUserInput(q: UserInputQuestion, value: string) {
+    const current = userInputAnswers[q.id] ?? [];
+    if (q.multi_select) {
+      userInputAnswers = {
+        ...userInputAnswers,
+        [q.id]: current.includes(value) ? current.filter((v) => v !== value) : [...current, value],
+      };
+      return;
+    }
+    userInputAnswers = { ...userInputAnswers, [q.id]: [value] };
+  }
+
+  function setFreeUserInput(q: UserInputQuestion, value: string) {
+    userInputAnswers = { ...userInputAnswers, [q.id]: value.trim() ? [value] : [] };
+  }
+
+  function userInputSelected(q: UserInputQuestion, value: string) {
+    return (userInputAnswers[q.id] ?? []).includes(value);
+  }
+
+  function userInputReady(req: UserInputRequest | null) {
+    return !!req && req.questions.every((q) => (userInputAnswers[q.id] ?? []).some((v) => v.trim()));
+  }
+
+  function submitUserInput() {
+    const req = pendingUserInput;
+    if (!req || !userInputReady(req)) return;
+    const decision = { answers: userInputAnswers };
+    pendingUserInput = null;
+    if (req.provider === "claude") {
+      sendTurn(formatUserInputFollowup(req, userInputAnswers));
+      return;
+    }
+    send({ type: "user_input_decision", request_id: req.id, input: decision });
+  }
+
+  function formatUserInputFollowup(req: UserInputRequest, answers: Record<string, string[]>): string {
+    if (req.questions.length === 1) {
+      const q = req.questions[0];
+      return `Answer to "${q.question}": ${(answers[q.id] ?? []).join(", ")}`;
+    }
+    return [
+      "Answers:",
+      ...req.questions.map((q) => `- ${q.question}: ${(answers[q.id] ?? []).join(", ")}`),
+    ].join("\n");
   }
 
   function updatePermissionRemaining() {
@@ -467,12 +533,59 @@
         </div>
       {/if}
 
-      {#if sending && !pendingAssistant && !pendingPermission}
+      {#if sending && !pendingAssistant && !pendingPermission && !pendingUserInput}
         <div class="row-start" style="align-items:center">
           <div style={avatarStyle(activeGrad, 30, 10, 13)}>{activeMono}</div>
           <span class="thinking">
             <span class="tdot"></span><span class="tdot d2"></span><span class="tdot d3"></span>
           </span>
+        </div>
+      {/if}
+
+      {#if pendingUserInput}
+        <div class="row-start question-wrap">
+          <div style={avatarStyle(activeGrad, 30, 10, 13)}>{activeMono}</div>
+          <div class="question-card">
+            <div class="question-head">
+              <span class="approve-tag mono">question · {pendingUserInput.provider ?? "provider"}</span>
+            </div>
+            <div class="question-body">
+              {#each pendingUserInput.questions as q}
+                <div class="question-block">
+                  {#if q.header}<div class="question-header">{q.header}</div>{/if}
+                  <div class="question-text">{q.question}</div>
+                  {#if q.options && q.options.length > 0}
+                    <div class="question-options">
+                      {#each q.options as option}
+                        <button
+                          class="question-option"
+                          class:sel={userInputSelected(q, option.label)}
+                          onclick={() => toggleUserInput(q, option.label)}
+                        >
+                          <span class="question-dot">{q.multi_select ? (userInputSelected(q, option.label) ? "✓" : "") : ""}</span>
+                          <span class="question-option-text">
+                            <span>{option.label}</span>
+                            {#if option.description}<small>{option.description}</small>{/if}
+                          </span>
+                        </button>
+                      {/each}
+                    </div>
+                  {:else}
+                    <input
+                      class="question-free"
+                      type={q.is_secret ? "password" : "text"}
+                      placeholder="Answer"
+                      value={(userInputAnswers[q.id] ?? [])[0] ?? ""}
+                      oninput={(e) => setFreeUserInput(q, e.currentTarget.value)}
+                    />
+                  {/if}
+                </div>
+              {/each}
+              <div class="approve-actions">
+                <button class="approve-yes" disabled={!userInputReady(pendingUserInput)} onclick={submitUserInput}>Send answer</button>
+              </div>
+            </div>
+          </div>
         </div>
       {/if}
 
@@ -941,6 +1054,11 @@
     max-width: 600px;
   }
 
+  .question-wrap {
+    margin-left: 0;
+    max-width: 640px;
+  }
+
   .approve-card {
     flex: 1;
     background: #fff;
@@ -950,6 +1068,15 @@
     box-shadow: 0 8px 22px -14px rgba(154, 110, 30, 0.32);
   }
 
+  .question-card {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #cfe3d8;
+    border-radius: 15px;
+    overflow: hidden;
+    box-shadow: 0 8px 22px -14px rgba(63, 143, 126, 0.32);
+  }
+
   .approve-head {
     display: flex;
     align-items: center;
@@ -957,6 +1084,15 @@
     padding: 11px 15px;
     background: #fbf1dd;
     border-bottom: 1px solid #f0dca9;
+  }
+
+  .question-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 15px;
+    background: #eaf5f0;
+    border-bottom: 1px solid #cfe3d8;
   }
 
   .approve-tag {
@@ -975,6 +1111,99 @@
 
   .approve-body {
     padding: 14px 15px;
+  }
+
+  .question-body {
+    padding: 14px 15px;
+  }
+
+  .question-block + .question-block {
+    margin-top: 15px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-3);
+  }
+
+  .question-header {
+    font: 700 11px "JetBrains Mono", monospace;
+    color: var(--teal-deep);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .question-text {
+    font: 700 15px/1.35 "Hanken Grotesk";
+    color: var(--ink);
+    margin-bottom: 10px;
+  }
+
+  .question-options {
+    display: grid;
+    gap: 8px;
+  }
+
+  .question-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 11px;
+    border: 1px solid var(--line-3);
+    border-radius: 10px;
+    background: var(--surface-3);
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .question-option.sel {
+    border-color: #9bcdbd;
+    background: #eaf5f0;
+  }
+
+  .question-dot {
+    width: 17px;
+    height: 17px;
+    flex: none;
+    border-radius: 50%;
+    border: 1px solid #9bcdbd;
+    color: var(--teal-deep);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    line-height: 1;
+    margin-top: 1px;
+  }
+
+  .question-option.sel .question-dot {
+    background: var(--teal);
+    border-color: var(--teal);
+    box-shadow: inset 0 0 0 4px #fff;
+  }
+
+  .question-option-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    font: 700 13.5px/1.25 "Hanken Grotesk";
+  }
+
+  .question-option-text small {
+    font: 500 12px/1.3 "Hanken Grotesk";
+    color: var(--muted);
+  }
+
+  .question-free {
+    width: 100%;
+    min-height: 40px;
+    border: 1px solid var(--field-line);
+    border-radius: 10px;
+    padding: 9px 11px;
+    font: 500 13.5px "Hanken Grotesk";
+    color: var(--ink);
+    background: #fff;
   }
 
   .approve-cmd {
@@ -1004,6 +1233,12 @@
     font: 600 13.5px "Hanken Grotesk";
     cursor: pointer;
     box-shadow: 0 6px 13px -6px rgba(63, 143, 126, 0.7);
+  }
+
+  .approve-yes:disabled {
+    opacity: 0.45;
+    cursor: default;
+    box-shadow: none;
   }
 
   .approve-no {

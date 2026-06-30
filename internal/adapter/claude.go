@@ -392,7 +392,9 @@ func parseClaudeLine(line []byte) ([]Event, error) {
 	switch eventType {
 	case "stream_event":
 		if nested, ok := raw["event"].(map[string]any); ok {
-			if text := extractText(nested); text != "" {
+			if req, ok := claudeUserInputRequest(nested, line); ok {
+				events = append(events, Event{Kind: EventUserInputRequest, UserInputRequest: req})
+			} else if text := extractText(nested); text != "" {
 				events = append(events, Event{Kind: EventAssistantDelta, Content: text})
 			}
 		}
@@ -401,12 +403,18 @@ func parseClaudeLine(line []byte) ([]Event, error) {
 			events = append(events, Event{Kind: EventAssistantDelta, Content: text})
 		}
 	case "assistant", "message":
-		if text := extractText(raw); text != "" {
+		if req, ok := claudeUserInputRequest(raw, line); ok {
+			events = append(events, Event{Kind: EventUserInputRequest, UserInputRequest: req})
+		} else if text := extractText(raw); text != "" {
 			events = append(events, Event{Kind: EventAssistantMessage, Content: text})
 		}
 	case "result":
 		if text := firstString(raw, "result", "content"); text != "" {
-			events = append(events, Event{Kind: EventAssistantMessage, Content: text})
+			if req, ok := claudeUserInputRequestFromText(text, line); ok {
+				events = append(events, Event{Kind: EventUserInputRequest, UserInputRequest: req})
+			} else {
+				events = append(events, Event{Kind: EventAssistantMessage, Content: text})
+			}
 		}
 	case "api_retry":
 		if claudeRateLimited(raw) {
@@ -421,6 +429,138 @@ func parseClaudeLine(line []byte) ([]Event, error) {
 		}
 	}
 	return events, nil
+}
+
+func claudeUserInputRequest(raw map[string]any, source []byte) (*UserInputRequest, bool) {
+	if req, ok := claudeUserInputRequestFromValue(raw, source); ok {
+		return req, true
+	}
+	if text := extractText(raw); text != "" {
+		return claudeUserInputRequestFromText(text, source)
+	}
+	return nil, false
+}
+
+func claudeUserInputRequestFromValue(value any, source []byte) (*UserInputRequest, bool) {
+	switch v := value.(type) {
+	case map[string]any:
+		if questions, ok := v["questions"]; ok {
+			return claudeUserInputRequestFromPayload(v, questions, source)
+		}
+		if input, ok := v["input"].(map[string]any); ok {
+			if questions, ok := input["questions"]; ok {
+				if _, hasID := input["id"]; !hasID {
+					input = cloneStringAnyMap(input)
+					if id := firstString(v, "id", "tool_use_id", "toolUseID", "item_id", "itemId"); id != "" {
+						input["id"] = id
+					}
+				}
+				return claudeUserInputRequestFromPayload(input, questions, source)
+			}
+		}
+		if block, ok := v["content_block"].(map[string]any); ok {
+			if req, ok := claudeUserInputRequestFromValue(block, source); ok {
+				return req, true
+			}
+		}
+		if nested, ok := v["event"].(map[string]any); ok {
+			if req, ok := claudeUserInputRequestFromValue(nested, source); ok {
+				return req, true
+			}
+		}
+		if message, ok := v["message"].(map[string]any); ok {
+			if req, ok := claudeUserInputRequestFromValue(message, source); ok {
+				return req, true
+			}
+		}
+		if content, ok := v["content"]; ok {
+			if req, ok := claudeUserInputRequestFromValue(content, source); ok {
+				return req, true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if req, ok := claudeUserInputRequestFromValue(item, source); ok {
+				return req, true
+			}
+		}
+	case string:
+		return claudeUserInputRequestFromText(v, source)
+	}
+	return nil, false
+}
+
+func cloneStringAnyMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func claudeUserInputRequestFromPayload(payload map[string]any, questions any, source []byte) (*UserInputRequest, bool) {
+	rawQuestions, err := json.Marshal(questions)
+	if err != nil {
+		return nil, false
+	}
+	var parsed []UserInputQuestion
+	if err := json.Unmarshal(rawQuestions, &parsed); err != nil || len(parsed) == 0 {
+		return nil, false
+	}
+	normalizeUserInputQuestions(parsed)
+	itemID := firstString(payload, "id", "tool_use_id", "toolUseID", "item_id", "itemId")
+	autoMS := int64FromAny(firstValue(payload, "autoResolutionMs", "auto_resolution_ms"))
+	req := &UserInputRequest{
+		ID:               userInputID("claude", source),
+		TurnID:           firstString(payload, "session_id", "sessionId"),
+		Provider:         config.ProviderClaude,
+		ItemID:           itemID,
+		Questions:        parsed,
+		AutoResolutionMS: autoMS,
+	}
+	if itemID != "" {
+		req.ID = "claude-" + sanitizeFilename(itemID)
+	}
+	return req, true
+}
+
+func claudeUserInputRequestFromText(text string, source []byte) (*UserInputRequest, bool) {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "questions:") {
+		raw := strings.TrimSpace(strings.TrimPrefix(trimmed, "questions:"))
+		var questions []UserInputQuestion
+		if err := json.Unmarshal([]byte(raw), &questions); err != nil || len(questions) == 0 {
+			return nil, false
+		}
+		normalizeUserInputQuestions(questions)
+		return &UserInputRequest{
+			ID:        userInputID("claude", source),
+			Provider:  config.ProviderClaude,
+			Questions: questions,
+		}, true
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+			return nil, false
+		}
+		if questions, ok := payload["questions"]; ok {
+			return claudeUserInputRequestFromPayload(payload, questions, source)
+		}
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var questions []UserInputQuestion
+		if err := json.Unmarshal([]byte(trimmed), &questions); err != nil || len(questions) == 0 {
+			return nil, false
+		}
+		normalizeUserInputQuestions(questions)
+		return &UserInputRequest{
+			ID:        userInputID("claude", source),
+			Provider:  config.ProviderClaude,
+			Questions: questions,
+		}, true
+	}
+	return nil, false
 }
 
 func claudeRateLimited(raw map[string]any) bool {
@@ -515,6 +655,31 @@ func firstString(raw map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstValue(raw map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if v, ok := raw[key]; ok {
+			return v
+		}
+	}
+	return nil
+}
+
+func int64FromAny(value any) int64 {
+	switch v := value.(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	default:
+		return 0
+	}
 }
 
 type stderrResult struct {

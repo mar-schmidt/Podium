@@ -44,6 +44,7 @@ type streamEvent struct {
 	Delta      string                     `json:"delta,omitempty"`
 	Notice     string                     `json:"notice,omitempty"`
 	Request    *adapter.PermissionRequest `json:"request,omitempty"`
+	Input      *adapter.UserInputRequest  `json:"input,omitempty"`
 	Error      string                     `json:"error,omitempty"`
 	AutoDenied bool                       `json:"auto_denied,omitempty"`
 }
@@ -340,24 +341,27 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	turnID := uuid.NewString()
-	requests, unsubscribe := s.broker.subscribe(turnID)
+	requests, unsubscribePermissions := s.broker.subscribe(turnID)
+	inputs, unsubscribeInputs := s.input.subscribe(turnID)
 	subscribed := true
 	defer func() {
 		if subscribed {
-			unsubscribe()
+			unsubscribePermissions()
+			unsubscribeInputs()
 		}
 	}()
 
 	events, err := s.core.StreamTurn(ctx, session.ID, req.Message, core.TurnOptions{
 		PermissionTurnID: turnID,
 		PermissionRelay:  s.broker,
+		UserInputRelay:   s.input,
 	})
 	if err != nil {
 		writeStreamEvent(enc, flusher, streamEvent{Type: "error", Error: err.Error()})
 		return
 	}
 
-	for events != nil || requests != nil {
+	for events != nil || requests != nil || inputs != nil {
 		select {
 		case <-ctx.Done():
 			return
@@ -367,13 +371,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			writeStreamEvent(enc, flusher, streamEvent{Type: "permission_request", Request: &request})
+		case input, ok := <-inputs:
+			if !ok {
+				inputs = nil
+				continue
+			}
+			writeStreamEvent(enc, flusher, streamEvent{Type: "user_input_request", Input: &input})
 		case event, ok := <-events:
 			if !ok {
 				events = nil
 				if subscribed {
-					unsubscribe()
+					unsubscribePermissions()
+					unsubscribeInputs()
 					subscribed = false
 					requests = nil
+					inputs = nil
 				}
 				continue
 			}
@@ -386,6 +398,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				writeStreamEvent(enc, flusher, streamEvent{Type: "assistant", Delta: event.Content})
 			case adapter.EventPermissionRequest:
 				writeStreamEvent(enc, flusher, streamEvent{Type: "permission_request", Request: event.PermissionRequest})
+			case adapter.EventUserInputRequest:
+				writeStreamEvent(enc, flusher, streamEvent{Type: "user_input_request", Input: event.UserInputRequest})
 			case adapter.EventTurnDone:
 				writeStreamEvent(enc, flusher, streamEvent{Type: "done"})
 			case "error":
@@ -394,6 +408,28 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeStreamEvent(enc, flusher, streamEvent{Type: "done"})
+}
+
+func (s *Server) handleUserInputDecision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/user-input-decisions/")
+	var decision adapter.UserInputDecision
+	if err := json.NewDecoder(r.Body).Decode(&decision); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if decision.Answers == nil {
+		http.Error(w, "answers are required", http.StatusBadRequest)
+		return
+	}
+	if !s.input.decide(id, decision) {
+		http.Error(w, "user input request not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"}, nil)
 }
 
 func (s *Server) handlePermissionDecision(w http.ResponseWriter, r *http.Request) {

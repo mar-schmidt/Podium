@@ -49,6 +49,7 @@ type TurnRequest struct {
 	History   []store.Message
 	Settings  TurnSettings
 	Relay     PermissionRelay
+	Input     UserInputRelay
 }
 
 // TurnSettings are the current session settings needed by per-turn providers
@@ -87,6 +88,8 @@ const (
 	EventAssistantMessage EventKind = "assistant_message"
 	// EventPermissionRequest asks the client to approve or deny a tool action.
 	EventPermissionRequest EventKind = "permission_request"
+	// EventUserInputRequest asks the client to answer a provider clarification.
+	EventUserInputRequest EventKind = "user_input_request"
 	// EventHandleUpdated carries a replacement resumable provider handle.
 	EventHandleUpdated EventKind = "handle_updated"
 	// EventRateStatus carries provider rate-limit utilization.
@@ -104,6 +107,7 @@ type Event struct {
 	Content           string
 	Handle            *Handle
 	PermissionRequest *PermissionRequest
+	UserInputRequest  *UserInputRequest
 	RateStatus        *RateStatus
 }
 
@@ -136,6 +140,43 @@ type PermissionDecision struct {
 // PermissionRelay receives permission requests and waits for user decisions.
 type PermissionRelay interface {
 	RequestPermission(context.Context, PermissionRequest, time.Duration) (PermissionDecision, error)
+}
+
+// UserInputRequest is a provider-neutral clarification prompt surfaced to users.
+type UserInputRequest struct {
+	ID               string              `json:"id"`
+	TurnID           string              `json:"turn_id,omitempty"`
+	Provider         config.Provider     `json:"provider,omitempty"`
+	ItemID           string              `json:"item_id,omitempty"`
+	Questions        []UserInputQuestion `json:"questions"`
+	AutoResolutionMS int64               `json:"auto_resolution_ms,omitempty"`
+}
+
+// UserInputQuestion is one prompt in a provider clarification request.
+type UserInputQuestion struct {
+	ID          string            `json:"id"`
+	Header      string            `json:"header,omitempty"`
+	Question    string            `json:"question"`
+	Options     []UserInputOption `json:"options,omitempty"`
+	MultiSelect bool              `json:"multi_select,omitempty"`
+	IsOther     bool              `json:"is_other,omitempty"`
+	IsSecret    bool              `json:"is_secret,omitempty"`
+}
+
+// UserInputOption is one selectable answer option.
+type UserInputOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// UserInputDecision maps question ids to one or more selected/freeform answers.
+type UserInputDecision struct {
+	Answers map[string][]string `json:"answers"`
+}
+
+// UserInputRelay receives clarification requests and waits for user answers.
+type UserInputRelay interface {
+	RequestUserInput(context.Context, UserInputRequest, time.Duration) (UserInputDecision, error)
 }
 
 func loggerOrDefault(log *slog.Logger) *slog.Logger {

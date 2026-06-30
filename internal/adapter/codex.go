@@ -160,6 +160,7 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 		ctx:          ctx,
 		podiumTurnID: firstNonEmptyString(req.Settings.PermissionTurnID, req.SessionID),
 		relay:        req.Relay,
+		input:        req.Input,
 		timeout:      c.permissionTimeout,
 	})
 
@@ -262,6 +263,7 @@ type codexActiveTurn struct {
 	ctx          context.Context
 	podiumTurnID string
 	relay        PermissionRelay
+	input        UserInputRelay
 	timeout      time.Duration
 }
 
@@ -677,6 +679,23 @@ func (c *codexClient) handleServerRequest(msg codexRPCMessage) {
 		c.respond(msg.ID, map[string]any{"currentTimeAt": time.Now().Unix()})
 		return
 	}
+	if msg.Method == "item/tool/requestUserInput" {
+		active, ok := c.waitActiveForRequest(msg.Method, msg.Params, 2*time.Second)
+		decision := UserInputDecision{Answers: map[string][]string{}}
+		if ok && active.input != nil {
+			req := codexUserInputRequest(msg.ID, msg.Params, active)
+			timeout := active.timeout
+			if req.AutoResolutionMS > 0 {
+				timeout = time.Duration(req.AutoResolutionMS) * time.Millisecond
+			}
+			got, err := active.input.RequestUserInput(active.ctx, req, timeout)
+			if err == nil && got.Answers != nil {
+				decision = got
+			}
+		}
+		c.respond(msg.ID, codexUserInputResponse(decision))
+		return
+	}
 	if !codexIsApprovalRequest(msg.Method) {
 		c.respondError(msg.ID, -32601, fmt.Sprintf("unsupported codex server request %s", msg.Method))
 		return
@@ -1059,6 +1078,46 @@ func codexRequestThreadTurn(method string, params json.RawMessage) (string, stri
 	threadID := firstRawString(fields, "threadId", "conversationId")
 	turnID := firstRawString(fields, "turnId")
 	return threadID, turnID
+}
+
+func codexUserInputRequest(id, params json.RawMessage, active codexActiveTurn) UserInputRequest {
+	var p struct {
+		ThreadID         string              `json:"threadId"`
+		TurnID           string              `json:"turnId"`
+		ItemID           string              `json:"itemId"`
+		Questions        []UserInputQuestion `json:"questions"`
+		AutoResolutionMS *uint64             `json:"autoResolutionMs"`
+	}
+	_ = json.Unmarshal(params, &p)
+	autoMS := int64(0)
+	if p.AutoResolutionMS != nil {
+		autoMS = int64(*p.AutoResolutionMS)
+	}
+	turnID := active.podiumTurnID
+	if turnID == "" {
+		turnID = p.TurnID
+	}
+	reqID := "codex-" + sanitizeFilename(codexIDKey(id))
+	if p.ItemID != "" {
+		reqID += "-" + sanitizeFilename(p.ItemID)
+	}
+	normalizeUserInputQuestions(p.Questions)
+	return UserInputRequest{
+		ID:               reqID,
+		TurnID:           turnID,
+		Provider:         config.ProviderCodex,
+		ItemID:           p.ItemID,
+		Questions:        p.Questions,
+		AutoResolutionMS: autoMS,
+	}
+}
+
+func codexUserInputResponse(decision UserInputDecision) any {
+	answers := map[string]any{}
+	for id, values := range decision.Answers {
+		answers[id] = map[string]any{"answers": values}
+	}
+	return map[string]any{"answers": answers}
 }
 
 func codexToolName(method string) string {

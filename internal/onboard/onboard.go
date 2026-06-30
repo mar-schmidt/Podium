@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/client"
 	"github.com/mar-schmidt/Podium/internal/config"
@@ -66,7 +68,21 @@ func Run(ctx context.Context, opts Options) error {
 		in = tty
 		os.Stdin = tty
 	}
-	p := prompter{in: bufio.NewReader(in), out: out}
+	// Snapshot the terminal's line-mode (canonical) state before any provider
+	// CLI runs. Claude/Codex are TUIs that put the controlling terminal into
+	// raw mode on startup and can exit without restoring it — which would leave
+	// our later prompts unable to read a line (Enter sends CR, not the NL that
+	// ReadString waits for) and disable Ctrl-C. We re-apply this saved state
+	// before each prompt so input is always canonical, echoing, and interruptible.
+	var ttyFile *os.File
+	var saneState *term.State
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		ttyFile = f
+		if st, err := term.GetState(int(f.Fd())); err == nil {
+			saneState = st
+		}
+	}
+	p := prompter{in: bufio.NewReader(in), out: out, tty: ttyFile, sane: saneState}
 	fmt.Fprintln(out, "Welcome to Podium.")
 	fmt.Fprintln(out, "Let's wake the stage, check your agent CLIs, and shape your first agent together.")
 	fmt.Fprintln(out)
@@ -546,11 +562,23 @@ func firstNonEmpty(values ...string) string {
 }
 
 type prompter struct {
-	in  *bufio.Reader
-	out io.Writer
+	in   *bufio.Reader
+	out  io.Writer
+	tty  *os.File
+	sane *term.State
+}
+
+// restoreTTY re-applies the saved canonical terminal state. It's a no-op when
+// onboarding isn't attached to a terminal. We call it before every read so a
+// TUI provider CLI that left the terminal in raw mode can't break our prompts.
+func (p prompter) restoreTTY() {
+	if p.tty != nil && p.sane != nil {
+		_ = term.Restore(int(p.tty.Fd()), p.sane)
+	}
 }
 
 func (p prompter) ask(prompt, def string) string {
+	p.restoreTTY()
 	if def != "" {
 		fmt.Fprintf(p.out, "%s [%s]: ", prompt, def)
 	} else {
@@ -600,6 +628,7 @@ func (p prompter) choice(prompt string, options []string, def string) string {
 }
 
 func (p prompter) multiline(prompt string) string {
+	p.restoreTTY()
 	fmt.Fprintln(p.out, prompt)
 	var lines []string
 	for {

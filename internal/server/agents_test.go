@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
@@ -108,7 +108,7 @@ func TestDeleteAgentSucceedsWhenConfigEntryIsAbsent(t *testing.T) {
 	}
 }
 
-func TestDeleteAgentFailsWhenSessionsReferenceAgent(t *testing.T) {
+func TestDeleteAgentArchivesSessionsBeforeDeletingAgent(t *testing.T) {
 	ctx := context.Background()
 	paths, srv, cleanup := newAgentAPITestServer(t)
 	defer cleanup()
@@ -134,21 +134,26 @@ server:
 	rr := httptest.NewRecorder()
 	srv.handleAgent(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "existing sessions still reference this agent") {
-		t.Fatalf("expected clear session-reference error, got %q", rr.Body.String())
+	if _, err := srv.core.GetAgent(ctx, "atlas"); err == nil {
+		t.Fatal("expected agent to be deleted after session archive")
 	}
-	if _, err := srv.core.GetAgent(ctx, "atlas"); err != nil {
-		t.Fatalf("agent should remain after blocked delete: %v", err)
+	archiveRoot := filepath.Join(paths.AgentsDir, "atlas", "workspace", "session-archive")
+	matches, err := filepath.Glob(filepath.Join(archiveRoot, "*", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("archive files = %v, want one JSON file", matches)
 	}
 	cfg, err := config.Load(paths.ConfigYAML)
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "atlas" {
-		t.Fatalf("config should remain unchanged, got %+v", cfg.Agents)
+	if len(cfg.Agents) != 0 {
+		t.Fatalf("config should remove deleted agent, got %+v", cfg.Agents)
 	}
 }
 

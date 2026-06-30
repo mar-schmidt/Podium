@@ -79,6 +79,29 @@ func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
 	return sessions, rows.Err()
 }
 
+// ListSessionsByAgent returns all sessions for one agent, oldest first, so they
+// can be archived in a stable historical order.
+func (s *Store) ListSessionsByAgent(ctx context.Context, agentName string) ([]Session, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		id, agent_name, name, description, auto_named, provider, profile, model, effort, permission_mode, origin,
+		COALESCE(schedule_id, ''), COALESCE(run_id, ''), COALESCE(task_id, ''), rolling_summary, provider_handle, created_at, updated_at
+		FROM sessions WHERE agent_name = ? ORDER BY created_at, id`, agentName)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions for agent %q: %w", agentName, err)
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		sess, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, rows.Err()
+}
+
 // ListSessionsBySchedule returns sessions produced by a given schedule, newest
 // first, so the user can review "all runs of <schedule>" (R7.9).
 func (s *Store) ListSessionsBySchedule(ctx context.Context, scheduleName string) ([]Session, error) {
@@ -284,6 +307,24 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 		messages = append(messages, msg)
 	}
 	return messages, rows.Err()
+}
+
+// DeleteSessionsByAgent removes all sessions for one agent. Message history is
+// removed by the messages.session_id ON DELETE CASCADE foreign key.
+func (s *Store) DeleteSessionsByAgent(ctx context.Context, agentName string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete sessions for agent %q: %w", agentName, err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE agent_name = ?`, agentName); err != nil {
+		return fmt.Errorf("delete sessions for agent %q: %w", agentName, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete sessions for agent %q: %w", agentName, err)
+	}
+	return nil
 }
 
 func scanSession(row scanner) (Session, error) {

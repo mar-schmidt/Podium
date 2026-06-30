@@ -183,10 +183,12 @@ Delete an agent through `podiumd`.
 podium agents delete jared
 ```
 
-The command requires typing the exact agent name before deletion. It removes the
-agent from Podium's database and removes a matching `config.yaml` `agents` entry
-when present. Files under `$PODIUM_HOME/agents/<name>/` are preserved. Deletion
-is blocked while existing sessions still reference the agent.
+The command requires typing the exact agent name before deletion. It archives
+the agent's sessions as JSON files under
+`$PODIUM_HOME/agents/<name>/workspace/session-archive/`, removes those sessions
+from active history, removes the agent from Podium's database, and removes a
+matching `config.yaml` `agents` entry when present. Files under
+`$PODIUM_HOME/agents/<name>/` are preserved.
 
 ### `podium chat`
 

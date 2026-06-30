@@ -1,7 +1,5 @@
 # Claude Integration
 
-Status: Phase 2 implemented.
-
 Podium drives Claude Code as a per-turn process. The daemon owns the durable
 Podium session and launches `claude` for each turn with the agent workspace as
 `cwd`.

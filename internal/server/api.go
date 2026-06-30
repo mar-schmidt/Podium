@@ -177,11 +177,12 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "confirmation must match agent name", http.StatusBadRequest)
 			return
 		}
-		if err := s.core.DeleteAgent(r.Context(), name); err != nil {
+		result, err := s.core.DeleteAgent(r.Context(), name)
+		if err != nil {
 			writeJSON(w, nil, err)
 			return
 		}
-		writeJSON(w, map[string]string{"status": "ok"}, nil)
+		writeJSON(w, result, nil)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

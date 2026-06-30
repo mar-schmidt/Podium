@@ -458,7 +458,7 @@ func newAgentsDeleteCmd(addr *string) *cobra.Command {
 	return &cobra.Command{
 		Use:     "delete <name>",
 		Short:   "Delete an agent",
-		Long:    "Deletes a durable agent through podiumd and removes its config.yaml entry. Agent files under $PODIUM_HOME/agents/<name>/ are preserved.",
+		Long:    "Archives the agent's sessions into its workspace, deletes the durable agent through podiumd, and removes its config.yaml entry. Agent files under $PODIUM_HOME/agents/<name>/ are preserved.",
 		Example: "  podium agents delete jared",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -471,17 +471,21 @@ func newAgentsDeleteCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.DeleteAgent(cmd.Context(), name, confirmation); err != nil {
+			result, err := c.DeleteAgent(cmd.Context(), name, confirmation)
+			if err != nil {
 				return err
 			}
 			fmt.Printf("deleted agent %s\n", name)
+			if result.ArchivedSessions > 0 {
+				fmt.Printf("archived %d session(s) to %s\n", result.ArchivedSessions, result.ArchivePath)
+			}
 			return nil
 		},
 	}
 }
 
 func confirmAgentDeletion(in io.Reader, out io.Writer, name string) (string, bool) {
-	fmt.Fprintf(out, "This deletes agent %q from Podium and config.yaml. Agent files are preserved.\n", name)
+	fmt.Fprintf(out, "This archives sessions for %q into its workspace, removes them from active history, and deletes the agent from Podium and config.yaml. Agent files are preserved.\n", name)
 	fmt.Fprintf(out, "Type %s to delete: ", name)
 	line, _ := bufio.NewReader(in).ReadString('\n')
 	confirmation := strings.TrimSpace(line)

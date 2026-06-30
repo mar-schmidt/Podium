@@ -86,8 +86,13 @@ export async function updateAgent(name: string, patch: AgentUpdate): Promise<Age
   );
 }
 
-export async function deleteAgent(name: string, confirmation: string): Promise<void> {
-  await asJSON(
+export interface AgentDeleteResult {
+  archive_path?: string;
+  archived_sessions: number;
+}
+
+export async function deleteAgent(name: string, confirmation: string): Promise<AgentDeleteResult> {
+  return asJSON(
     await fetch(`/api/agents/${encodeURIComponent(name)}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },

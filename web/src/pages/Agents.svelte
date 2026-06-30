@@ -277,7 +277,7 @@
     <div class="modal-card delete-modal" role="dialog" aria-modal="true" aria-label="Delete agent" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <div class="modal-head">
         <div class="modal-title">Delete {selected.Name}</div>
-        <div class="modal-sub">This removes the agent from Podium and config.yaml. Files in <span class="mono">~/.podium/agents/{selected.Name}</span> are preserved.</div>
+        <div class="modal-sub">This archives sessions into <span class="mono">~/.podium/agents/{selected.Name}/workspace/session-archive</span>, removes them from active history, and deletes the agent from Podium and config.yaml. Agent files are preserved.</div>
       </div>
       <div class="modal-body">
         {#if deleteError}<div class="error-banner" style="margin-bottom:14px">{deleteError}</div>{/if}

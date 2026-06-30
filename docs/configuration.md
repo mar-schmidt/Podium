@@ -41,7 +41,7 @@ Omitting a profile on an agent uses the CLI's normal global login.
 Named colleagues maintained by Podium. Empty optional fields inherit from
 `global`. Each agent gets a directory under `~/.podium/agents/<name>/`.
 Deleting an agent from the UI or CLI also removes its matching entry here when
-present, but leaves the agent directory on disk.
+present, after archiving its sessions into the preserved agent workspace.
 
 | Field | Values | Meaning |
 | --- | --- | --- |

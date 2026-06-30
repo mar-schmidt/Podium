@@ -123,9 +123,19 @@ func (c *Client) UpdateAgent(ctx context.Context, name string, req AgentUpdateRe
 	return detail, nil
 }
 
+// AgentDeleteResult is the DELETE /api/agents/<name> response.
+type AgentDeleteResult struct {
+	ArchivePath      string `json:"archive_path,omitempty"`
+	ArchivedSessions int    `json:"archived_sessions"`
+}
+
 // DeleteAgent deletes an agent after server-side name confirmation.
-func (c *Client) DeleteAgent(ctx context.Context, name, confirmation string) error {
-	return c.deleteJSON(ctx, "/api/agents/"+urlPathEscape(name), map[string]string{"confirmation": confirmation}, nil)
+func (c *Client) DeleteAgent(ctx context.Context, name, confirmation string) (AgentDeleteResult, error) {
+	var result AgentDeleteResult
+	if err := c.deleteJSON(ctx, "/api/agents/"+urlPathEscape(name), map[string]string{"confirmation": confirmation}, &result); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // ListAgents lists agents from the daemon.

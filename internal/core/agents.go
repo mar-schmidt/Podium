@@ -2,10 +2,13 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode"
 
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/store"
@@ -22,6 +25,13 @@ type CreateAgentRequest struct {
 	PermissionMode config.PermissionMode
 	Fallback       []string
 	MCPConfig      string
+}
+
+// DeleteAgentResult describes any on-disk archive created while deleting an
+// agent. ArchivePath is empty when the agent had no sessions to archive.
+type DeleteAgentResult struct {
+	ArchivePath      string `json:"archive_path,omitempty"`
+	ArchivedSessions int    `json:"archived_sessions"`
 }
 
 // CreateAgent scaffolds the agent directory and stores its durable definition.
@@ -71,17 +81,156 @@ func (c *Core) UpdateAgent(ctx context.Context, agent store.Agent) (store.Agent,
 
 // DeleteAgent removes the durable agent definition. Files on disk are left in
 // place so user-authored identity/instructions are never deleted implicitly.
-func (c *Core) DeleteAgent(ctx context.Context, name string) error {
+func (c *Core) DeleteAgent(ctx context.Context, name string) (DeleteAgentResult, error) {
 	if err := validateAgentName(name); err != nil {
-		return err
+		return DeleteAgentResult{}, err
+	}
+	agent, err := c.store.GetAgent(ctx, name)
+	if err != nil {
+		return DeleteAgentResult{}, err
+	}
+	sessions, err := c.store.ListSessionsByAgent(ctx, name)
+	if err != nil {
+		return DeleteAgentResult{}, err
+	}
+	archivePath, err := c.archiveAgentSessions(ctx, agent, sessions, time.Now().UTC())
+	if err != nil {
+		return DeleteAgentResult{}, err
+	}
+	if err := c.store.DeleteSessionsByAgent(ctx, name); err != nil {
+		return DeleteAgentResult{}, err
 	}
 	if err := c.store.DeleteAgent(ctx, name); err != nil {
-		return err
+		return DeleteAgentResult{}, err
 	}
 	if err := config.RemoveAgent(c.paths.ConfigYAML, name); err != nil {
-		return err
+		return DeleteAgentResult{}, err
 	}
-	return nil
+	return DeleteAgentResult{ArchivePath: archivePath, ArchivedSessions: len(sessions)}, nil
+}
+
+type sessionArchive struct {
+	ExportedAt string          `json:"exported_at"`
+	Agent      store.Agent     `json:"agent"`
+	Session    archivedSession `json:"session"`
+	Messages   []store.Message `json:"messages"`
+}
+
+type archivedSession struct {
+	ID             string                `json:"id"`
+	AgentName      string                `json:"agent_name"`
+	Name           string                `json:"name"`
+	Description    string                `json:"description"`
+	AutoNamed      bool                  `json:"auto_named"`
+	Provider       config.Provider       `json:"provider"`
+	Profile        string                `json:"profile"`
+	Model          string                `json:"model"`
+	Effort         string                `json:"effort"`
+	PermissionMode config.PermissionMode `json:"permission_mode"`
+	Origin         store.SessionOrigin   `json:"origin"`
+	ScheduleID     string                `json:"schedule_id,omitempty"`
+	RunID          string                `json:"run_id,omitempty"`
+	TaskID         string                `json:"task_id,omitempty"`
+	RollingSummary string                `json:"rolling_summary,omitempty"`
+	CreatedAt      string                `json:"created_at"`
+	UpdatedAt      string                `json:"updated_at"`
+}
+
+func (c *Core) archiveAgentSessions(ctx context.Context, agent store.Agent, sessions []store.Session, deletedAt time.Time) (string, error) {
+	if len(sessions) == 0 {
+		return "", nil
+	}
+	archiveRoot := filepath.Join(c.AgentPaths(agent.Name).Workspace, "session-archive")
+	dirName := deletedAt.Format("20060102T150405.000000000Z")
+	tmpDir := filepath.Join(archiveRoot, ".tmp-"+dirName)
+	finalDir := filepath.Join(archiveRoot, dirName)
+
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		return "", fmt.Errorf("create session archive dir: %w", err)
+	}
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+
+	exportedAt := deletedAt.Format(time.RFC3339Nano)
+	for _, sess := range sessions {
+		messages, err := c.store.ListMessages(ctx, sess.ID)
+		if err != nil {
+			return "", err
+		}
+		payload := sessionArchive{
+			ExportedAt: exportedAt,
+			Agent:      agent,
+			Session:    archiveSession(sess),
+			Messages:   messages,
+		}
+		raw, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("encode session archive %q: %w", sess.ID, err)
+		}
+		raw = append(raw, '\n')
+		if err := os.WriteFile(filepath.Join(tmpDir, archiveSessionFilename(sess)), raw, 0o600); err != nil {
+			return "", fmt.Errorf("write session archive %q: %w", sess.ID, err)
+		}
+	}
+	if err := os.Rename(tmpDir, finalDir); err != nil {
+		return "", fmt.Errorf("finalize session archive: %w", err)
+	}
+	removeTmp = false
+	return finalDir, nil
+}
+
+func archiveSession(sess store.Session) archivedSession {
+	return archivedSession{
+		ID:             sess.ID,
+		AgentName:      sess.AgentName,
+		Name:           sess.Name,
+		Description:    sess.Description,
+		AutoNamed:      sess.AutoNamed,
+		Provider:       sess.Provider,
+		Profile:        sess.Profile,
+		Model:          sess.Model,
+		Effort:         sess.Effort,
+		PermissionMode: sess.PermissionMode,
+		Origin:         sess.Origin,
+		ScheduleID:     sess.ScheduleID,
+		RunID:          sess.RunID,
+		TaskID:         sess.TaskID,
+		RollingSummary: sess.RollingSummary,
+		CreatedAt:      sess.CreatedAt,
+		UpdatedAt:      sess.UpdatedAt,
+	}
+}
+
+func archiveSessionFilename(sess store.Session) string {
+	stamp := firstNonEmpty(sess.CreatedAt, sess.UpdatedAt, "unknown-time")
+	return sanitizeArchiveName(stamp) + "_" + sanitizeArchiveName(sess.ID) + ".json"
+}
+
+func sanitizeArchiveName(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	lastDash := false
+	for _, r := range s {
+		ok := r <= unicode.MaxASCII && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_' || r == '-')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "unnamed"
+	}
+	return out
 }
 
 // ReadAgentSoul returns the contents of an agent's SOUL.md, or empty string if

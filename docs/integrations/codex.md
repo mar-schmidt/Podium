@@ -1,7 +1,5 @@
 # Codex Integration
 
-Status: Phase 5 implemented.
-
 Podium drives OpenAI Codex through the experimental app-server transport. The
 daemon owns durable Podium sessions and maps each Codex-backed session to a
 persisted Codex `threadId`.

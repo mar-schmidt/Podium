@@ -38,6 +38,7 @@
   let dragging = $state(false);
   let openCard = $state<Task | null>(null);
   let busy = $state(false);
+  let activeColumn = $state<TaskStatus>("backlog");
 
   // New-task modal.
   let creating = $state(false);
@@ -217,10 +218,20 @@
 
   {#if error}<div class="error-banner" style="margin-bottom:14px">{error}</div>{/if}
 
+  <div class="column-tabs" aria-label="Roadmap columns">
+    {#each COLUMNS as col}
+      <button class:active={activeColumn === col.key} onclick={() => (activeColumn = col.key)}>
+        <span class="col-dot" style="background:{col.dot}"></span>
+        {col.label}
+        <span class="col-count mono">{tasksFor(col.key).length}</span>
+      </button>
+    {/each}
+  </div>
+
   <div class="board">
     {#each COLUMNS as col}
       {@const isStart = col.key === "in_progress" && dragging}
-      <div class="col" role="list" ondragover={(e) => e.preventDefault()} ondrop={() => onDrop(col.key)}>
+      <div class="col" class:active-col={activeColumn === col.key} role="list" ondragover={(e) => e.preventDefault()} ondrop={() => onDrop(col.key)}>
         <div class="col-head">
           <span class="col-dot" style="background:{isStart ? '#2E8E78' : col.dot}"></span>
           <span class="col-label" style="color:{isStart ? '#2A7A68' : '#2B2520'}">{isStart ? "Start" : col.label}</span>
@@ -379,6 +390,10 @@
     color: var(--muted);
     cursor: pointer;
     outline: none;
+  }
+
+  .column-tabs {
+    display: none;
   }
 
   .board {
@@ -639,5 +654,94 @@
     border: 1.5px dashed #c9b89f;
     background: transparent;
     color: #a8825e;
+  }
+
+  @media (max-width: 768px) {
+    .roadmap-page {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .mini-select {
+      width: 100%;
+    }
+
+    .column-tabs {
+      display: flex;
+      gap: 7px;
+      overflow-x: auto;
+      padding: 0 0 12px;
+      scrollbar-width: none;
+    }
+
+    .column-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .column-tabs button {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--field-line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      padding: 8px 12px;
+      font: 700 12px "Hanken Grotesk";
+      cursor: pointer;
+    }
+
+    .column-tabs button.active {
+      border-color: #bfe0d6;
+      background: #e3f1ec;
+      color: var(--teal-deep);
+    }
+
+    .board {
+      overflow-x: visible;
+      padding-bottom: 0;
+    }
+
+    .col {
+      display: none;
+      width: 100%;
+    }
+
+    .col.active-col {
+      display: flex;
+    }
+
+    .col-head {
+      display: none;
+    }
+
+    .col-zone {
+      overflow-y: visible;
+      padding: 2px 0 4px;
+    }
+
+    .tc-foot {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .tc-agent {
+      min-width: 0;
+    }
+
+    .cm-proj {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .cm-actions {
+      flex-direction: column;
+    }
+
+    .chip-wrap {
+      max-height: 180px;
+      overflow-y: auto;
+    }
   }
 </style>

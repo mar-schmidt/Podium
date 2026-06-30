@@ -64,6 +64,7 @@
   // Layout / UI state.
   let sessOpen = $state(true);
   let ctxOpen = $state(true);
+  let isPhone = $state(false);
   let openDropdown = $state<string | null>(null);
   let newSessionOpen = $state(false);
 
@@ -110,11 +111,22 @@
   }
 
   onMount(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const syncPhone = () => {
+      isPhone = mq.matches;
+      if (mq.matches) {
+        sessOpen = false;
+        ctxOpen = false;
+      }
+    };
+    syncPhone();
+    mq.addEventListener("change", syncPhone);
     connect();
     listProjects().then((p) => (projects = p)).catch(() => {});
     poll = window.setInterval(() => send({ type: "list" }), 4000);
     countdown = window.setInterval(updatePermissionRemaining, 1000);
     return () => {
+      mq.removeEventListener("change", syncPhone);
       if (poll) window.clearInterval(poll);
       if (countdown) window.clearInterval(countdown);
       ws?.close();
@@ -243,6 +255,7 @@
       messages = detail.history ?? [];
       projectName = detail.project_name ?? "";
       pendingAssistant = "";
+      if (isPhone) sessOpen = false;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -275,6 +288,7 @@
     pendingAssistant = "";
     notice = null;
     error = null;
+    if (isPhone) sessOpen = false;
   }
 
   function startSessionWith(agentName: string) {
@@ -319,6 +333,13 @@
     openDropdown = openDropdown === key ? null : key;
   }
 
+  function closeMobilePanels() {
+    if (!isPhone) return;
+    sessOpen = false;
+    ctxOpen = false;
+    openDropdown = null;
+  }
+
   function permissionCmd(input: Record<string, unknown>): string {
     return Object.entries(input)
       .map(([k, v]) => (k === "command" ? String(v) : `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`))
@@ -327,6 +348,10 @@
 </script>
 
 <div class="chat" style="flex:1;display:flex;min-height:0">
+  {#if isPhone && (sessOpen || ctxOpen)}
+    <button class="mobile-panel-backdrop" aria-label="Close panel" onclick={closeMobilePanels}></button>
+  {/if}
+
   <!-- ===== sessions column ===== -->
   {#if sessOpen}
     <div class="sess-col">
@@ -1240,5 +1265,172 @@
     font: 600 16px "Hanken Grotesk";
     color: var(--teal-deep);
     flex: none;
+  }
+
+  .mobile-panel-backdrop {
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    .mobile-panel-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0 0 calc(72px + env(safe-area-inset-bottom)) 0;
+      z-index: 30;
+      border: none;
+      background: rgba(43, 37, 32, 0.22);
+      backdrop-filter: blur(1px);
+      padding: 0;
+    }
+
+    .chat {
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .sess-col,
+    .ctx {
+      position: fixed;
+      top: 0;
+      bottom: calc(72px + env(safe-area-inset-bottom));
+      z-index: 35;
+      width: min(88vw, 340px);
+      max-width: calc(100vw - 34px);
+      box-shadow: 18px 0 42px -32px rgba(43, 37, 32, 0.58);
+    }
+
+    .sess-col {
+      left: 0;
+      border-right: 1px solid var(--line);
+    }
+
+    .ctx {
+      right: 0;
+      border-left: 1px solid var(--line);
+      padding: 16px 18px 20px;
+      box-shadow: -18px 0 42px -32px rgba(43, 37, 32, 0.58);
+    }
+
+    .conv {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .conv-head {
+      padding: 12px 14px;
+      gap: 9px;
+    }
+
+    .conv-title {
+      font-size: 15px;
+    }
+
+    .proj-strip {
+      padding: 6px 14px;
+    }
+
+    .msgs {
+      padding: 18px 14px;
+      gap: 14px;
+    }
+
+    .row-start,
+    .approve-wrap {
+      max-width: 100%;
+    }
+
+    .row-start {
+      gap: 9px;
+    }
+
+    .bubble-user {
+      max-width: 88%;
+      padding: 11px 13px;
+      font-size: 14.5px;
+    }
+
+    .bubble-assistant,
+    .bubble-error {
+      padding: 11px 13px;
+      font-size: 14.5px;
+    }
+
+    .approve-head {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .approve-head span[style*="flex:1"] {
+      display: none;
+    }
+
+    .approve-actions {
+      flex-direction: column;
+    }
+
+    .composer {
+      padding: 10px 12px 12px;
+    }
+
+    .composer-box {
+      gap: 8px;
+      padding: 7px 7px 7px 12px;
+    }
+
+    .composer-input {
+      min-width: 0;
+      font-size: 14.5px;
+    }
+
+    .composer-send {
+      width: 34px;
+      height: 34px;
+    }
+
+    .composer-meta {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      scrollbar-width: none;
+    }
+
+    .composer-meta::-webkit-scrollbar {
+      display: none;
+    }
+
+    .composer-meta .dd-wrap,
+    .chip-btn {
+      flex: none;
+    }
+
+    .slash-menu {
+      left: 12px;
+      right: 12px;
+      bottom: 82px;
+      max-width: none;
+    }
+
+    .slash-item {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .slash-cmd {
+      min-width: 0;
+    }
+
+    .ns-list {
+      max-height: calc(100dvh - 138px);
+      overflow-y: auto;
+      padding: 14px;
+    }
+
+    .ns-row-head {
+      align-items: flex-start;
+      flex-direction: column;
+    }
   }
 </style>

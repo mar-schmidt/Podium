@@ -105,17 +105,18 @@
 
     <!-- merge diagram -->
     <div
+      class="skills-flow-card"
       style="margin-top:22px;background:#FFFDFB;border:1px solid #EDE4D9;border-radius:18px;box-shadow:0 1px 2px rgba(43,37,32,.04),0 18px 44px -32px rgba(43,37,32,.22);padding:18px 20px 16px"
     >
-      <div style="display:flex;align-items:center;gap:9px;margin-bottom:16px">
+      <div class="skills-flow-title" style="display:flex;align-items:center;gap:9px;margin-bottom:16px">
         <span style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.13em;color:#A89C8E;text-transform:uppercase">How skills reach your agents</span>
         <span style="flex:1;height:1px;background:#F1EAE0"></span>
         <span style="font:400 12px 'Hanken Grotesk';color:#8A7F73">Wherever a skill lives, it joins one pool every agent can draw from.</span>
       </div>
 
-      <div style="display:flex;align-items:stretch;gap:0;min-height:264px">
+      <div class="skills-flow" style="display:flex;align-items:stretch;gap:0;min-height:264px">
         <!-- three source lists -->
-        <div style="width:236px;flex:none;display:flex;flex-direction:column;gap:12px">
+        <div class="skills-sources" style="width:236px;flex:none;display:flex;flex-direction:column;gap:12px">
           {#each flowSources as g (g.key)}
             <div
               style="flex:1;min-height:0;background:#FBF7F1;border:1px solid #EDE4D9;border-radius:13px;padding:13px 14px;display:flex;flex-direction:column;gap:9px;justify-content:center"
@@ -130,7 +131,7 @@
         </div>
 
         <!-- connectors -->
-        <div style="width:92px;flex:none;position:relative">
+        <div class="skills-connectors" style="width:92px;flex:none;position:relative">
           <svg width="92" height="264" viewBox="0 0 92 264" preserveAspectRatio="none" style="display:block">
             <path d="M0,42 C46,42 46,132 92,132" fill="none" stroke="#2F6E60" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 7" opacity=".55" style="animation:pdFlow 1.1s linear infinite" />
             <path d="M0,132 L92,132" fill="none" stroke="#B0572F" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 7" opacity=".55" style="animation:pdFlow 1.1s linear infinite" />
@@ -141,6 +142,7 @@
 
         <!-- shared podium pool -->
         <div
+          class="skills-pool"
           style="flex:1;min-width:0;background:radial-gradient(120% 130% at 100% 0%,rgba(70,160,140,.10),transparent 55%),#FFFDFB;border:1px solid #DCD0C1;border-radius:14px;padding:15px 17px;display:flex;flex-direction:column;box-shadow:0 14px 36px -28px rgba(47,110,96,.5)"
         >
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:13px">
@@ -168,7 +170,7 @@
     </div>
 
     <!-- toolbar -->
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:22px">
+    <div class="skills-toolbar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:22px">
       <div style="position:relative;flex:1;min-width:240px;max-width:420px">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A89C8E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:13px;top:50%;transform:translateY(-50%);pointer-events:none"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
         <input
@@ -177,7 +179,7 @@
           style="width:100%;padding:11px 14px 11px 38px;border:1px solid #EAE0D4;border-radius:12px;background:#FFFDFB;font:500 13.5px 'Hanken Grotesk';color:#2B2520;outline:none;box-shadow:0 1px 2px rgba(43,37,32,.03)"
         />
       </div>
-      <div style="display:flex;align-items:center;gap:4px;padding:4px;border-radius:12px;background:#EFE7DC;border:1px solid #E6DBCC">
+      <div class="skills-filter-pills" style="display:flex;align-items:center;gap:4px;padding:4px;border-radius:12px;background:#EFE7DC;border:1px solid #E6DBCC">
         {#each pills as p (p)}
           <button onclick={() => (sourceFilter = p)} style={pillStyle(p)}>
             {#if p !== "all"}<span style={dotStyle(p)}></span>{/if}
@@ -194,6 +196,7 @@
         <div style="background:#FFFDFB;border:1px solid #EDE4D9;border-radius:16px;box-shadow:0 1px 2px rgba(43,37,32,.04),0 14px 38px -30px rgba(43,37,32,.22);overflow:hidden">
           <!-- row header -->
           <div
+            class="skill-row-head"
             role="button"
             tabindex="0"
             onclick={() => toggle(s.name)}
@@ -215,7 +218,7 @@
               </div>
               <div style="font:400 13px/1.5 'Hanken Grotesk';color:#6F6459;margin-top:5px;max-width:620px">{s.description}</div>
             </div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:230px">
+            <div class="skill-row-sources" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:230px">
               {#each s.sources as b (b)}
                 <span style={chipStyle(b)}><span style={dotStyle(b)}></span>{SRC[b].label}</span>
               {/each}
@@ -296,6 +299,93 @@
   .skills-inner {
     max-width: 1080px;
     margin: 0 auto;
+  }
+  @media (max-width: 768px) {
+    .skills-page {
+      padding: 16px 16px 92px;
+    }
+
+    .skills-flow-card {
+      padding: 16px !important;
+    }
+
+    .skills-flow-title {
+      align-items: flex-start !important;
+      flex-direction: column;
+      gap: 7px !important;
+    }
+
+    .skills-flow-title span:nth-child(2) {
+      display: none;
+    }
+
+    .skills-flow {
+      flex-direction: column;
+      gap: 12px !important;
+      min-height: 0 !important;
+    }
+
+    .skills-sources,
+    .skills-connectors,
+    .skills-pool {
+      width: 100% !important;
+    }
+
+    .skills-connectors {
+      height: 34px;
+      overflow: hidden;
+    }
+
+    .skills-connectors svg {
+      display: none !important;
+    }
+
+    .skills-connectors::before {
+      content: "";
+      display: block;
+      width: 2px;
+      height: 34px;
+      margin: 0 auto;
+      border-radius: 99px;
+      background: #c7b49b;
+    }
+
+    .skills-pool {
+      min-height: 220px;
+    }
+
+    .skills-toolbar {
+      align-items: stretch !important;
+      flex-direction: column;
+    }
+
+    .skills-toolbar > div {
+      max-width: none !important;
+    }
+
+    .skills-filter-pills {
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .skills-filter-pills::-webkit-scrollbar {
+      display: none;
+    }
+
+    .skills-filter-pills button {
+      flex: none;
+    }
+
+    .skill-row-head {
+      padding: 14px 16px !important;
+    }
+
+    .skill-row-sources {
+      flex-basis: 100%;
+      justify-content: flex-start !important;
+      max-width: none !important;
+      margin-left: 35px;
+    }
   }
   @keyframes pdExpand {
     0% {

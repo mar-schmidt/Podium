@@ -517,4 +517,56 @@
     cursor: pointer;
     box-shadow: 0 10px 22px -8px rgba(63, 143, 126, 0.7);
   }
+
+  @media (max-width: 768px) {
+    .sidebar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 50;
+      width: auto;
+      height: 72px;
+      padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+      border-right: none;
+      border-top: 1px solid var(--line);
+      box-shadow: 0 -14px 34px -28px rgba(43, 37, 32, 0.42);
+    }
+
+    .brand,
+    .nav-foot {
+      display: none;
+    }
+
+    .nav-links {
+      flex: 1;
+      flex-direction: row;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .nav-link {
+      flex: 1;
+      min-width: 0;
+      flex-direction: column;
+      justify-content: center;
+      gap: 4px;
+      padding: 7px 4px;
+      border-radius: 11px;
+      text-align: center;
+      font-size: 11px;
+      line-height: 1.1;
+    }
+
+    .nav-link svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .main {
+      width: 100%;
+      min-height: 0;
+      padding-bottom: calc(72px + env(safe-area-inset-bottom));
+    }
+  }
 </style>

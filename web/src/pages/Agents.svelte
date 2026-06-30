@@ -143,7 +143,7 @@
 {#if !selected}
   <div class="page">
     <header style="margin-bottom:22px">
-      <div style="display:flex;align-items:flex-end;gap:14px">
+      <div class="agents-head-row" style="display:flex;align-items:flex-end;gap:14px">
         <div>
           <h1 style="margin:0;font:800 24px 'Hanken Grotesk';letter-spacing:-.02em">Agents</h1>
           <p style="margin:3px 0 0;font:400 13px 'Hanken Grotesk';color:var(--muted-2)">Your roster of named colleagues. Each owns a workspace, a soul, and its own defaults.</p>
@@ -295,7 +295,7 @@
 <style>
   .roster {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
     gap: 16px;
   }
 
@@ -511,5 +511,75 @@
     cursor: not-allowed;
     opacity: 0.45;
     box-shadow: none;
+  }
+
+  @media (max-width: 768px) {
+    .agents-head-row {
+      align-items: stretch !important;
+      flex-direction: column;
+      gap: 12px !important;
+    }
+
+    .agents-head-row .spacer {
+      display: none;
+    }
+
+    .agents-head-row .head-cta {
+      width: 100%;
+    }
+
+    .agent-card {
+      padding: 16px;
+      gap: 12px;
+    }
+
+    .agent-add {
+      min-height: 104px;
+    }
+
+    .ad-top {
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .ad-name {
+      font-size: 24px;
+    }
+
+    .ad-actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .ad-actions button {
+      justify-content: center;
+      width: 100%;
+    }
+
+    .ad-grid {
+      grid-template-columns: 1fr;
+      margin-top: 20px;
+    }
+
+    .ad-spec {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .ad-spec span:last-child {
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    .ed-row {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .ed-key {
+      width: auto;
+    }
   }
 </style>

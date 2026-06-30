@@ -466,4 +466,52 @@
       max-width 0.16s ease,
       opacity 0.14s ease;
   }
+
+  @media (max-width: 768px) {
+    .sched-stack {
+      max-width: none;
+    }
+
+    .sched-card {
+      padding: 16px;
+    }
+
+    .sched-top {
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .sched-id {
+      flex-basis: calc(100% - 48px);
+    }
+
+    .sched-file {
+      max-width: 100%;
+    }
+
+    .sched-next {
+      min-width: 0;
+      text-align: left;
+    }
+
+    .sched-run {
+      flex: 1 1 100%;
+      justify-content: center;
+    }
+
+    .ns-row {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .ns-key {
+      width: auto;
+    }
+
+    .ns-preview {
+      max-height: 180px;
+    }
+  }
 </style>

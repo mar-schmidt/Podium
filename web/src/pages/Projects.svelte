@@ -262,7 +262,7 @@
 
   .proj-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
     gap: 18px;
     max-width: 1180px;
   }
@@ -405,5 +405,52 @@
   .np-modal {
     width: 460px;
     max-width: 92vw;
+  }
+
+  @media (max-width: 768px) {
+    .writer-pick {
+      align-self: stretch;
+      justify-content: space-between;
+    }
+
+    .writer-pick select {
+      min-width: 0;
+      max-width: 58vw;
+    }
+
+    .proj-card {
+      padding: 16px;
+    }
+
+    .pc-head {
+      align-items: flex-start;
+    }
+
+    .pc-name {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .pc-id {
+      margin-left: 25px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pc-desc-head,
+    .pc-foot,
+    .pc-save-row {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .ai-btn,
+    .pc-view,
+    .pc-save,
+    .pc-cancel {
+      justify-content: center;
+      width: 100%;
+    }
   }
 </style>

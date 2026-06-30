@@ -96,7 +96,15 @@ func Run(ctx context.Context, opts Options) error {
 	banner(out, clear)
 
 	section(out, "Checking your agent CLIs")
-	statuses := providercheck.CheckAll(ctx, providercheck.Options{})
+	checkProviders := func(title string) []providercheck.Status {
+		var st []providercheck.Status
+		_ = u.spinnerWhile(title, func() error {
+			st = providercheck.CheckAll(ctx, providercheck.Options{})
+			return nil
+		})
+		return st
+	}
+	statuses := checkProviders("Detecting Claude and Codex…")
 	printDoctor(out, statuses)
 	ready := readyProviders(statuses)
 	for len(ready) == 0 {
@@ -114,7 +122,7 @@ func Run(ctx context.Context, opts Options) error {
 				_ = providercheck.RunNativeLogin(ctx, s.Provider, s.Path)
 			}
 		}
-		statuses = providercheck.CheckAll(ctx, providercheck.Options{})
+		statuses = checkProviders("Re-checking providers…")
 		printDoctor(out, statuses)
 		ready = readyProviders(statuses)
 		if len(ready) == 0 {

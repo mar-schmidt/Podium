@@ -123,6 +123,11 @@ func (c *Client) UpdateAgent(ctx context.Context, name string, req AgentUpdateRe
 	return detail, nil
 }
 
+// DeleteAgent deletes an agent after server-side name confirmation.
+func (c *Client) DeleteAgent(ctx context.Context, name, confirmation string) error {
+	return c.deleteJSON(ctx, "/api/agents/"+urlPathEscape(name), map[string]string{"confirmation": confirmation}, nil)
+}
+
 // ListAgents lists agents from the daemon.
 func (c *Client) ListAgents(ctx context.Context) ([]store.Agent, error) {
 	var agents []store.Agent
@@ -350,6 +355,28 @@ func (c *Client) putJSON(ctx context.Context, path string, in any, out any) erro
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("PUT %s status %d: %s", path, resp.StatusCode, bytes.TrimSpace(body))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (c *Client) deleteJSON(ctx context.Context, path string, in any, out any) error {
+	raw, _ := json.Marshal(in)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("DELETE %s status %d: %s", path, resp.StatusCode, bytes.TrimSpace(body))
 	}
 	if out == nil {
 		return nil

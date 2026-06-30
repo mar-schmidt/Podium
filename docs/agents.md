@@ -17,6 +17,11 @@ $PODIUM_HOME/agents/<name>/
 Podium does not create `agents/<name>/AGENTS.md`; that file is optional and left
 for the user to add when an agent needs extra standing instructions.
 
+Deleting an agent through the UI or CLI removes its durable database row and any
+matching `config.yaml` entry, after an exact-name confirmation. The
+`$PODIUM_HOME/agents/<name>/` directory is preserved, and deletion is blocked
+while sessions still reference the agent.
+
 ## Instruction Layers
 
 Podium composes agent instructions in this fixed order:

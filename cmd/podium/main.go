@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -378,12 +379,14 @@ func newAgentsCmd(addr *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agents",
 		Short: "Manage Podium agents",
-		Long:  "List and create durable Podium agents through the running podiumd daemon.",
+		Long:  "List, create, and delete durable Podium agents through the running podiumd daemon.",
 		Example: "  podium agents list\n" +
-			"  podium agents create jared --provider claude --permission approve",
+			"  podium agents create jared --provider claude --permission approve\n" +
+			"  podium agents delete jared",
 	}
 	cmd.AddCommand(newAgentsListCmd(addr))
 	cmd.AddCommand(newAgentsCreateCmd(addr))
+	cmd.AddCommand(newAgentsDeleteCmd(addr))
 	return cmd
 }
 
@@ -449,6 +452,44 @@ func newAgentsCreateCmd(addr *string) *cobra.Command {
 	cmd.Flags().StringVar(&effort, "effort", "", "default effort: low, medium, high, xhigh, max")
 	cmd.Flags().StringVar(&permission, "permission", "", "permission mode: approve or yolo")
 	return cmd
+}
+
+func newAgentsDeleteCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "delete <name>",
+		Short:   "Delete an agent",
+		Long:    "Deletes a durable agent through podiumd and removes its config.yaml entry. Agent files under $PODIUM_HOME/agents/<name>/ are preserved.",
+		Example: "  podium agents delete jared",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			confirmation, ok := confirmAgentDeletion(os.Stdin, os.Stderr, name)
+			if !ok {
+				return nil
+			}
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteAgent(cmd.Context(), name, confirmation); err != nil {
+				return err
+			}
+			fmt.Printf("deleted agent %s\n", name)
+			return nil
+		},
+	}
+}
+
+func confirmAgentDeletion(in io.Reader, out io.Writer, name string) (string, bool) {
+	fmt.Fprintf(out, "This deletes agent %q from Podium and config.yaml. Agent files are preserved.\n", name)
+	fmt.Fprintf(out, "Type %s to delete: ", name)
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	confirmation := strings.TrimSpace(line)
+	if confirmation != name {
+		fmt.Fprintln(out, "agent deletion aborted")
+		return confirmation, false
+	}
+	return confirmation, true
 }
 
 func newChatCmd(addr *string) *cobra.Command {

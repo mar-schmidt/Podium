@@ -72,7 +72,16 @@ func (c *Core) UpdateAgent(ctx context.Context, agent store.Agent) (store.Agent,
 // DeleteAgent removes the durable agent definition. Files on disk are left in
 // place so user-authored identity/instructions are never deleted implicitly.
 func (c *Core) DeleteAgent(ctx context.Context, name string) error {
-	return c.store.DeleteAgent(ctx, name)
+	if err := validateAgentName(name); err != nil {
+		return err
+	}
+	if err := c.store.DeleteAgent(ctx, name); err != nil {
+		return err
+	}
+	if err := config.RemoveAgent(c.paths.ConfigYAML, name); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ReadAgentSoul returns the contents of an agent's SOUL.md, or empty string if

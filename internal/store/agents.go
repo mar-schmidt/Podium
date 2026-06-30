@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrNotFound reports that a requested store row does not exist.
@@ -94,6 +95,9 @@ func (s *Store) UpdateAgent(ctx context.Context, a Agent) (Agent, error) {
 func (s *Store) DeleteAgent(ctx context.Context, name string) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM agents WHERE name = ?`, name)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "constraint failed") {
+			return fmt.Errorf("delete agent %q: existing sessions still reference this agent; deletion would orphan session history: %w", name, err)
+		}
 		return fmt.Errorf("delete agent %q: %w", name, err)
 	}
 	changed, err := res.RowsAffected()

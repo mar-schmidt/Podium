@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getAgent, updateAgent } from "../lib/api";
+  import { deleteAgent, getAgent, updateAgent } from "../lib/api";
   import { agentGradient, avatarStyle, initial, modeChip, providerChip } from "../lib/theme";
   import type { Agent } from "../lib/types";
 
@@ -34,6 +34,12 @@
   let edSoul = $state("");
   let saving = $state(false);
   let editError = $state<string | null>(null);
+
+  // Delete modal state.
+  let deleteOpen = $state(false);
+  let deleteName = $state("");
+  let deleting = $state(false);
+  let deleteError = $state<string | null>(null);
 
   const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
   const modelOptions = $derived(
@@ -89,6 +95,29 @@
       editError = e instanceof Error ? e.message : String(e);
     } finally {
       saving = false;
+    }
+  }
+
+  function openDelete(a: Agent) {
+    deleteName = "";
+    deleteError = null;
+    deleteOpen = true;
+    edName = a.Name;
+  }
+
+  async function confirmDelete() {
+    if (!selected || deleteName.trim() !== selected.Name) return;
+    deleting = true;
+    deleteError = null;
+    try {
+      await deleteAgent(selected.Name, deleteName);
+      deleteOpen = false;
+      selected = null;
+      onChanged();
+    } catch (e) {
+      deleteError = e instanceof Error ? e.message : String(e);
+    } finally {
+      deleting = false;
     }
   }
 
@@ -162,6 +191,10 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
             Edit
           </button>
+          <button class="ad-delete" onclick={() => openDelete(a)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v5" /><path d="M14 11v5" /></svg>
+            Delete
+          </button>
         </div>
       </div>
     </div>
@@ -232,6 +265,27 @@
         <div style="display:flex;gap:9px;margin-top:22px">
           <button class="ed-cancel" onclick={() => (editOpen = false)}>Cancel</button>
           <button class="modal-cta" style="margin-top:0;flex:1" disabled={saving} onclick={save}>{saving ? "Saving…" : "Save changes"}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ===== Delete modal ===== -->
+{#if deleteOpen && selected}
+  <div class="modal-backdrop" role="presentation" onclick={() => (deleteOpen = false)}>
+    <div class="modal-card delete-modal" role="dialog" aria-modal="true" aria-label="Delete agent" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+      <div class="modal-head">
+        <div class="modal-title">Delete {selected.Name}</div>
+        <div class="modal-sub">This removes the agent from Podium and config.yaml. Files in <span class="mono">~/.podium/agents/{selected.Name}</span> are preserved.</div>
+      </div>
+      <div class="modal-body">
+        {#if deleteError}<div class="error-banner" style="margin-bottom:14px">{deleteError}</div>{/if}
+        <div class="label-mono" style="margin-bottom:8px">type agent name</div>
+        <input class="field-input mono" bind:value={deleteName} placeholder={selected.Name} autocomplete="off" />
+        <div style="display:flex;gap:9px;margin-top:22px">
+          <button class="ed-cancel" onclick={() => (deleteOpen = false)}>Cancel</button>
+          <button class="delete-confirm" disabled={deleting || deleteName.trim() !== selected.Name} onclick={confirmDelete}>{deleting ? "Deleting..." : "Delete agent"}</button>
         </div>
       </div>
     </div>
@@ -356,6 +410,19 @@
     gap: 6px;
   }
 
+  .ad-delete {
+    padding: 9px 16px;
+    border: 1px solid #e7c3b5;
+    border-radius: 11px;
+    background: #fff;
+    color: #a23e22;
+    font: 600 13.5px "Hanken Grotesk";
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .ad-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -392,6 +459,11 @@
     max-width: 94vw;
   }
 
+  .delete-modal {
+    width: 480px;
+    max-width: 94vw;
+  }
+
   .ed-row {
     display: flex;
     align-items: center;
@@ -421,5 +493,23 @@
     color: var(--muted);
     font: 600 14px "Hanken Grotesk";
     cursor: pointer;
+  }
+
+  .delete-confirm {
+    flex: 1;
+    padding: 13px 20px;
+    border: none;
+    border-radius: 13px;
+    background: var(--orange);
+    color: #fff;
+    font: 700 14px "Hanken Grotesk";
+    cursor: pointer;
+    box-shadow: 0 10px 22px -8px rgba(217, 102, 61, 0.7);
+  }
+
+  .delete-confirm:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    box-shadow: none;
   }
 </style>

@@ -96,6 +96,10 @@ type agentUpdateRequest struct {
 	Soul           *string               `json:"soul,omitempty"`
 }
 
+type agentDeleteRequest struct {
+	Confirmation string `json:"confirmation"`
+}
+
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if s.core == nil {
 		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
@@ -163,6 +167,21 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, agentDetail{Agent: updated, Soul: soul}, nil)
+	case http.MethodDelete:
+		var req agentDeleteRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Confirmation) != name {
+			http.Error(w, "confirmation must match agent name", http.StatusBadRequest)
+			return
+		}
+		if err := s.core.DeleteAgent(r.Context(), name); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"}, nil)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

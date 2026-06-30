@@ -86,6 +86,16 @@ export async function updateAgent(name: string, patch: AgentUpdate): Promise<Age
   );
 }
 
+export async function deleteAgent(name: string, confirmation: string): Promise<void> {
+  await asJSON(
+    await fetch(`/api/agents/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation }),
+    }),
+  );
+}
+
 export async function listSessions(): Promise<Session[]> {
   return (await asJSON<Session[] | null>(await fetch("/api/sessions"))) ?? [];
 }

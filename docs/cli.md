@@ -175,6 +175,19 @@ Choosing `--permission yolo` prints a whole-machine-access warning: in `yolo`
 every tool call is auto-approved and the workspace is **not** a sandbox (R8.31).
 See [Security & logging](security.md) for the full permission model.
 
+### `podium agents delete`
+
+Delete an agent through `podiumd`.
+
+```
+podium agents delete jared
+```
+
+The command requires typing the exact agent name before deletion. It removes the
+agent from Podium's database and removes a matching `config.yaml` `agents` entry
+when present. Files under `$PODIUM_HOME/agents/<name>/` are preserved. Deletion
+is blocked while existing sessions still reference the agent.
+
 ### `podium chat`
 
 Send one chat turn through the daemon. Use `--agent` to create a new CLI-origin

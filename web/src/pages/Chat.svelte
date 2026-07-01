@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { deleteSession, getSession, listProjects } from "../lib/api";
   import ConfirmModal from "../lib/ConfirmModal.svelte";
   import {
@@ -75,6 +75,7 @@
   let poll: number | undefined;
   let countdown: number | undefined;
   let pendingSeed: string | null = null;
+  let msgsEl: HTMLDivElement | null = null;
 
   // Layout / UI state.
   let sessOpen = $state(true);
@@ -241,7 +242,10 @@
       case "message":
         if (msg.message && !messages.some((e) => sameMessage(e, msg.message))) {
           messages = [...messages, msg.message];
-          if (msg.message.Role === "assistant") pendingAssistant = "";
+          if (msg.message.Role === "assistant") {
+            pendingAssistant = "";
+            scrollMessagesToBottom();
+          }
         }
         break;
       case "delta":
@@ -277,6 +281,14 @@
 
   function sameMessage(a: Message, b: Message | undefined) {
     return !!b && a.ID === b.ID && a.SessionID === b.SessionID;
+  }
+
+  async function scrollMessagesToBottom() {
+    await tick();
+    requestAnimationFrame(() => {
+      if (!msgsEl) return;
+      msgsEl.scrollTo({ top: msgsEl.scrollHeight, behavior: "smooth" });
+    });
   }
 
   async function loadHistory(session: Session) {
@@ -610,7 +622,7 @@
       </div>
     {/if}
 
-    <div class="msgs">
+    <div class="msgs" bind:this={msgsEl}>
       {#each messages as m (m.ID)}
         {#if m.Role === "user"}
           <div class="row-end">

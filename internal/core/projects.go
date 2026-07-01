@@ -7,27 +7,48 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/store"
+	"gopkg.in/yaml.v3"
 )
 
 // ListProjects returns the shared project ledger (§5.3).
 func (c *Core) ListProjects(ctx context.Context) ([]projects.Project, error) {
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return nil, err
+	}
 	return c.ledger.List()
 }
 
 // GetProject returns one project by id.
 func (c *Core) GetProject(ctx context.Context, id string) (projects.Project, error) {
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return projects.Project{}, err
+	}
 	return c.ledger.Get(id)
 }
 
 // CreateProject adds a project to the shared ledger and creates its directory.
 func (c *Core) CreateProject(ctx context.Context, p projects.Project) (projects.Project, error) {
-	return c.ledger.Create(p)
+	created, err := c.ledger.Create(p)
+	if err != nil {
+		return projects.Project{}, err
+	}
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return projects.Project{}, err
+	}
+	return c.ledger.Get(created.ID)
 }
 
 // UpdateProject applies a partial patch (name/description/colour/etc) to a
 // project in the shared ledger.
 func (c *Core) UpdateProject(ctx context.Context, id string, patch projects.ProjectPatch) (projects.Project, error) {
-	return c.ledger.Update(id, patch)
+	updated, err := c.ledger.Update(id, patch)
+	if err != nil {
+		return projects.Project{}, err
+	}
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return projects.Project{}, err
+	}
+	return c.ledger.Get(updated.ID)
 }
 
 // DescribeProject asks an agent's engine to draft a one-sentence project
@@ -35,6 +56,9 @@ func (c *Core) UpdateProject(ctx context.Context, id string, patch projects.Proj
 // auth context) for a single unattended completion and returns the text. The
 // result is not persisted — the caller decides whether to save it.
 func (c *Core) DescribeProject(ctx context.Context, id, agentName string) (string, error) {
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return "", err
+	}
 	proj, err := c.ledger.Get(id)
 	if err != nil {
 		return "", err
@@ -51,7 +75,8 @@ func (c *Core) DescribeProject(ctx context.Context, id, agentName string) (strin
 	if strings.TrimSpace(proj.Description) != "" {
 		draft = "Current draft to improve: \"" + proj.Description + "\"."
 	}
-	prompt := "You are helping write a short project description for a developer tool that orchestrates AI coding agents. " +
+	prompt := "You are helping write a short description for a project tracked in Podium, an AI-agent orchestration tool. " +
+		"The project can be software, writing, planning, research, physical work, or any other user effort. " +
 		"The project is titled \"" + title + "\". " + draft + " " +
 		"Write a single polished sentence (max 18 words), concrete and free of marketing fluff. " +
 		"Return only the description text, with no quotes or preamble."
@@ -61,6 +86,72 @@ func (c *Core) DescribeProject(ctx context.Context, id, agentName string) (strin
 	text = strings.Trim(text, "\"'")
 	if text == "" {
 		return "", fmt.Errorf("the model returned no description")
+	}
+	return text, nil
+}
+
+// DescribeTaskRequest describes either an existing task (TaskID) or an unsaved
+// draft from the new-task modal. AgentName is preferred as the helper model; if
+// it is empty, AssignedAgent and then the first configured agent are used.
+type DescribeTaskRequest struct {
+	TaskID        string
+	AgentName     string
+	ProjectID     string
+	Title         string
+	Body          string
+	AssignedAgent string
+}
+
+// DescribeTask asks an agent's engine to draft runnable instructions for a
+// roadmap task. It embeds project ledger context and nearby roadmap tasks in
+// the prompt so the model does not need to inspect the local filesystem.
+func (c *Core) DescribeTask(ctx context.Context, req DescribeTaskRequest) (string, error) {
+	task := store.Task{
+		ID:            req.TaskID,
+		ProjectID:     req.ProjectID,
+		Title:         strings.TrimSpace(req.Title),
+		Body:          req.Body,
+		AssignedAgent: req.AssignedAgent,
+	}
+	if req.TaskID != "" {
+		got, err := c.store.GetTask(ctx, req.TaskID)
+		if err != nil {
+			return "", err
+		}
+		task = got
+	}
+	agent, err := c.helperAgent(ctx, req.AgentName, task.AssignedAgent)
+	if err != nil {
+		return "", err
+	}
+	projectContext, err := c.taskProjectPromptContext(ctx, task.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	title := task.Title
+	if strings.TrimSpace(title) == "" {
+		title = "Untitled task"
+	}
+	draft := "There is no task body yet."
+	if strings.TrimSpace(task.Body) != "" {
+		draft = "Current draft to improve:\n\"\"\"\n" + task.Body + "\n\"\"\""
+	}
+	prompt := "You are helping write runnable instructions for a roadmap task in Podium, an AI-agent orchestration tool.\n\n" +
+		"Podium project details are tracked in the configured project ledger, projects.yaml under the Podium data directory. " +
+		"The relevant project context is embedded below; use it as source-of-truth context and do not invent project facts. " +
+		"Do not ask the user or agent to inspect local files to discover this context.\n\n" +
+		"Project context:\n" + projectContext + "\n\n" +
+		"Task title: \"" + title + "\"\n" +
+		draft + "\n\n" +
+		"Write clear, concrete instructions for the assigned agent to execute this roadmap task. " +
+		"Include useful context, expected outcome, constraints, and acceptance criteria when they are implied. " +
+		"Return only the task instructions, with no preamble."
+
+	text := c.oneShotCompletion(ctx, agent, prompt)
+	text = strings.TrimSpace(text)
+	text = strings.Trim(text, "\"'")
+	if text == "" {
+		return "", fmt.Errorf("the model returned no task body")
 	}
 	return text, nil
 }
@@ -86,17 +177,40 @@ func (c *Core) CreateTask(ctx context.Context, task store.Task) (store.Task, err
 			return store.Task{}, fmt.Errorf("assigned agent %q: %w", task.AssignedAgent, err)
 		}
 	}
-	return c.store.CreateTask(ctx, task)
+	created, err := c.store.CreateTask(ctx, task)
+	if err != nil {
+		return store.Task{}, err
+	}
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return store.Task{}, err
+	}
+	return created, nil
 }
 
 // UpdateTask stores task changes (assignment, status, body, title, pickup).
 func (c *Core) UpdateTask(ctx context.Context, task store.Task) (store.Task, error) {
+	existing, err := c.store.GetTask(ctx, task.ID)
+	if err != nil {
+		return store.Task{}, err
+	}
+	if hasSession, err := c.taskHasSession(ctx, task.ID); err != nil {
+		return store.Task{}, err
+	} else if hasSession && taskChangesLockedFields(existing, task) {
+		return store.Task{}, fmt.Errorf("task %q already has a session; only status can be changed", task.ID)
+	}
 	if task.AssignedAgent != "" {
 		if _, err := c.store.GetAgent(ctx, task.AssignedAgent); err != nil {
 			return store.Task{}, fmt.Errorf("assigned agent %q: %w", task.AssignedAgent, err)
 		}
 	}
-	return c.store.UpdateTask(ctx, task)
+	updated, err := c.store.UpdateTask(ctx, task)
+	if err != nil {
+		return store.Task{}, err
+	}
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return store.Task{}, err
+	}
+	return updated, nil
 }
 
 // MoveRoadmapSessionTaskForQuestion moves an in-progress roadmap task to review
@@ -118,7 +232,7 @@ func (c *Core) MoveRoadmapSessionTaskForQuestion(ctx context.Context, sessionID 
 		return false, nil
 	}
 	task.Status = store.TaskReview
-	if _, err := c.store.UpdateTask(ctx, task); err != nil {
+	if _, err := c.UpdateTask(ctx, task); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -142,7 +256,7 @@ func (c *Core) RestoreRoadmapSessionTaskAfterQuestion(ctx context.Context, sessi
 		return nil
 	}
 	task.Status = store.TaskInProgress
-	_, err = c.store.UpdateTask(ctx, task)
+	_, err = c.UpdateTask(ctx, task)
 	return err
 }
 
@@ -190,7 +304,7 @@ func (c *Core) StartTask(ctx context.Context, req StartTaskRequest) (store.Sessi
 	}
 
 	task.Status = store.TaskInProgress
-	if _, err := c.store.UpdateTask(ctx, task); err != nil {
+	if _, err := c.UpdateTask(ctx, task); err != nil {
 		return store.Session{}, err
 	}
 
@@ -215,4 +329,125 @@ func TaskPrompt(task store.Task) string {
 		return task.Title
 	}
 	return task.Title + "\n\n" + task.Body
+}
+
+func (c *Core) helperAgent(ctx context.Context, preferred, assigned string) (store.Agent, error) {
+	for _, name := range []string{preferred, assigned} {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		return c.store.GetAgent(ctx, name)
+	}
+	agents, err := c.store.ListAgents(ctx)
+	if err != nil {
+		return store.Agent{}, err
+	}
+	if len(agents) == 0 {
+		return store.Agent{}, fmt.Errorf("hire an agent first")
+	}
+	return agents[0], nil
+}
+
+func (c *Core) taskHasSession(ctx context.Context, taskID string) (bool, error) {
+	_, ok, err := c.TaskSession(ctx, taskID)
+	return ok, err
+}
+
+func taskChangesLockedFields(before, after store.Task) bool {
+	return before.ProjectID != after.ProjectID ||
+		before.Title != after.Title ||
+		before.Body != after.Body ||
+		before.AssignedAgent != after.AssignedAgent ||
+		before.PickupAt != after.PickupAt
+}
+
+func (c *Core) syncProjectRoadmaps(ctx context.Context) error {
+	tasks, err := c.store.ListTasks(ctx)
+	if err != nil {
+		return err
+	}
+	byProject := map[string][]string{}
+	for _, task := range tasks {
+		if strings.TrimSpace(task.ProjectID) == "" {
+			continue
+		}
+		byProject[task.ProjectID] = append(byProject[task.ProjectID], task.ID)
+	}
+	return c.ledger.SyncRoadmaps(byProject)
+}
+
+type promptProjectContext struct {
+	ID          string              `yaml:"id"`
+	Name        string              `yaml:"name"`
+	Description string              `yaml:"description"`
+	Color       string              `yaml:"color,omitempty"`
+	Path        string              `yaml:"path"`
+	Status      string              `yaml:"status"`
+	Stack       []string            `yaml:"stack"`
+	Repo        string              `yaml:"repo"`
+	Roadmap     []promptTaskContext `yaml:"roadmap"`
+	Notes       string              `yaml:"notes"`
+}
+
+type promptTaskContext struct {
+	ID            string `yaml:"id"`
+	Title         string `yaml:"title"`
+	Status        string `yaml:"status"`
+	AssignedAgent string `yaml:"assigned_agent,omitempty"`
+	PickupAt      string `yaml:"pickup_at,omitempty"`
+	Body          string `yaml:"body,omitempty"`
+}
+
+func (c *Core) taskProjectPromptContext(ctx context.Context, projectID string) (string, error) {
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(projectID) == "" {
+		return "No project is selected for this task.", nil
+	}
+	proj, err := c.ledger.Get(projectID)
+	if err != nil {
+		return fmt.Sprintf("No matching project ledger entry for project_id %q.", projectID), nil
+	}
+	tasks, err := c.store.ListTasks(ctx)
+	if err != nil {
+		return "", err
+	}
+	byID := map[string]store.Task{}
+	for _, task := range tasks {
+		byID[task.ID] = task
+	}
+	ctxProj := promptProjectContext{
+		ID:          proj.ID,
+		Name:        proj.Name,
+		Description: proj.Description,
+		Color:       proj.Color,
+		Path:        proj.Path,
+		Status:      proj.Status,
+		Stack:       proj.Stack,
+		Repo:        proj.Repo,
+		Roadmap:     []promptTaskContext{},
+		Notes:       proj.Notes,
+	}
+	for _, id := range proj.Roadmap {
+		task, ok := byID[id]
+		if !ok {
+			ctxProj.Roadmap = append(ctxProj.Roadmap, promptTaskContext{ID: id, Status: "missing"})
+			continue
+		}
+		ctxProj.Roadmap = append(ctxProj.Roadmap, promptTaskContext{
+			ID:            task.ID,
+			Title:         task.Title,
+			Status:        string(task.Status),
+			AssignedAgent: task.AssignedAgent,
+			PickupAt:      task.PickupAt,
+			Body:          task.Body,
+		})
+	}
+	raw, err := yaml.Marshal(ctxProj)
+	if err != nil {
+		return "", fmt.Errorf("marshal project context: %w", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
 }

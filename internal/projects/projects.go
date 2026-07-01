@@ -28,7 +28,6 @@ type Project struct {
 	Status      string   `yaml:"status" json:"status"`
 	Stack       []string `yaml:"stack" json:"stack"`
 	Repo        string   `yaml:"repo" json:"repo"`
-	Backlog     []string `yaml:"backlog" json:"backlog"`
 	Roadmap     []string `yaml:"roadmap" json:"roadmap"`
 	Notes       string   `yaml:"notes" json:"notes"`
 }
@@ -111,9 +110,6 @@ func (l *Ledger) Create(p Project) (Project, error) {
 	if p.Stack == nil {
 		p.Stack = []string{}
 	}
-	if p.Backlog == nil {
-		p.Backlog = []string{}
-	}
 	if p.Roadmap == nil {
 		p.Roadmap = []string{}
 	}
@@ -184,6 +180,33 @@ func (l *Ledger) Update(id string, patch ProjectPatch) (Project, error) {
 	return *p, nil
 }
 
+// SyncRoadmaps replaces each project's derived roadmap with the ordered task
+// ids currently known for that project. Unknown project IDs in byProject are
+// ignored; projects without tasks get an empty roadmap.
+func (l *Ledger) SyncRoadmaps(byProject map[string][]string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	file, err := l.read()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for i := range file.Projects {
+		next := byProject[file.Projects[i].ID]
+		if next == nil {
+			next = []string{}
+		}
+		if !sameStrings(file.Projects[i].Roadmap, next) {
+			file.Projects[i].Roadmap = append([]string(nil), next...)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return l.write(file)
+}
+
 func (l *Ledger) read() (ledgerFile, error) {
 	raw, err := os.ReadFile(l.path)
 	if err != nil {
@@ -214,4 +237,16 @@ func (l *Ledger) write(file ledgerFile) error {
 		return fmt.Errorf("write projects.yaml: %w", err)
 	}
 	return nil
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

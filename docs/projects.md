@@ -26,8 +26,7 @@ projects:
     status: active               # active | paused | done
     stack: [Next.js, TypeScript]
     repo: null
-    backlog: []
-    roadmap: []
+    roadmap: []                  # derived roadmap task IDs
     notes: >
       Anything the next agent needs to know.
 ```
@@ -41,6 +40,10 @@ The **Roadmap** is a kanban board of **tasks** — units of work on a project,
 assignable to an agent and startable on demand. Tasks are a Podium-managed entity
 (persisted in SQLite) and are **independent** in v1: there are no inter-task
 dependencies (within the §2 out-of-scope line).
+
+Each project's `roadmap` array in `projects.yaml` is a derived list of task IDs
+for that project. Task details live in SQLite and are expanded by Podium when
+drafting roadmap prompts.
 
 A task has: a project, a title and optional body, an assigned agent, a status
 column (`backlog` → `in_progress` → `review` → `done`), and an optional scheduled

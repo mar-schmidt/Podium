@@ -251,6 +251,34 @@ export async function describeProject(id: string, agent: string): Promise<string
   return res.description;
 }
 
+export interface TaskDescribeRequest {
+  id?: string;
+  agent?: string;
+  project_id?: string;
+  title?: string;
+  body?: string;
+  assigned_agent?: string;
+}
+
+export async function describeTask(req: TaskDescribeRequest): Promise<string> {
+  const id = req.id?.trim();
+  const body = {
+    agent: req.agent,
+    project_id: req.project_id,
+    title: req.title,
+    body: req.body,
+    assigned_agent: req.assigned_agent,
+  };
+  const res = await asJSON<{ body: string }>(
+    await fetch(id ? `/api/tasks/${encodeURIComponent(id)}/describe` : "/api/tasks/describe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+  return res.body;
+}
+
 export async function listTasks(): Promise<Task[]> {
   return (await asJSON<Task[] | null>(await fetch("/api/tasks"))) ?? [];
 }

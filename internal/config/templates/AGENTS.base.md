@@ -40,8 +40,7 @@ A project entry looks like:
   status: active             # active | paused | done
   stack: []                  # technologies / formats involved
   repo: null
-  backlog: []
-  roadmap: []
+  roadmap: []                # derived roadmap task IDs
   notes: >
     Anything the next agent needs to know before touching this.
 ```

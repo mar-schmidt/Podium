@@ -1,0 +1,72 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/core"
+	"github.com/mar-schmidt/Podium/internal/projects"
+	"github.com/mar-schmidt/Podium/internal/store"
+)
+
+func TestTaskDescribeEndpointsReturnBody(t *testing.T) {
+	ctx := context.Background()
+	_, srv, cleanup := newAgentAPITestServer(t)
+	defer cleanup()
+
+	if _, err := srv.core.CreateAgent(ctx, core.CreateAgentRequest{Name: "writer", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := srv.core.CreateProject(ctx, projects.Project{ID: "mission-control", Name: "Mission Control"}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task, err := srv.core.CreateTask(ctx, store.Task{
+		ProjectID:     "mission-control",
+		Title:         "Add settings",
+		Body:          "Add a settings page.",
+		AssignedAgent: "writer",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "new draft",
+			path: "/api/tasks/describe",
+			body: `{"agent":"writer","project_id":"mission-control","title":"Draft task","body":"Draft this.","assigned_agent":"writer"}`,
+		},
+		{
+			name: "existing task",
+			path: "/api/tasks/" + task.ID + "/describe",
+			body: `{"agent":"writer"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewBufferString(tc.body))
+			rr := httptest.NewRecorder()
+			srv.handleTask(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+			}
+			var res struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(rr.Body).Decode(&res); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if res.Body == "" {
+				t.Fatalf("empty body response")
+			}
+		})
+	}
+}

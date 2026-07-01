@@ -138,6 +138,14 @@ type taskUpdateRequest struct {
 	PickupAt      *string `json:"pickup_at,omitempty"`
 }
 
+type taskDescribeRequest struct {
+	Agent         string `json:"agent,omitempty"`
+	ProjectID     string `json:"project_id,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Body          string `json:"body,omitempty"`
+	AssignedAgent string `json:"assigned_agent,omitempty"`
+}
+
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if s.core == nil {
 		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
@@ -184,6 +192,31 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if id == "describe" && action == "" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req taskDescribeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		body, err := s.core.DescribeTask(r.Context(), core.DescribeTaskRequest{
+			AgentName:     req.Agent,
+			ProjectID:     req.ProjectID,
+			Title:         req.Title,
+			Body:          req.Body,
+			AssignedAgent: req.AssignedAgent,
+		})
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, map[string]string{"body": body}, nil)
+		return
+	}
+
 	if action == "start" {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -209,6 +242,28 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, session, nil)
+		return
+	}
+
+	if action == "describe" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req taskDescribeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		body, err := s.core.DescribeTask(r.Context(), core.DescribeTaskRequest{
+			TaskID:    id,
+			AgentName: req.Agent,
+		})
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, map[string]string{"body": body}, nil)
 		return
 	}
 

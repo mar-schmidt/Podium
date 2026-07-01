@@ -3,6 +3,7 @@
   import {
     createProject,
     createTask,
+    describeTask,
     listProjects,
     listTasks,
     startTask,
@@ -39,6 +40,8 @@
   let openCard = $state<Task | null>(null);
   let busy = $state(false);
   let activeColumn = $state<TaskStatus>("backlog");
+  let taskHasSession = $state<Record<string, boolean>>({});
+  let busyDescribe = $state("");
 
   // New-task modal.
   let creating = $state(false);
@@ -51,11 +54,27 @@
   let newProjName = $state("");
   let newProjOpen = $state(false);
 
+  // Edit-task modal.
+  let editing = $state<Task | null>(null);
+  let etProject = $state("");
+  let etTitle = $state("");
+  let etBody = $state("");
+  let etAgent = $state("");
+  let etScheduled = $state(false);
+  let etPickup = $state("");
+  let savingEdit = $state(false);
+
   onMount(load);
 
   async function load() {
     try {
-      [tasks, projects] = await Promise.all([listTasks(), listProjects()]);
+      const [nextTasks, nextProjects] = await Promise.all([listTasks(), listProjects()]);
+      const sessionPairs = await Promise.all(
+        nextTasks.map(async (task) => [task.ID, Boolean(await taskSession(task.ID))] as const),
+      );
+      projects = nextProjects;
+      taskHasSession = Object.fromEntries(sessionPairs);
+      tasks = nextTasks;
       if (!ntAgent && agents.length) ntAgent = agents[0].Name;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -78,8 +97,8 @@
     return task.Body.trim() ? `${task.Title}\n\n${task.Body}` : task.Title;
   }
 
-  function hasSession(task: Task) {
-    return task.Status !== "backlog";
+  function hasSession(task: Task): boolean {
+    return taskHasSession[task.ID] ?? false;
   }
 
   async function move(task: Task, status: TaskStatus) {
@@ -167,6 +186,97 @@
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
+  }
+
+  function writerFor(agent: string): string {
+    return agent || agents[0]?.Name || "";
+  }
+
+  async function helpNewTask() {
+    const writer = writerFor(ntAgent);
+    if (!writer) {
+      error = "Hire an agent first — task prompts are drafted by an agent's engine.";
+      return;
+    }
+    busyDescribe = "new";
+    error = null;
+    try {
+      ntBody = await describeTask({
+        agent: writer,
+        project_id: ntProject,
+        title: ntTitle,
+        body: ntBody,
+        assigned_agent: ntAgent,
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busyDescribe = "";
+    }
+  }
+
+  async function helpEditTask() {
+    if (!editing) return;
+    const writer = writerFor(etAgent);
+    if (!writer) {
+      error = "Hire an agent first — task prompts are drafted by an agent's engine.";
+      return;
+    }
+    busyDescribe = editing.ID;
+    error = null;
+    try {
+      etBody = await describeTask({
+        agent: writer,
+        project_id: etProject,
+        title: etTitle,
+        body: etBody,
+        assigned_agent: etAgent,
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busyDescribe = "";
+    }
+  }
+
+  function openEdit(task: Task) {
+    editing = task;
+    etProject = task.ProjectID;
+    etTitle = task.Title;
+    etBody = task.Body;
+    etAgent = task.AssignedAgent;
+    etScheduled = Boolean(task.PickupAt);
+    etPickup = toDateTimeLocal(task.PickupAt);
+    openCard = null;
+  }
+
+  async function saveEditTask() {
+    if (!editing || hasSession(editing)) return;
+    savingEdit = true;
+    error = null;
+    try {
+      await updateTask(editing.ID, {
+        project_id: etProject,
+        title: etTitle.trim(),
+        body: etBody.trim(),
+        assigned_agent: etAgent,
+        pickup_at: etScheduled && etPickup ? new Date(etPickup).toISOString() : "",
+      });
+      editing = null;
+      await load();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingEdit = false;
+    }
+  }
+
+  function toDateTimeLocal(value: string): string {
+    if (!value) return "";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
   async function addInlineProject() {
@@ -307,6 +417,10 @@
               Open in chat
             </button>
           {:else}
+            <button class="cm-secondary" onclick={() => openEdit(openCard!)}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+              Edit
+            </button>
             <button class="cm-primary" disabled={busy || !openCard.AssignedAgent} onclick={() => start(openCard!)}>Start now →</button>
           {/if}
         </div>
@@ -336,7 +450,13 @@
         <div class="label-mono" style="margin-bottom:8px">title</div>
         <input class="field-input" bind:value={ntTitle} placeholder="e.g. Add a settings page" />
 
-        <div class="label-mono" style="margin:18px 0 8px">prompt for the agent <span style="color:#B6AA9C;text-transform:none;font-weight:400">— the full instructions to run</span></div>
+        <div class="prompt-head">
+          <div class="label-mono">prompt for the agent <span style="color:#B6AA9C;text-transform:none;font-weight:400">— the full instructions to run</span></div>
+          <button class="ai-btn" disabled={busyDescribe === "new"} onclick={helpNewTask}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" /></svg>
+            {busyDescribe === "new" ? "Writing…" : "Help me write"}
+          </button>
+        </div>
         <textarea class="field-area" rows="6" bind:value={ntBody} placeholder="Describe the task in detail. This is sent to the agent verbatim when the task starts — paste a spec, acceptance criteria, file paths, anything." style="min-height:120px"></textarea>
 
         <div class="label-mono" style="margin:18px 0 8px">project</div>
@@ -375,6 +495,60 @@
         {/if}
 
         <button class="modal-cta" disabled={!ntTitle.trim()} onclick={submitNewTask}>Add to roadmap</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ===== Edit task modal ===== -->
+{#if editing}
+  <div class="modal-backdrop" role="presentation" onclick={() => (editing = null)}>
+    <div class="modal-card nt-modal" role="dialog" aria-modal="true" aria-label="Edit task" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+      <div class="modal-head">
+        <div class="modal-title">Edit task</div>
+        <div class="modal-sub">Tasks can be edited until a session has been created for them.</div>
+      </div>
+      <div class="modal-body" style="max-height:74vh;overflow-y:auto">
+        <div class="label-mono" style="margin-bottom:8px">title</div>
+        <input class="field-input" bind:value={etTitle} placeholder="e.g. Add a settings page" />
+
+        <div class="prompt-head">
+          <div class="label-mono">prompt for the agent</div>
+          <button class="ai-btn" disabled={busyDescribe === editing.ID} onclick={helpEditTask}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" /></svg>
+            {busyDescribe === editing.ID ? "Writing…" : "Help me write"}
+          </button>
+        </div>
+        <textarea class="field-area" rows="6" bind:value={etBody} placeholder="Describe the task in detail. This is sent to the agent verbatim when the task starts." style="min-height:120px"></textarea>
+
+        <div class="label-mono" style="margin:18px 0 8px">project</div>
+        <div class="chip-wrap">
+          {#each projects as p}
+            <button style={projChipStyle(p.id, etProject === p.id)} onclick={() => (etProject = p.id)}>
+              <span class="proj-dot" style="background:{projectColor(p.id)}"></span>{p.name}
+            </button>
+          {/each}
+        </div>
+
+        <div class="label-mono" style="margin:18px 0 8px">assignee</div>
+        <div class="chip-wrap">
+          {#each agents as a}
+            <button style={agentChipStyle(etAgent === a.Name)} onclick={() => (etAgent = a.Name)}>
+              <span style={avatarStyle(agentGradient(a.Name), 20, 6, 9)}>{initial(a.Name)}</span>{a.Name}
+            </button>
+          {/each}
+        </div>
+
+        <div class="label-mono" style="margin:18px 0 8px">when</div>
+        <div style="display:flex;gap:9px">
+          <button style={projChipStyle("", !etScheduled)} onclick={() => (etScheduled = false)}>On demand</button>
+          <button style={projChipStyle("", etScheduled)} onclick={() => (etScheduled = true)}>Scheduled</button>
+        </div>
+        {#if etScheduled}
+          <input class="field-input" type="datetime-local" style="margin-top:9px" bind:value={etPickup} />
+        {/if}
+
+        <button class="modal-cta" disabled={!etTitle.trim() || savingEdit || hasSession(editing)} onclick={saveEditTask}>{savingEdit ? "Saving…" : "Save task"}</button>
       </div>
     </div>
   </div>
@@ -603,6 +777,21 @@
     box-shadow: 0 6px 14px -6px rgba(63, 143, 126, 0.7);
   }
 
+  .cm-secondary {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid var(--field-line);
+    border-radius: 11px;
+    padding: 11px 14px;
+    background: #fff;
+    color: var(--muted-2);
+    font: 600 14px "Hanken Grotesk";
+    cursor: pointer;
+  }
+
   .cm-done {
     width: 100%;
     margin-top: 9px;
@@ -635,6 +824,38 @@
   .nt-modal {
     width: 486px;
     max-width: 94vw;
+  }
+
+  .prompt-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 8px;
+  }
+
+  .prompt-head .label-mono {
+    flex: 1;
+  }
+
+  .ai-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    height: 27px;
+    padding: 0 9px;
+    border: 1px solid #d8cabe;
+    border-radius: 9px;
+    background: #fff;
+    color: #7a6757;
+    font: 700 11.5px "Hanken Grotesk";
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .ai-btn:disabled {
+    opacity: 0.6;
+    cursor: wait;
   }
 
   .chip-wrap {
@@ -739,9 +960,18 @@
       flex-direction: column;
     }
 
+    .cm-secondary {
+      flex: 1;
+    }
+
     .chip-wrap {
       max-height: 180px;
       overflow-y: auto;
+    }
+
+    .prompt-head {
+      align-items: flex-start;
+      flex-direction: column;
     }
   }
 </style>

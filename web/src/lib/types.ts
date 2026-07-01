@@ -116,7 +116,6 @@ export interface Project {
   status: string;
   stack: string[];
   repo: string;
-  backlog: string[];
   roadmap: string[];
   notes: string;
 }

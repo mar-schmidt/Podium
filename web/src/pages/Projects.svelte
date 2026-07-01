@@ -60,8 +60,8 @@
 
   function meta(p: Project): string {
     const t = taskCount(p.id);
-    const b = p.backlog?.length ?? 0;
-    return `${t} task${t === 1 ? "" : "s"} · ${b} in backlog`;
+    const r = p.roadmap?.length ?? 0;
+    return `${t} task${t === 1 ? "" : "s"} · ${r} in roadmap`;
   }
 
   function dirty(p: Project): boolean {

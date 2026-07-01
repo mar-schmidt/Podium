@@ -9,6 +9,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
+	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -443,6 +444,60 @@ func TestAutoNameSessionUsesModelJSON(t *testing.T) {
 	}
 	if updated.Name != "Release Checklist" || !updated.AutoNamed {
 		t.Fatalf("unexpected auto-name result: %+v", updated)
+	}
+}
+
+func TestDescribeProjectPromptTreatsProjectAsGeneralWork(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	fake := adapter.NewFake()
+	fake.Responses = []string{"Coordinate materials, milestones, and inspections for the kitchen renovation."}
+	c, err := New(Options{Paths: paths, Store: db, Adapter: fake})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "writer", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := c.CreateProject(ctx, projects.Project{
+		ID:          "kitchen-renovation",
+		Name:        "Kitchen Renovation",
+		Description: "Renovate the kitchen.",
+	}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	if _, err := c.DescribeProject(ctx, "kitchen-renovation", "writer"); err != nil {
+		t.Fatalf("describe project: %v", err)
+	}
+	if len(fake.Requests) != 1 {
+		t.Fatalf("expected one model request, got %d", len(fake.Requests))
+	}
+	prompt := fake.Requests[0].Message
+	if strings.Contains(prompt, "description for a developer tool") {
+		t.Fatalf("prompt still frames the user project as a developer tool:\n%s", prompt)
+	}
+	for _, want := range []string{
+		"project tracked in Podium",
+		"software, writing, planning, research, physical work",
+		`The project is titled "Kitchen Renovation".`,
+		`Current draft to improve: "Renovate the kitchen."`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

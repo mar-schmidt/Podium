@@ -324,8 +324,7 @@ codebase, book, or initiative. Projects are **not** owned by any one agent.
         - Tailwind CSS 4
         - TypeScript
       repo: null
-      backlog: []
-      roadmap: []
+      roadmap: [] # derived roadmap task IDs
       notes: >
         Bootstrapped with create-next-app. Uses Next.js 16 which has breaking
         changes from prior versions — read node_modules/next/dist/docs/ before

@@ -45,6 +45,11 @@ A project entry looks like:
     Anything the next agent needs to know before touching this.
 ```
 
+When `repo` is a GitHub snapshot object instead of `null`, the project directory
+itself contains the downloaded source snapshot. Treat that directory as the
+local codebase for inspection, but do **not** assume it is a Git checkout: there
+may be no `.git`, no remote, and no branch/push/PR capability.
+
 ## Workspace
 
 Your working directory is your own `workspace/` — agent-local scratch space. Use

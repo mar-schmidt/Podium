@@ -180,6 +180,7 @@ func run() error {
 		Core:      coreSvc,
 		Scheduler: scheduler,
 		Paths:     paths,
+		GitHub:    cfg.GitHub,
 	})
 
 	// Serve until a termination signal arrives, then shut down gracefully.

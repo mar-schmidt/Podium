@@ -60,17 +60,22 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 	if err != nil {
 		return store.Session{}, err
 	}
+	projectCtx, err := c.sessionProjectExecutionContext(ctx, created)
+	if err != nil {
+		return store.Session{}, err
+	}
 	handle, err := c.adapter.Start(ctx, adapter.StartRequest{
-		SessionID:      created.ID,
-		AgentName:      agent.Name,
-		Provider:       created.Provider,
-		Profile:        created.Profile,
-		ProfileDir:     c.profileDir(created.Provider, created.Profile),
-		Model:          created.Model,
-		Effort:         created.Effort,
-		PermissionMode: created.PermissionMode,
-		WorkspaceDir:   c.AgentPaths(agent.Name).Workspace,
-		Instructions:   payload.Bytes,
+		SessionID:          created.ID,
+		AgentName:          agent.Name,
+		Provider:           created.Provider,
+		Profile:            created.Profile,
+		ProfileDir:         c.profileDir(created.Provider, created.Profile),
+		Model:              created.Model,
+		Effort:             created.Effort,
+		PermissionMode:     created.PermissionMode,
+		WorkspaceDir:       c.AgentPaths(agent.Name).Workspace,
+		ExtraWorkspaceDirs: nonEmptyStrings(projectCtx.Root),
+		Instructions:       payload.Bytes,
 	})
 	if err != nil {
 		return store.Session{}, err
@@ -194,7 +199,17 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 				return
 			}
-			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, userMessage, opts))
+			projectCtx, err := c.sessionProjectExecutionContext(ctx, current)
+			if err != nil {
+				runLog.Warn("turn failed", "stage", "project_context", "error", err)
+				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
+				return
+			}
+			providerMessage := userMessage
+			if strings.TrimSpace(projectCtx.Prompt) != "" {
+				providerMessage = projectCtx.Prompt + "\n\nUser message:\n" + userMessage
+			}
+			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, providerMessage, opts, nonEmptyStrings(projectCtx.Root)))
 			if err != nil {
 				runLog.Warn("turn failed", "stage", "dispatch", "provider", string(current.Provider), "error", err)
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
@@ -253,7 +268,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 	return streamOut, nil
 }
 
-func (c *Core) turnRequest(sess store.Session, history []store.Message, userMessage string, opts TurnOptions) adapter.TurnRequest {
+func (c *Core) turnRequest(sess store.Session, history []store.Message, userMessage string, opts TurnOptions, extraWorkspaceDirs []string) adapter.TurnRequest {
 	return adapter.TurnRequest{
 		SessionID: sess.ID,
 		Handle: adapter.Handle{
@@ -263,16 +278,17 @@ func (c *Core) turnRequest(sess store.Session, history []store.Message, userMess
 		Message: userMessage,
 		History: replayHistory(sess, history),
 		Settings: adapter.TurnSettings{
-			AgentName:        sess.AgentName,
-			Profile:          sess.Profile,
-			ProfileDir:       c.profileDir(sess.Provider, sess.Profile),
-			Model:            sess.Model,
-			Effort:           sess.Effort,
-			PermissionMode:   sess.PermissionMode,
-			WorkspaceDir:     c.AgentPaths(sess.AgentName).Workspace,
-			PermissionTurnID: firstNonEmpty(opts.PermissionTurnID, fmt.Sprintf("%s-%d", sess.ID, time.Now().UnixNano())),
-			Unattended:       opts.Unattended,
-			AllowedTools:     opts.AllowedTools,
+			AgentName:          sess.AgentName,
+			Profile:            sess.Profile,
+			ProfileDir:         c.profileDir(sess.Provider, sess.Profile),
+			Model:              sess.Model,
+			Effort:             sess.Effort,
+			PermissionMode:     sess.PermissionMode,
+			WorkspaceDir:       c.AgentPaths(sess.AgentName).Workspace,
+			ExtraWorkspaceDirs: extraWorkspaceDirs,
+			PermissionTurnID:   firstNonEmpty(opts.PermissionTurnID, fmt.Sprintf("%s-%d", sess.ID, time.Now().UnixNano())),
+			Unattended:         opts.Unattended,
+			AllowedTools:       opts.AllowedTools,
 		},
 		Relay: opts.PermissionRelay,
 		Input: opts.UserInputRelay,
@@ -353,6 +369,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func nonEmptyStrings(values ...string) []string {
+	var out []string
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func sendTurnEvent(ctx context.Context, ch chan<- TurnEvent, event TurnEvent) bool {

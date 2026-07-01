@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -27,9 +29,24 @@ type Project struct {
 	Path        string   `yaml:"path" json:"path"`
 	Status      string   `yaml:"status" json:"status"`
 	Stack       []string `yaml:"stack" json:"stack"`
-	Repo        string   `yaml:"repo" json:"repo"`
+	Repo        *Repo    `yaml:"repo" json:"repo"`
 	Roadmap     []string `yaml:"roadmap" json:"roadmap"`
 	Notes       string   `yaml:"notes" json:"notes"`
+}
+
+// Repo describes an optional external source linked to a Podium project. v1
+// supports GitHub archive snapshots extracted into the project directory.
+type Repo struct {
+	Provider      string `yaml:"provider" json:"provider"`
+	Mode          string `yaml:"mode" json:"mode"`
+	Owner         string `yaml:"owner" json:"owner"`
+	Name          string `yaml:"name" json:"name"`
+	FullName      string `yaml:"full_name" json:"full_name"`
+	HTMLURL       string `yaml:"html_url" json:"html_url"`
+	DefaultBranch string `yaml:"default_branch" json:"default_branch"`
+	Ref           string `yaml:"ref" json:"ref"`
+	SyncedAt      string `yaml:"synced_at" json:"synced_at"`
+	SourceKind    string `yaml:"source_kind" json:"source_kind"`
 }
 
 // ProjectPatch carries the mutable fields a user can edit from the UI. Nil
@@ -41,6 +58,8 @@ type ProjectPatch struct {
 	Color       *string
 	Status      *string
 	Stack       *[]string
+	Repo        *Repo
+	ClearRepo   bool
 	Notes       *string
 }
 
@@ -171,6 +190,12 @@ func (l *Ledger) Update(id string, patch ProjectPatch) (Project, error) {
 	if patch.Stack != nil {
 		p.Stack = *patch.Stack
 	}
+	if patch.Repo != nil {
+		p.Repo = patch.Repo
+	}
+	if patch.ClearRepo {
+		p.Repo = nil
+	}
 	if patch.Notes != nil {
 		p.Notes = *patch.Notes
 	}
@@ -249,4 +274,116 @@ func sameStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func (p *Project) UnmarshalYAML(value *yaml.Node) error {
+	type rawProject struct {
+		ID          string    `yaml:"id"`
+		Name        string    `yaml:"name"`
+		Description string    `yaml:"description"`
+		Color       string    `yaml:"color,omitempty"`
+		Path        string    `yaml:"path"`
+		Status      string    `yaml:"status"`
+		Stack       []string  `yaml:"stack"`
+		Repo        yaml.Node `yaml:"repo"`
+		Roadmap     []string  `yaml:"roadmap"`
+		Notes       string    `yaml:"notes"`
+	}
+	var raw rawProject
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	p.ID = raw.ID
+	p.Name = raw.Name
+	p.Description = raw.Description
+	p.Color = raw.Color
+	p.Path = raw.Path
+	p.Status = raw.Status
+	p.Stack = raw.Stack
+	p.Roadmap = raw.Roadmap
+	p.Notes = raw.Notes
+	p.Repo = repoFromNode(raw.Repo)
+	return nil
+}
+
+func repoFromNode(node yaml.Node) *Repo {
+	if node.Kind == 0 || node.Tag == "!!null" {
+		return nil
+	}
+	if node.Kind == yaml.ScalarNode {
+		return legacyRepo(strings.TrimSpace(node.Value))
+	}
+	var repo Repo
+	if err := node.Decode(&repo); err != nil {
+		return nil
+	}
+	if repo.Provider == "" && repo.FullName == "" && repo.HTMLURL == "" {
+		return nil
+	}
+	normalizeRepo(&repo)
+	return &repo
+}
+
+func legacyRepo(value string) *Repo {
+	if value == "" || value == "null" {
+		return nil
+	}
+	trimmed := strings.TrimSuffix(value, ".git")
+	const prefix = "https://github.com/"
+	if !strings.HasPrefix(trimmed, prefix) {
+		return &Repo{Provider: "github", Mode: "snapshot", HTMLURL: value, SourceKind: "archive"}
+	}
+	fullName := strings.Trim(strings.TrimPrefix(trimmed, prefix), "/")
+	parts := strings.Split(fullName, "/")
+	if len(parts) < 2 {
+		return &Repo{Provider: "github", Mode: "snapshot", HTMLURL: value, SourceKind: "archive"}
+	}
+	repo := &Repo{
+		Provider:   "github",
+		Mode:       "snapshot",
+		Owner:      parts[0],
+		Name:       parts[1],
+		FullName:   parts[0] + "/" + parts[1],
+		HTMLURL:    prefix + parts[0] + "/" + parts[1],
+		Ref:        "",
+		SourceKind: "archive",
+	}
+	normalizeRepo(repo)
+	return repo
+}
+
+// SnapshotRepo returns normalized metadata for a GitHub source snapshot.
+func SnapshotRepo(owner, name, htmlURL, defaultBranch, ref string) Repo {
+	repo := Repo{
+		Provider:      "github",
+		Mode:          "snapshot",
+		Owner:         owner,
+		Name:          name,
+		FullName:      owner + "/" + name,
+		HTMLURL:       htmlURL,
+		DefaultBranch: defaultBranch,
+		Ref:           ref,
+		SyncedAt:      time.Now().UTC().Format(time.RFC3339),
+		SourceKind:    "archive",
+	}
+	normalizeRepo(&repo)
+	return repo
+}
+
+func normalizeRepo(repo *Repo) {
+	if repo.Provider == "" {
+		repo.Provider = "github"
+	}
+	if repo.Mode == "" {
+		repo.Mode = "snapshot"
+	}
+	if repo.FullName == "" && repo.Owner != "" && repo.Name != "" {
+		repo.FullName = repo.Owner + "/" + repo.Name
+	}
+	if repo.Ref == "" {
+		repo.Ref = repo.DefaultBranch
+	}
+	if repo.SourceKind == "" {
+		repo.SourceKind = "archive"
+	}
 }

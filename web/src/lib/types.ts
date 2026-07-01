@@ -115,9 +115,54 @@ export interface Project {
   path: string;
   status: string;
   stack: string[];
-  repo: string;
+  repo: ProjectRepo | null;
   roadmap: string[];
   notes: string;
+}
+
+export interface ProjectRepo {
+  provider: string;
+  mode: string;
+  owner: string;
+  name: string;
+  full_name: string;
+  html_url: string;
+  default_branch: string;
+  ref: string;
+  synced_at: string;
+  source_kind: string;
+}
+
+export interface GitHubStatus {
+  configured: boolean;
+  authed: boolean;
+  app_slug: string;
+  client_id?: string;
+  install_url?: string;
+  message?: string;
+}
+
+export interface GitHubDeviceStart {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface GitHubDevicePoll {
+  status: string;
+  error?: string;
+}
+
+export interface GitHubRepo {
+  id: number;
+  owner: string;
+  name: string;
+  full_name: string;
+  html_url: string;
+  default_branch: string;
+  private: boolean;
 }
 
 // AgentDetail is the GET /api/agents/<name> response: durable defaults plus the

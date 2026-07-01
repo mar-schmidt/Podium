@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -47,6 +48,51 @@ func TestStartTaskCreatesRoadmapSessionWithProvenance(t *testing.T) {
 	found, ok, err := c.TaskSession(ctx, task.ID)
 	if err != nil || !ok || found.ID != sess.ID {
 		t.Fatalf("task session lookup failed: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestConnectedRepoContextIsSentToRoadmapSession(t *testing.T) {
+	ctx := context.Background()
+	c, fake, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "jared", Provider: config.ProviderCodex}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	repo := projects.SnapshotRepo("mar-schmidt", "Podium", "https://github.com/mar-schmidt/Podium", "main", "main")
+	if _, err := c.CreateProject(ctx, projects.Project{ID: "mission-control", Name: "Mission Control", Repo: &repo}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task, err := c.CreateTask(ctx, store.Task{ProjectID: "mission-control", Title: "Inspect repo", AssignedAgent: "jared"})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	sess, err := c.StartTask(ctx, StartTaskRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+	if _, err := c.AppendTurn(ctx, sess.ID, TaskPrompt(task)); err != nil {
+		t.Fatalf("append turn: %v", err)
+	}
+	if len(fake.Requests) != 1 {
+		t.Fatalf("fake requests = %d, want 1", len(fake.Requests))
+	}
+	root := filepath.Join(c.paths.ProjectsDir, "mission-control")
+	req := fake.Requests[0]
+	if !strings.Contains(req.Message, "local source snapshot") || !strings.Contains(req.Message, root) {
+		t.Fatalf("request missing repo context:\n%s", req.Message)
+	}
+	if len(req.Settings.ExtraWorkspaceDirs) != 1 || req.Settings.ExtraWorkspaceDirs[0] != root {
+		t.Fatalf("extra workspace dirs = %#v, want %q", req.Settings.ExtraWorkspaceDirs, root)
+	}
+	if _, err := c.AppendTurn(ctx, sess.ID, "Continue with repo context"); err != nil {
+		t.Fatalf("append second turn: %v", err)
+	}
+	if len(fake.Requests) != 2 {
+		t.Fatalf("fake requests after second turn = %d, want 2", len(fake.Requests))
+	}
+	if !strings.Contains(fake.Requests[1].Message, "local source snapshot") || !strings.Contains(fake.Requests[1].Message, "Continue with repo context") {
+		t.Fatalf("second request missing repo context:\n%s", fake.Requests[1].Message)
 	}
 }
 

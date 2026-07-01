@@ -29,11 +29,17 @@ const (
 	ProviderCodex  Provider = "codex"
 )
 
+const (
+	DefaultGitHubAppSlug  = "podium-llm-orchestrator"
+	DefaultGitHubClientID = "Iv23liIKvhvRj9FdIaPD"
+)
+
 // Config is the parsed config.yaml. It does not define schedules (self-describing
 // files, §7) or projects (shared ledger, §5.3) — only agents, profiles, defaults,
 // and the server bind (R9.2).
 type Config struct {
 	Global   Global    `yaml:"global"`
+	GitHub   GitHub    `yaml:"github"`
 	Profiles []Profile `yaml:"profiles"`
 	Agents   []Agent   `yaml:"agents"`
 	Server   Server    `yaml:"server"`
@@ -48,6 +54,17 @@ type Global struct {
 	PermissionMode    PermissionMode `yaml:"permission_mode"`
 	PermissionTimeout string         `yaml:"permission_timeout"`
 	Fallback          []string       `yaml:"fallback"`
+}
+
+// GitHub configures the public GitHub App details used for local user
+// authorization. These values are not secrets; do not add private keys or client
+// secrets here.
+type GitHub struct {
+	AppSlug   string `yaml:"app_slug"`
+	ClientID  string `yaml:"client_id"`
+	WebBase   string `yaml:"web_base,omitempty"`
+	APIBase   string `yaml:"api_base,omitempty"`
+	LoginBase string `yaml:"login_base,omitempty"`
 }
 
 // Profile is an optional named auth context, 1:1 with one underlying account
@@ -125,6 +142,21 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Global.PermissionTimeout == "" {
 		c.Global.PermissionTimeout = "2m"
+	}
+	if c.GitHub.AppSlug == "" {
+		c.GitHub.AppSlug = DefaultGitHubAppSlug
+	}
+	if c.GitHub.ClientID == "" {
+		c.GitHub.ClientID = DefaultGitHubClientID
+	}
+	if c.GitHub.WebBase == "" {
+		c.GitHub.WebBase = "https://github.com"
+	}
+	if c.GitHub.APIBase == "" {
+		c.GitHub.APIBase = "https://api.github.com"
+	}
+	if c.GitHub.LoginBase == "" {
+		c.GitHub.LoginBase = "https://github.com/login"
 	}
 	if c.Server.Bind == "" {
 		c.Server.Bind = "127.0.0.1"

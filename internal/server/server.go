@@ -13,6 +13,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
+	podiumgithub "github.com/mar-schmidt/Podium/internal/github"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 )
 
@@ -30,6 +31,7 @@ type Server struct {
 	started   time.Time
 	core      *core.Core
 	scheduler *schedule.Scheduler
+	github    *podiumgithub.Service
 	broker    *permissionBroker
 	input     *userInputBroker
 	paths     config.Paths
@@ -43,6 +45,7 @@ type Options struct {
 	Core      *core.Core
 	Scheduler *schedule.Scheduler
 	Paths     config.Paths
+	GitHub    config.GitHub
 }
 
 // New constructs a Server bound to the given address. It does not start
@@ -55,6 +58,7 @@ func New(opts Options) *Server {
 		started:   time.Now(),
 		core:      opts.Core,
 		scheduler: opts.Scheduler,
+		github:    podiumgithub.New(podiumgithub.Options{Config: opts.GitHub, Home: opts.Paths.Home}),
 		broker:    newPermissionBroker(),
 		input:     newUserInputBroker(),
 		paths:     opts.Paths,
@@ -72,6 +76,10 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/schedules/", s.handleSchedule)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/projects/", s.handleProject)
+	mux.HandleFunc("/api/github/status", s.handleGitHubStatus)
+	mux.HandleFunc("/api/github/device/start", s.handleGitHubDeviceStart)
+	mux.HandleFunc("/api/github/device/poll", s.handleGitHubDevicePoll)
+	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/", s.handleTask)
 	mux.HandleFunc("/api/skills", s.handleSkills)

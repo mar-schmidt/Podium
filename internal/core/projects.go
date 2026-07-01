@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/mar-schmidt/Podium/internal/projects"
@@ -385,7 +386,7 @@ type promptProjectContext struct {
 	Path        string              `yaml:"path"`
 	Status      string              `yaml:"status"`
 	Stack       []string            `yaml:"stack"`
-	Repo        string              `yaml:"repo"`
+	Repo        *projects.Repo      `yaml:"repo"`
 	Roadmap     []promptTaskContext `yaml:"roadmap"`
 	Notes       string              `yaml:"notes"`
 }
@@ -450,4 +451,58 @@ func (c *Core) taskProjectPromptContext(ctx context.Context, projectID string) (
 		return "", fmt.Errorf("marshal project context: %w", err)
 	}
 	return strings.TrimSpace(string(raw)), nil
+}
+
+type projectExecutionContext struct {
+	Root   string
+	Prompt string
+}
+
+func (c *Core) sessionProjectExecutionContext(ctx context.Context, sess store.Session) (projectExecutionContext, error) {
+	if strings.TrimSpace(sess.TaskID) == "" {
+		return projectExecutionContext{}, nil
+	}
+	task, err := c.store.GetTask(ctx, sess.TaskID)
+	if err != nil {
+		return projectExecutionContext{}, err
+	}
+	if strings.TrimSpace(task.ProjectID) == "" {
+		return projectExecutionContext{}, nil
+	}
+	proj, err := c.ledger.Get(task.ProjectID)
+	if err != nil {
+		return projectExecutionContext{}, nil
+	}
+	if proj.Repo == nil {
+		return projectExecutionContext{}, nil
+	}
+	root := filepath.Join(c.paths.ProjectsDir, proj.Path)
+	payload := map[string]any{
+		"project": map[string]any{
+			"id":          proj.ID,
+			"name":        proj.Name,
+			"description": proj.Description,
+			"status":      proj.Status,
+			"stack":       proj.Stack,
+			"notes":       proj.Notes,
+		},
+		"repo": map[string]any{
+			"provider":       proj.Repo.Provider,
+			"mode":           proj.Repo.Mode,
+			"full_name":      proj.Repo.FullName,
+			"default_branch": proj.Repo.DefaultBranch,
+			"ref":            proj.Repo.Ref,
+			"synced_at":      proj.Repo.SyncedAt,
+			"local_path":     root,
+		},
+	}
+	raw, err := yaml.Marshal(payload)
+	if err != nil {
+		return projectExecutionContext{}, err
+	}
+	prompt := "Podium project context for this roadmap session:\n" +
+		strings.TrimSpace(string(raw)) + "\n\n" +
+		"The connected GitHub repository has been downloaded as a local source snapshot at " + root + ". " +
+		"You may inspect files there for project facts. It is not a Git checkout: do not assume .git, branches, commits, pushes, or PR operations are available."
+	return projectExecutionContext{Root: root, Prompt: prompt}, nil
 }

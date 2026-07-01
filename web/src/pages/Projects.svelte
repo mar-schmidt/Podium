@@ -1,14 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    connectProjectRepo,
     createProject,
     describeProject,
+    disconnectProjectRepo,
+    githubDevicePoll,
+    githubDeviceStart,
+    githubRepos,
+    githubStatus,
     listProjects,
     listTasks,
+    syncProjectRepo,
     updateProject,
   } from "../lib/api";
   import { PROJECT_COLORS, projectColor } from "../lib/theme";
-  import type { Agent, Project, Task } from "../lib/types";
+  import type { Agent, GitHubDeviceStart, GitHubRepo, GitHubStatus, Project, Task } from "../lib/types";
 
   interface ChatTarget {
     sessionId?: string;
@@ -37,8 +44,34 @@
   let npDescription = $state("");
   let npStack = $state("");
   let npNotes = $state("");
+  let npConnectGitHub = $state(false);
 
-  onMount(load);
+  // GitHub connection modal.
+  let ghOpen = $state<Project | null>(null);
+  let ghStatus = $state<GitHubStatus | null>(null);
+  let ghRepos = $state<GitHubRepo[]>([]);
+  let ghSelected = $state("");
+  let ghBusy = $state("");
+  let ghDevice = $state<GitHubDeviceStart | null>(null);
+  let ghReplacePending = $state(false);
+  let ghInstallOpened = $state(false);
+  let ghJustConnected = $state(false);
+  let ghAuthWindow: Window | null = null;
+  let ghPollTimer: number | undefined;
+
+  onMount(() => {
+    void load();
+    const refreshAfterGitHub = () => {
+      if (ghOpen && ghStatus?.authed && ghInstallOpened && !ghBusy) {
+        void refreshGitHub();
+      }
+    };
+    window.addEventListener("focus", refreshAfterGitHub);
+    return () => {
+      window.removeEventListener("focus", refreshAfterGitHub);
+      clearGitHubPolling();
+    };
+  });
 
   async function load() {
     try {
@@ -113,18 +146,177 @@
     if (!name) return;
     const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     try {
-      await createProject({
+      const created = await createProject({
         id,
         name,
         description: npDescription.trim(),
         stack: npStack.split(",").map((s) => s.trim()).filter(Boolean),
         notes: npNotes.trim(),
       });
+      const connectAfterCreate = npConnectGitHub;
       creating = false;
       npName = npDescription = npStack = npNotes = "";
+      npConnectGitHub = false;
       await load();
+      if (connectAfterCreate) await openGitHub(created);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function openGitHub(p: Project) {
+    ghOpen = p;
+    ghSelected = p.repo?.full_name ?? "";
+    ghDevice = null;
+    ghReplacePending = false;
+    ghInstallOpened = false;
+    ghJustConnected = false;
+    clearGitHubPolling();
+    error = null;
+    await refreshGitHub();
+  }
+
+  async function refreshGitHub() {
+    ghBusy = "status";
+    try {
+      ghStatus = await githubStatus();
+      if (ghStatus.authed) {
+        ghRepos = await githubRepos();
+        if (!ghSelected && ghRepos.length) ghSelected = ghRepos[0].full_name;
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      ghBusy = "";
+    }
+  }
+
+  async function startGitHubDevice() {
+    ghBusy = "device";
+    error = null;
+    try {
+      ghDevice = await githubDeviceStart();
+      ghAuthWindow = window.open(ghDevice.verification_uri, "podium-github-auth", "popup,width=760,height=860");
+      scheduleGitHubPoll(1200);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      ghBusy = "";
+    }
+  }
+
+  function clearGitHubPolling() {
+    if (ghPollTimer) window.clearTimeout(ghPollTimer);
+    ghPollTimer = undefined;
+  }
+
+  function scheduleGitHubPoll(ms?: number) {
+    clearGitHubPolling();
+    if (!ghDevice) return;
+    ghPollTimer = window.setTimeout(() => void pollGitHubDevice(false), ms ?? Math.max(1500, (ghDevice.interval || 5) * 1000));
+  }
+
+  async function pollGitHubDevice(showPending = true) {
+    if (!ghDevice) return;
+    ghBusy = "poll";
+    if (showPending) error = null;
+    try {
+      const res = await githubDevicePoll(ghDevice.device_code);
+      if (res.status === "authorized") {
+        clearGitHubPolling();
+        ghDevice = null;
+        try {
+          ghAuthWindow?.close();
+          window.focus();
+        } catch {
+          // Some browsers ignore cross-tab focus/close requests.
+        }
+        ghAuthWindow = null;
+        await refreshGitHub();
+      } else if (res.status === "authorization_pending" || res.status === "slow_down") {
+        if (showPending && res.status !== "authorization_pending") {
+          error = res.error || res.status;
+        }
+        scheduleGitHubPoll(res.status === "slow_down" ? 6500 : undefined);
+      } else {
+        clearGitHubPolling();
+        error = res.error || res.status;
+      }
+    } catch (e) {
+      if (showPending) {
+        error = e instanceof Error ? e.message : String(e);
+      } else {
+        scheduleGitHubPoll(3000);
+      }
+    } finally {
+      ghBusy = "";
+    }
+  }
+
+  function selectedRepo(): GitHubRepo | undefined {
+    return ghRepos.find((r) => r.full_name === ghSelected);
+  }
+
+  function openGitHubInstall() {
+    if (!ghStatus?.install_url) return;
+    ghInstallOpened = true;
+    window.open(ghStatus.install_url, "_blank", "noopener,noreferrer");
+  }
+
+  async function connectSelectedRepo(force = false) {
+    if (!ghOpen) return;
+    const repo = selectedRepo();
+    if (!repo) return;
+    ghBusy = "connect";
+    error = null;
+    try {
+      const updated = await connectProjectRepo(ghOpen.id, {
+        owner: repo.owner,
+        name: repo.name,
+        full_name: repo.full_name,
+        html_url: repo.html_url,
+        default_branch: repo.default_branch,
+        ref: repo.default_branch,
+        force,
+      });
+      projects = projects.map((x) => (x.id === updated.id ? updated : x));
+      ghOpen = updated;
+      ghReplacePending = false;
+      ghJustConnected = true;
+    } catch (e) {
+      if (e instanceof Error && e.message === "CONFIRM_REPLACE") {
+        ghReplacePending = true;
+      } else {
+        error = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      ghBusy = "";
+    }
+  }
+
+  async function syncRepo(p: Project, force = false) {
+    ghBusy = "sync:" + p.id;
+    error = null;
+    try {
+      const updated = await syncProjectRepo(p.id, force);
+      projects = projects.map((x) => (x.id === p.id ? updated : x));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      ghBusy = "";
+    }
+  }
+
+  async function disconnectRepo(p: Project) {
+    ghBusy = "disconnect:" + p.id;
+    error = null;
+    try {
+      const updated = await disconnectProjectRepo(p.id);
+      projects = projects.map((x) => (x.id === p.id ? updated : x));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      ghBusy = "";
     }
   }
 </script>
@@ -198,6 +390,26 @@
           </div>
         {/if}
 
+        <div class="pc-repo">
+          <div>
+            <div class="label-mono">github repo</div>
+            {#if p.repo}
+              <div class="repo-name">{p.repo.full_name}</div>
+              <div class="repo-meta mono">{p.repo.ref || p.repo.default_branch} · synced {p.repo.synced_at || "never"}</div>
+            {:else}
+              <div class="repo-meta mono">not connected</div>
+            {/if}
+          </div>
+          <div class="repo-actions">
+            {#if p.repo}
+              <button class="mini-action" disabled={ghBusy === "sync:" + p.id} onclick={() => syncRepo(p)}>{ghBusy === "sync:" + p.id ? "Syncing…" : "Sync"}</button>
+              <button class="mini-action danger" disabled={ghBusy === "disconnect:" + p.id} onclick={() => disconnectRepo(p)}>Disconnect</button>
+            {:else}
+              <button class="mini-action" onclick={() => openGitHub(p)}>Connect</button>
+            {/if}
+          </div>
+        </div>
+
         <div class="pc-foot">
           <span class="pc-meta mono">{meta(p)}</span>
           <button class="pc-view" onclick={() => onOpenChat({})}>View sessions →</button>
@@ -230,7 +442,90 @@
         <div class="label-mono" style="margin:18px 0 8px">notes</div>
         <textarea class="field-area" rows="2" bind:value={npNotes} placeholder="Anything agents should know." style="min-height:56px"></textarea>
 
+        <label class="repo-check">
+          <input type="checkbox" bind:checked={npConnectGitHub} />
+          <span>Connect GitHub after creating</span>
+        </label>
+
         <button class="modal-cta" disabled={!npName.trim()} onclick={submit}>Create project</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if ghOpen}
+  <div class="modal-backdrop" role="presentation" onclick={() => (ghOpen = null)}>
+    <div class="modal-card np-modal" role="dialog" aria-modal="true" aria-label="Connect GitHub" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+      <div class="modal-head">
+        <div class="modal-title">Connect GitHub</div>
+        <div class="modal-sub">Project source will be downloaded into <span class="mono">~/.podium/projects/{ghOpen.path}/</span>.</div>
+      </div>
+      <div class="modal-body">
+        <div class="connect-steps">
+          <div class="step-row" class:done={ghStatus?.authed}>
+            <span class="step-dot">{ghStatus?.authed ? "✓" : "1"}</span>
+            <span>Authorize Podium with your GitHub account</span>
+          </div>
+          <div class="step-row" class:done={ghRepos.length > 0}>
+            <span class="step-dot">{ghRepos.length > 0 ? "✓" : "2"}</span>
+            <span>Choose which repositories Podium may read</span>
+          </div>
+          <div class="step-row" class:done={!!ghOpen.repo}>
+            <span class="step-dot">{ghOpen.repo ? "✓" : "3"}</span>
+            <span>Connect one repository to this project</span>
+          </div>
+        </div>
+
+        {#if ghStatus && !ghStatus.configured}
+          <div class="error-banner">{ghStatus.message}</div>
+        {:else if ghStatus && !ghStatus.authed}
+          <div class="label-mono" style="margin-bottom:8px">authorize account</div>
+          <p class="repo-help">GitHub will ask you to authorize the Podium app. Repository access is chosen in the next step.</p>
+          {#if ghDevice}
+            <div class="device-code mono">{ghDevice.user_code}</div>
+            <p class="repo-help">Enter this code on GitHub. Podium will bring you back here when authorization completes.</p>
+            <button class="modal-cta" disabled={ghBusy === "poll"} onclick={() => pollGitHubDevice(true)}>{ghBusy === "poll" ? "Checking…" : "Check now"}</button>
+          {:else}
+            <button class="modal-cta" disabled={ghBusy === "device"} onclick={startGitHubDevice}>{ghBusy === "device" ? "Opening…" : "Authorize GitHub"}</button>
+          {/if}
+        {:else}
+          {#if ghJustConnected && ghOpen.repo}
+            <div class="success-panel">
+              <div class="confetti" aria-hidden="true">
+                {#each Array.from({ length: 34 }) as _, i}
+                  <span style={`--i:${i};--dx:${((i % 11) - 5) * 20}px;--dy:${-(92 + (i % 7) * 19)}px;--rot:${160 + i * 37}deg`}></span>
+                {/each}
+              </div>
+              <div class="success-mark">✓</div>
+              <div class="success-title">Repository connected</div>
+              <p class="repo-help">
+                {ghOpen.repo.full_name} is synced into <span class="mono">~/.podium/projects/{ghOpen.path}/</span>.
+              </p>
+              <button class="modal-cta" onclick={() => (ghOpen = null)}>Done</button>
+            </div>
+          {:else if ghRepos.length === 0}
+            <div class="label-mono" style="margin-bottom:8px">choose repositories</div>
+            <p class="repo-help">GitHub may open an existing installation settings page. Select repository access there, save, then return here.</p>
+            <button class="modal-cta" disabled={!ghStatus?.install_url} onclick={openGitHubInstall}>{ghInstallOpened ? "Manage repository access on GitHub" : "Choose repositories on GitHub"}</button>
+          {:else}
+            <div class="label-mono" style="margin-bottom:8px">repository</div>
+            <select class="field-input" bind:value={ghSelected}>
+              {#each ghRepos as r}
+                <option value={r.full_name}>{r.full_name}{r.private ? " · private" : ""}</option>
+              {/each}
+            </select>
+            <div class="repo-row-note">
+              <button class="link-btn" onclick={openGitHubInstall}>Change repository access</button>
+              <button class="link-btn" disabled={ghBusy === "status"} onclick={refreshGitHub}>Refresh list</button>
+            </div>
+            {#if ghReplacePending}
+              <div class="error-banner" style="margin-top:12px">This project folder already has files. Podium will back them up before syncing the snapshot.</div>
+              <button class="modal-cta" disabled={ghBusy === "connect"} onclick={() => connectSelectedRepo(true)}>{ghBusy === "connect" ? "Connecting…" : "Back up and connect"}</button>
+            {:else}
+              <button class="modal-cta" disabled={!ghSelected || ghBusy === "connect"} onclick={() => connectSelectedRepo(false)}>{ghBusy === "connect" ? "Connecting…" : "Connect repo"}</button>
+            {/if}
+          {/if}
+        {/if}
       </div>
     </div>
   </div>
@@ -377,6 +672,213 @@
     color: #8a7560;
   }
 
+  .pc-repo {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding: 12px;
+    border: 1px solid #eee4d8;
+    border-radius: 10px;
+    background: #fffaf4;
+  }
+
+  .repo-name {
+    margin-top: 5px;
+    font: 700 14px "Hanken Grotesk";
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+
+  .repo-meta,
+  .repo-help {
+    margin: 4px 0 0;
+    font: 500 11.5px "JetBrains Mono", monospace;
+    color: #9a8e80;
+  }
+
+  .repo-actions {
+    display: flex;
+    gap: 7px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .mini-action {
+    border: 1px solid var(--field-line);
+    background: #fff;
+    border-radius: 9px;
+    padding: 6px 10px;
+    font: 700 11.5px "Hanken Grotesk";
+    color: var(--teal-deep);
+    cursor: pointer;
+  }
+
+  .mini-action.danger {
+    color: #a05252;
+  }
+
+  .device-code {
+    display: inline-flex;
+    margin: 10px 0 12px;
+    padding: 10px 13px;
+    border: 1px solid #d6cbe3;
+    border-radius: 10px;
+    background: #f8f3fc;
+    color: #6b53a8;
+    font: 800 18px "JetBrains Mono", monospace;
+    letter-spacing: 0;
+  }
+
+  .repo-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 16px 0 2px;
+    font: 600 13px "Hanken Grotesk";
+    color: var(--muted-2);
+  }
+
+  .connect-steps {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 18px;
+    padding: 12px;
+    border: 1px solid #eee4d8;
+    border-radius: 10px;
+    background: #fffaf4;
+  }
+
+  .step-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font: 650 12.5px "Hanken Grotesk";
+    color: #7d7166;
+  }
+
+  .step-row.done {
+    color: var(--teal-deep);
+  }
+
+  .step-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: #f1e8dc;
+    color: #8a7560;
+    font: 800 11px "Hanken Grotesk";
+    flex: none;
+  }
+
+  .step-row.done .step-dot {
+    background: #e4f2eb;
+    color: var(--teal-deep);
+  }
+
+  .repo-row-note {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 9px 0 13px;
+  }
+
+  .link-btn {
+    border: none;
+    background: transparent;
+    padding: 0;
+    color: var(--teal-deep);
+    font: 700 12px "Hanken Grotesk";
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .link-btn:disabled {
+    color: var(--faint);
+    cursor: default;
+  }
+
+  .success-panel {
+    position: relative;
+    overflow: visible;
+    text-align: center;
+    padding: 22px 8px 4px;
+  }
+
+  .success-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    border-radius: 999px;
+    background: #e4f2eb;
+    color: var(--teal-deep);
+    font: 900 24px "Hanken Grotesk";
+    box-shadow: 0 10px 24px -16px rgba(63, 143, 126, 0.8);
+  }
+
+  .success-title {
+    margin-top: 12px;
+    font: 800 20px "Hanken Grotesk";
+    color: var(--ink);
+  }
+
+  .confetti {
+    position: absolute;
+    left: 50%;
+    bottom: 20px;
+    width: 1px;
+    height: 1px;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .confetti span {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 7px;
+    height: 13px;
+    border-radius: 2px;
+    background: hsl(calc(24 + var(--i) * 29), 72%, 58%);
+    box-shadow: 0 1px 2px rgba(43, 37, 32, .14);
+    transform: translate(-50%, 0) scale(.6) rotate(0deg);
+    animation: confetti-pop 1250ms cubic-bezier(.13, .92, .2, 1) both;
+    animation-delay: calc(var(--i) * 13ms);
+  }
+
+  .confetti span:nth-child(3n) {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+  }
+
+  .confetti span:nth-child(4n) {
+    width: 12px;
+    height: 5px;
+  }
+
+  @keyframes confetti-pop {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, 0) scale(.5) rotate(0deg);
+    }
+    12% {
+      opacity: 1;
+      transform: translate(calc(var(--dx) * .32), calc(var(--dy) * .45)) scale(1) rotate(calc(var(--rot) * .35));
+    }
+    100% {
+      opacity: 0;
+      transform: translate(var(--dx), calc(var(--dy) + 72px)) scale(.9) rotate(var(--rot));
+    }
+  }
+
   .pc-foot {
     display: flex;
     align-items: center;
@@ -439,6 +941,7 @@
     }
 
     .pc-desc-head,
+    .pc-repo,
     .pc-foot,
     .pc-save-row {
       align-items: stretch;
@@ -448,9 +951,14 @@
     .ai-btn,
     .pc-view,
     .pc-save,
-    .pc-cancel {
+    .pc-cancel,
+    .mini-action {
       justify-content: center;
       width: 100%;
+    }
+
+    .repo-actions {
+      justify-content: stretch;
     }
   }
 </style>

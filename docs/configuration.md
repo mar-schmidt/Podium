@@ -21,6 +21,21 @@ Defaults applied across all agents unless overridden per agent.
 | `permission_timeout` | duration | Approve-mode prompt timeout before auto-deny, e.g. `30s` or `2m`. |
 | `fallback` | list of profile names or `default` | Optional default fallback chain used when an agent declares none. |
 
+## `github`
+
+Public GitHub App details for connecting project repositories.
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `app_slug` | string | Official Podium GitHub App slug, used for the install URL. |
+| `client_id` | string | Public GitHub App client ID used for device authorization. |
+| `web_base` | URL | Optional override; defaults to `https://github.com`. |
+| `api_base` | URL | Optional override; defaults to `https://api.github.com`. |
+| `login_base` | URL | Optional override; defaults to `https://github.com/login`. |
+
+Connected repos are downloaded as source snapshots into the project directory.
+This does not require Git or GitHub CLI.
+
 ## `profiles`
 
 Optional named auth contexts, each 1:1 with one underlying account. Podium owns

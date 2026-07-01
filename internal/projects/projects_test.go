@@ -45,3 +45,61 @@ func TestLedgerRejectsDuplicateAndBadID(t *testing.T) {
 		t.Fatal("expected invalid id error")
 	}
 }
+
+func TestLedgerReadsLegacyRepoValues(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`projects:
+  - id: empty
+    name: Empty
+    path: empty
+    status: active
+    stack: []
+    repo: ""
+    roadmap: []
+    notes: ""
+  - id: legacy
+    name: Legacy
+    path: legacy
+    status: active
+    stack: []
+    repo: https://github.com/mar-schmidt/Podium.git
+    roadmap: []
+    notes: ""
+  - id: object
+    name: Object
+    path: object
+    status: active
+    stack: []
+    repo:
+      provider: github
+      mode: snapshot
+      owner: openai
+      name: codex
+      full_name: openai/codex
+      html_url: https://github.com/openai/codex
+      default_branch: main
+      ref: main
+      source_kind: archive
+    roadmap: []
+    notes: ""
+`)
+	if err := os.WriteFile(filepath.Join(dir, "projects.yaml"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err := New(dir).List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if list[0].Repo != nil {
+		t.Fatalf("empty repo should decode as nil: %+v", list[0].Repo)
+	}
+	if list[1].Repo == nil || list[1].Repo.FullName != "mar-schmidt/Podium" || list[1].Repo.SourceKind != "archive" {
+		t.Fatalf("legacy repo not normalized: %+v", list[1].Repo)
+	}
+	if list[2].Repo == nil || list[2].Repo.FullName != "openai/codex" {
+		t.Fatalf("object repo not decoded: %+v", list[2].Repo)
+	}
+}

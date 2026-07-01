@@ -23,16 +23,17 @@ type Handle struct {
 // StartRequest contains the provider-neutral data needed to create a backing
 // CLI session or thread.
 type StartRequest struct {
-	SessionID      string
-	AgentName      string
-	Provider       config.Provider
-	Profile        string
-	ProfileDir     string
-	Model          string
-	Effort         string
-	PermissionMode config.PermissionMode
-	WorkspaceDir   string
-	Instructions   []byte
+	SessionID          string
+	AgentName          string
+	Provider           config.Provider
+	Profile            string
+	ProfileDir         string
+	Model              string
+	Effort             string
+	PermissionMode     config.PermissionMode
+	WorkspaceDir       string
+	ExtraWorkspaceDirs []string
+	Instructions       []byte
 }
 
 // ResumeRequest asks an adapter to bind to an existing provider handle.
@@ -55,14 +56,15 @@ type TurnRequest struct {
 // TurnSettings are the current session settings needed by per-turn providers
 // such as Claude.
 type TurnSettings struct {
-	AgentName        string
-	Profile          string
-	ProfileDir       string
-	Model            string
-	Effort           string
-	PermissionMode   config.PermissionMode
-	WorkspaceDir     string
-	PermissionTurnID string
+	AgentName          string
+	Profile            string
+	ProfileDir         string
+	Model              string
+	Effort             string
+	PermissionMode     config.PermissionMode
+	WorkspaceDir       string
+	ExtraWorkspaceDirs []string
+	PermissionTurnID   string
 	// Unattended marks a run with no human at the keyboard (a scheduled run).
 	// In approve mode this selects the "preapproved" policy (§7.7): permission
 	// requests are resolved without a human — via AllowedTools natively on

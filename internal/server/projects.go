@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mar-schmidt/Podium/internal/core"
+	podiumgithub "github.com/mar-schmidt/Podium/internal/github"
 	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
@@ -55,6 +56,16 @@ type projectUpdateRequest struct {
 	Notes       *string   `json:"notes,omitempty"`
 }
 
+type projectRepoRequest struct {
+	Owner         string `json:"owner"`
+	Name          string `json:"name"`
+	FullName      string `json:"full_name"`
+	HTMLURL       string `json:"html_url"`
+	DefaultBranch string `json:"default_branch"`
+	Ref           string `json:"ref"`
+	Force         bool   `json:"force"`
+}
+
 type describeRequest struct {
 	Agent string `json:"agent"`
 }
@@ -96,6 +107,11 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if action == "repo" || strings.HasPrefix(action, "repo/") {
+		s.handleProjectRepo(w, r, id)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		project, err := s.core.GetProject(r.Context(), id)
@@ -118,6 +134,83 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleProjectRepo(w http.ResponseWriter, r *http.Request, id string) {
+	if s.github == nil {
+		http.Error(w, "github unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	project, err := s.core.GetProject(r.Context(), id)
+	if err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/projects/"), id+"/repo")
+	if rest == "/sync" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if project.Repo == nil {
+			http.Error(w, "project has no connected repo", http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Force bool `json:"force"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		result, err := s.github.SyncProject(r.Context(), podiumgithub.SyncRequest{Project: project, Repo: *project.Repo, Force: req.Force})
+		if writeGitHubProjectError(w, err) {
+			return
+		}
+		repo := result.Repo
+		updated, err := s.core.UpdateProject(r.Context(), id, projects.ProjectPatch{Repo: &repo})
+		writeJSON(w, updated, err)
+		return
+	}
+	if rest != "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		var req projectRepoRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		owner, name := repoOwnerName(req)
+		if owner == "" || name == "" {
+			http.Error(w, "repo owner and name are required", http.StatusBadRequest)
+			return
+		}
+		repo := projects.SnapshotRepo(owner, name, req.HTMLURL, req.DefaultBranch, req.Ref)
+		result, err := s.github.SyncProject(r.Context(), podiumgithub.SyncRequest{Project: project, Repo: repo, Force: req.Force})
+		if writeGitHubProjectError(w, err) {
+			return
+		}
+		synced := result.Repo
+		updated, err := s.core.UpdateProject(r.Context(), id, projects.ProjectPatch{Repo: &synced})
+		writeJSON(w, updated, err)
+	case http.MethodDelete:
+		updated, err := s.core.UpdateProject(r.Context(), id, projects.ProjectPatch{ClearRepo: true})
+		writeJSON(w, updated, err)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func repoOwnerName(req projectRepoRequest) (string, string) {
+	if strings.TrimSpace(req.Owner) != "" && strings.TrimSpace(req.Name) != "" {
+		return strings.TrimSpace(req.Owner), strings.TrimSpace(req.Name)
+	}
+	parts := strings.Split(strings.TrimSpace(req.FullName), "/")
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return "", ""
 }
 
 type taskCreateRequest struct {

@@ -242,6 +242,12 @@ func (c *Claude) args(req TurnRequest) ([]string, func(), error) {
 	if req.Settings.WorkspaceDir != "" {
 		args = append(args, "--add-dir", req.Settings.WorkspaceDir)
 	}
+	for _, dir := range req.Settings.ExtraWorkspaceDirs {
+		dir = strings.TrimSpace(dir)
+		if dir != "" {
+			args = append(args, "--add-dir", dir)
+		}
+	}
 	if req.Settings.Model != "" {
 		args = append(args, "--model", req.Settings.Model)
 	}

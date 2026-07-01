@@ -77,6 +77,19 @@ global login — it never leaks one profile's variable into another profile's
 process. (Agent *workspaces* are intentionally shared across agents, §5.8; it is
 only the auth state that stays isolated.)
 
+### GitHub project repo tokens
+
+Podium's GitHub project integration is local-first and does not ship a GitHub App
+private key or client secret. The distributed app contains only public GitHub App
+details (`app_slug`, `client_id`). Users authorize the app with GitHub's device
+flow, and Podium stores the returned local token under
+`$PODIUM_HOME/github/token.json` with `0600` permissions.
+
+GitHub tokens, temporary archive redirect URLs, and downloaded archive URLs are
+treated as sensitive and must not be logged or returned from API responses.
+Connected repositories are downloaded as source snapshots into project
+directories; v1 does not create Git remotes, commits, pushes, or PRs.
+
 ## Structured run logging (R11.5)
 
 `podiumd` logs structured records (Go `slog`, text handler) for both

@@ -11,8 +11,12 @@
 #     path: mission-control          # relative to ~/.podium/projects/
 #     status: active                 # active | paused | done
 #     stack: [Next.js, TypeScript]
-#     repo: null
+#     repo: null                    # or a GitHub snapshot object from the UI
 #     roadmap: []                    # derived roadmap task IDs
 #     notes: >
 #       Anything the next agent needs to know.
+#
+# Connected GitHub repos are downloaded as source snapshots directly into the
+# project directory. They are not Git checkouts unless a future explicit Git
+# workflow converts them.
 projects: []

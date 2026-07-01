@@ -109,15 +109,16 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 	startedFresh := threadID == ""
 	if threadID == "" {
 		handle, err := c.Start(ctx, StartRequest{
-			SessionID:      req.SessionID,
-			AgentName:      req.Settings.AgentName,
-			Provider:       config.ProviderCodex,
-			Profile:        req.Settings.Profile,
-			ProfileDir:     req.Settings.ProfileDir,
-			Model:          req.Settings.Model,
-			Effort:         req.Settings.Effort,
-			PermissionMode: req.Settings.PermissionMode,
-			WorkspaceDir:   req.Settings.WorkspaceDir,
+			SessionID:          req.SessionID,
+			AgentName:          req.Settings.AgentName,
+			Provider:           config.ProviderCodex,
+			Profile:            req.Settings.Profile,
+			ProfileDir:         req.Settings.ProfileDir,
+			Model:              req.Settings.Model,
+			Effort:             req.Settings.Effort,
+			PermissionMode:     req.Settings.PermissionMode,
+			WorkspaceDir:       req.Settings.WorkspaceDir,
+			ExtraWorkspaceDirs: req.Settings.ExtraWorkspaceDirs,
 		})
 		if err != nil {
 			c.turnLog(req).Warn("provider thread start failed", "stage", "thread_start", "method", "thread/start", "error", podiumlog.Redact(err.Error()))
@@ -771,7 +772,7 @@ func (c *codexClient) respondError(id json.RawMessage, code int, message string)
 func codexThreadStartParams(req StartRequest) map[string]any {
 	params := map[string]any{
 		"cwd":                   req.WorkspaceDir,
-		"runtimeWorkspaceRoots": []string{req.WorkspaceDir},
+		"runtimeWorkspaceRoots": workspaceRoots(req.WorkspaceDir, req.ExtraWorkspaceDirs),
 		"approvalPolicy":        codexApprovalPolicy(req.PermissionMode),
 		"sandbox":               codexSandboxMode(req.PermissionMode),
 		"threadSource":          "podium",
@@ -792,7 +793,7 @@ func codexThreadResumeParams(threadID string, settings TurnSettings) map[string]
 	}
 	if settings.WorkspaceDir != "" {
 		params["cwd"] = settings.WorkspaceDir
-		params["runtimeWorkspaceRoots"] = []string{settings.WorkspaceDir}
+		params["runtimeWorkspaceRoots"] = workspaceRoots(settings.WorkspaceDir, settings.ExtraWorkspaceDirs)
 	}
 	if settings.Model != "" {
 		params["model"] = settings.Model
@@ -809,7 +810,7 @@ func codexTurnStartParams(threadID, message string, settings TurnSettings) map[s
 			"text_elements": []any{},
 		}},
 		"cwd":                   settings.WorkspaceDir,
-		"runtimeWorkspaceRoots": []string{settings.WorkspaceDir},
+		"runtimeWorkspaceRoots": workspaceRoots(settings.WorkspaceDir, settings.ExtraWorkspaceDirs),
 		"approvalPolicy":        codexApprovalPolicy(settings.PermissionMode),
 		"sandboxPolicy":         codexSandboxPolicy(settings.PermissionMode, settings.WorkspaceDir),
 	}
@@ -820,6 +821,20 @@ func codexTurnStartParams(threadID, message string, settings TurnSettings) map[s
 		params["effort"] = settings.Effort
 	}
 	return params
+}
+
+func workspaceRoots(primary string, extra []string) []string {
+	seen := map[string]bool{}
+	var roots []string
+	for _, dir := range append([]string{primary}, extra...) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		roots = append(roots, dir)
+	}
+	return roots
 }
 
 func codexApprovalPolicy(mode config.PermissionMode) string {

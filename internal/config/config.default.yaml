@@ -25,6 +25,14 @@ global:
   fallback: []                # e.g. [work, personal, codex-main, codex]
 
 # ---------------------------------------------------------------------------
+# github: optional public GitHub App details for connecting project repos.
+# These values are safe to ship. Do NOT put private keys or client secrets here.
+# ---------------------------------------------------------------------------
+github:
+  app_slug: podium-llm-orchestrator  # official Podium GitHub App slug
+  client_id: Iv23liIKvhvRj9FdIaPD  # public GitHub App client ID
+
+# ---------------------------------------------------------------------------
 # profiles: OPTIONAL named auth contexts, each 1:1 with one underlying account.
 # A profile is just a directory + a name that Podium owns — Podium never handles
 # credentials. You log in yourself against the profile dir using the CLI's own

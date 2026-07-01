@@ -4,6 +4,10 @@
 import type {
   Agent,
   AgentDetail,
+  GitHubDevicePoll,
+  GitHubDeviceStart,
+  GitHubRepo,
+  GitHubStatus,
   GlobalConfig,
   GlobalConfigPatch,
   Health,
@@ -249,6 +253,66 @@ export async function describeProject(id: string, agent: string): Promise<string
     }),
   );
   return res.description;
+}
+
+export async function githubStatus(): Promise<GitHubStatus> {
+  return asJSON(await fetch("/api/github/status"));
+}
+
+export async function githubDeviceStart(): Promise<GitHubDeviceStart> {
+  return asJSON(await fetch("/api/github/device/start", { method: "POST" }));
+}
+
+export async function githubDevicePoll(device_code: string): Promise<GitHubDevicePoll> {
+  return asJSON(
+    await fetch("/api/github/device/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_code }),
+    }),
+  );
+}
+
+export async function githubRepos(): Promise<GitHubRepo[]> {
+  return (await asJSON<GitHubRepo[] | null>(await fetch("/api/github/repos"))) ?? [];
+}
+
+export interface ConnectProjectRepoRequest {
+  owner: string;
+  name: string;
+  full_name: string;
+  html_url: string;
+  default_branch: string;
+  ref?: string;
+  force?: boolean;
+}
+
+export async function connectProjectRepo(id: string, req: ConnectProjectRepoRequest): Promise<Project> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(id)}/repo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (res.status === 409) {
+    throw new Error("CONFIRM_REPLACE");
+  }
+  return asJSON(res);
+}
+
+export async function syncProjectRepo(id: string, force = false): Promise<Project> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(id)}/repo/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force }),
+  });
+  if (res.status === 409) {
+    throw new Error("CONFIRM_REPLACE");
+  }
+  return asJSON(res);
+}
+
+export async function disconnectProjectRepo(id: string): Promise<Project> {
+  return asJSON(await fetch(`/api/projects/${encodeURIComponent(id)}/repo`, { method: "DELETE" }));
 }
 
 export interface TaskDescribeRequest {

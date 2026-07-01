@@ -118,6 +118,46 @@ server:
 	}
 }
 
+func TestDeleteAgentUnassignsRoadmapTasks(t *testing.T) {
+	ctx := context.Background()
+	c, cleanup := newTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "atlas", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create atlas: %v", err)
+	}
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "builder", Provider: config.ProviderCodex}); err != nil {
+		t.Fatalf("create builder: %v", err)
+	}
+	atlasTask, err := c.CreateTask(ctx, store.Task{Title: "atlas work", AssignedAgent: "atlas"})
+	if err != nil {
+		t.Fatalf("create atlas task: %v", err)
+	}
+	builderTask, err := c.CreateTask(ctx, store.Task{Title: "builder work", AssignedAgent: "builder"})
+	if err != nil {
+		t.Fatalf("create builder task: %v", err)
+	}
+
+	if _, err := c.DeleteAgent(ctx, "atlas"); err != nil {
+		t.Fatalf("delete agent: %v", err)
+	}
+
+	gotAtlas, err := c.GetTask(ctx, atlasTask.ID)
+	if err != nil {
+		t.Fatalf("get atlas task: %v", err)
+	}
+	if gotAtlas.AssignedAgent != "" {
+		t.Fatalf("deleted agent assignment should be cleared, got %q", gotAtlas.AssignedAgent)
+	}
+	gotBuilder, err := c.GetTask(ctx, builderTask.ID)
+	if err != nil {
+		t.Fatalf("get builder task: %v", err)
+	}
+	if gotBuilder.AssignedAgent != "builder" {
+		t.Fatalf("other task assignment should remain, got %q", gotBuilder.AssignedAgent)
+	}
+}
+
 func TestDeleteAgentArchiveFailureLeavesDatabaseUnchanged(t *testing.T) {
 	ctx := context.Background()
 	c, cleanup := newTestCore(t)

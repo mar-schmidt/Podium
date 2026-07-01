@@ -202,7 +202,7 @@ func (c *Core) UpdateTask(ctx context.Context, task store.Task) (store.Task, err
 	} else if hasSession && taskChangesLockedFields(existing, task) {
 		return store.Task{}, fmt.Errorf("task %q already has a session; only status can be changed", task.ID)
 	}
-	if task.AssignedAgent != "" {
+	if task.AssignedAgent != "" && task.AssignedAgent != existing.AssignedAgent {
 		if _, err := c.store.GetAgent(ctx, task.AssignedAgent); err != nil {
 			return store.Task{}, fmt.Errorf("assigned agent %q: %w", task.AssignedAgent, err)
 		}

@@ -68,6 +68,40 @@ func TestDeleteTaskKeepsSessions(t *testing.T) {
 	}
 }
 
+func TestOrphanedAssignedTaskCanTransitionThenDelete(t *testing.T) {
+	ctx := context.Background()
+	c, cleanup := newTestCore(t)
+	defer cleanup()
+
+	task, _ := startedTask(t, c, "unstick orphaned task")
+
+	if err := c.store.DeleteSessionsByAgent(ctx, "jared"); err != nil {
+		t.Fatalf("delete agent sessions: %v", err)
+	}
+	if err := c.store.DeleteAgent(ctx, "jared"); err != nil {
+		t.Fatalf("delete agent row: %v", err)
+	}
+
+	orphaned, err := c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get orphaned task: %v", err)
+	}
+	if orphaned.AssignedAgent != "jared" || orphaned.Status != store.TaskInProgress {
+		t.Fatalf("test setup did not create orphaned in-progress task: %+v", orphaned)
+	}
+	if err := c.DeleteTask(ctx, task.ID); err == nil {
+		t.Fatal("expected in_progress task delete to still be refused")
+	}
+
+	orphaned.Status = store.TaskReview
+	if _, err := c.UpdateTask(ctx, orphaned); err != nil {
+		t.Fatalf("move orphaned task to review: %v", err)
+	}
+	if err := c.DeleteTask(ctx, task.ID); err != nil {
+		t.Fatalf("delete orphaned task after transition: %v", err)
+	}
+}
+
 func TestArchiveDoneTasksWritesAndRemoves(t *testing.T) {
 	ctx := context.Background()
 	c, cleanup := newTestCore(t)

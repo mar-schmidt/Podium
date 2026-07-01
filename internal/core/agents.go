@@ -149,6 +149,9 @@ func (c *Core) DeleteAgent(ctx context.Context, name string) (DeleteAgentResult,
 	if err := c.store.DeleteSessionsByAgent(ctx, name); err != nil {
 		return DeleteAgentResult{}, err
 	}
+	if err := c.store.UnassignTasksByAgent(ctx, name); err != nil {
+		return DeleteAgentResult{}, err
+	}
 	if err := c.store.DeleteAgent(ctx, name); err != nil {
 		return DeleteAgentResult{}, err
 	}

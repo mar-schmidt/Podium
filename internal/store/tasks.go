@@ -74,6 +74,19 @@ func (s *Store) UpdateTask(ctx context.Context, task Task) (Task, error) {
 	return s.GetTask(ctx, task.ID)
 }
 
+// UnassignTasksByAgent clears roadmap assignments for an agent that is being
+// removed. Tasks deliberately do not have a foreign key to agents, so this keeps
+// future task updates from carrying a stale assignee name forward.
+func (s *Store) UnassignTasksByAgent(ctx context.Context, agentName string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks
+		SET assigned_agent = '', updated_at = datetime('now')
+		WHERE assigned_agent = ?`, agentName)
+	if err != nil {
+		return fmt.Errorf("unassign tasks for agent %q: %w", agentName, err)
+	}
+	return nil
+}
+
 // DeleteTask removes a task by ID. Sessions started from the task are left
 // intact — their task_id simply becomes a dangling reference — so deleting a
 // task never destroys the durable record of work done.

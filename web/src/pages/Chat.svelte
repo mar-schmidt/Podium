@@ -80,6 +80,9 @@
   let countdown: number | undefined;
   let pendingSeed: string | null = null;
   let msgsEl: HTMLDivElement | null = null;
+  // stick = auto-follow the transcript to the bottom. Turns off when the user
+  // scrolls up to read history, back on when they return near the bottom.
+  let stick = true;
   const LAST_SESSION_KEY = "podium:last-chat-session";
 
   // Layout / UI state.
@@ -243,20 +246,22 @@
         break;
       case "message":
         if (!messageForActiveSession(msg)) break;
+        // The agent has produced output, so it is no longer blocked on the user;
+        // drop any stale approve/answer modal (see clearPendingRequests).
+        clearPendingRequests();
         if (msg.message && !messages.some((e) => sameMessage(e, msg.message))) {
           messages = [...messages, msg.message];
-          if (msg.message.Role === "assistant") {
-            pendingAssistant = "";
-            scrollMessagesToBottom();
-          }
+          if (msg.message.Role === "assistant") pendingAssistant = "";
         }
         break;
       case "delta":
         if (!messageForActiveSession(msg)) break;
+        clearPendingRequests();
         pendingAssistant += msg.delta ?? "";
         break;
       case "assistant":
         if (!messageForActiveSession(msg)) break;
+        clearPendingRequests();
         if (!pendingAssistant) pendingAssistant = msg.delta ?? "";
         break;
       case "permission_request":
@@ -283,11 +288,32 @@
         break;
       case "error":
         if (messageForActiveSession(msg)) {
-          error = msg.error ?? "Unknown server error";
+          // A stale approve/answer (the request already expired or the daemon
+          // moved on) is expected, not a failure — clear the modal and show a
+          // gentle notice rather than a red error banner.
+          if (msg.error === "permission request not found" || msg.error === "user input request not found") {
+            pendingPermission = null;
+            pendingUserInput = null;
+            permissionRemaining = 0;
+            notice = "That request already expired.";
+          } else {
+            error = msg.error ?? "Unknown server error";
+          }
           sending = false;
         }
         break;
     }
+  }
+
+  // clearPendingRequests dismisses stale approve/answer modals when the agent
+  // resumes producing output (delta/assistant/message) — at that point it is no
+  // longer blocked, so acting on the modal would hit a dead request. Claude's
+  // question modal is intentionally preserved (its answer is a follow-up turn),
+  // matching the "done" handler's semantics.
+  function clearPendingRequests() {
+    pendingPermission = null;
+    permissionRemaining = 0;
+    if (pendingUserInput?.provider !== "claude") pendingUserInput = null;
   }
 
   function rememberSession(id: string) {
@@ -328,13 +354,29 @@
     return !!b && a.ID === b.ID && a.SessionID === b.SessionID;
   }
 
-  async function scrollMessagesToBottom() {
+  async function scrollMessagesToBottom(behavior: ScrollBehavior = "smooth") {
     await tick();
     requestAnimationFrame(() => {
       if (!msgsEl) return;
-      msgsEl.scrollTo({ top: msgsEl.scrollHeight, behavior: "smooth" });
+      msgsEl.scrollTo({ top: msgsEl.scrollHeight, behavior });
     });
   }
+
+  // onMsgsScroll tracks whether the user is near the bottom so auto-follow only
+  // kicks in when they haven't deliberately scrolled up.
+  function onMsgsScroll() {
+    if (!msgsEl) return;
+    stick = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120;
+  }
+
+  // Follow new content to the bottom: fires on the user's own message, on each
+  // streaming delta, and on the final assistant message — but only while stuck.
+  $effect(() => {
+    // Touch the reactive deps so the effect re-runs when they change.
+    void messages.length;
+    void pendingAssistant;
+    if (stick) void scrollMessagesToBottom();
+  });
 
   async function loadHistory(session: Session) {
     error = null;
@@ -350,6 +392,10 @@
       pendingUserInput = null;
       sending = !!activeTurns[detail.session.ID];
       attachActiveSession();
+      // Opening a session (incl. via a notification tap) lands on the newest
+      // message. Instant jump — no animated scroll through the whole history.
+      stick = true;
+      void scrollMessagesToBottom("auto");
       if (isPhone) sessOpen = false;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -487,7 +533,12 @@
   }
 
   function decidePermission(allow: boolean) {
-    if (!pendingPermission) return;
+    // Guard against acting on an expired request (its broker entry is gone, so
+    // the decision would be rejected as "not found").
+    if (!pendingPermission || permissionRemaining <= 0) {
+      pendingPermission = null;
+      return;
+    }
     send({
       type: "permission_decision",
       request_id: pendingPermission.id,
@@ -561,6 +612,12 @@
       0,
       Math.ceil((new Date(pendingPermission.expires_at).getTime() - Date.now()) / 1000),
     );
+    // Expired: the daemon has already auto-denied, so drop the dead modal rather
+    // than let the user click Approve and hit "permission request not found".
+    if (permissionRemaining <= 0) {
+      pendingPermission = null;
+      notice = "The approval request expired.";
+    }
   }
 
   function toggleDropdown(key: string) {
@@ -695,7 +752,7 @@
       </div>
     {/if}
 
-    <div class="msgs" bind:this={msgsEl}>
+    <div class="msgs" bind:this={msgsEl} onscroll={onMsgsScroll}>
       {#each messages as m (m.ID)}
         {#if m.Role === "user"}
           <div class="row-end">

@@ -20,5 +20,9 @@
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.3",
     "vite": "^6.0.11"
+  },
+  "dependencies": {
+    "dompurify": "3.4.11",
+    "marked": "18.0.5"
   }
 }

@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import { deleteSession, getSession, listProjects } from "../lib/api";
   import { live } from "../lib/live.svelte";
+  import { renderMarkdown } from "../lib/markdown";
   import ConfirmModal from "../lib/ConfirmModal.svelte";
   import {
     agentGradient,
@@ -761,7 +762,7 @@
         {:else}
           <div class="row-start">
             <div style={avatarStyle(activeGrad, 30, 10, 13)}>{activeMono}</div>
-            <div class="bubble-assistant">{m.Content}</div>
+            <div class="bubble-assistant">{@html renderMarkdown(m.Content)}</div>
           </div>
         {/if}
       {/each}
@@ -769,7 +770,7 @@
       {#if pendingAssistant}
         <div class="row-start">
           <div style={avatarStyle(activeGrad, 30, 10, 13)}>{activeMono}</div>
-          <div class="bubble-assistant">{pendingAssistant}<span class="cursor"></span></div>
+          <div class="bubble-assistant">{@html renderMarkdown(pendingAssistant)}<span class="cursor"></span></div>
         </div>
       {/if}
 
@@ -1347,8 +1348,142 @@
     font: 400 15px/1.6 "Hanken Grotesk";
     color: var(--ink-soft);
     box-shadow: 0 2px 8px -6px rgba(43, 37, 32, 0.12);
-    white-space: pre-wrap;
+    min-width: 0;
     word-break: break-word;
+  }
+
+  .bubble-assistant :global(*) {
+    max-width: 100%;
+  }
+
+  .bubble-assistant :global(:first-child) {
+    margin-top: 0;
+  }
+
+  .bubble-assistant :global(:last-child) {
+    margin-bottom: 0;
+  }
+
+  .bubble-assistant :global(p) {
+    margin: 0 0 0.72em;
+  }
+
+  .bubble-assistant :global(h1),
+  .bubble-assistant :global(h2),
+  .bubble-assistant :global(h3),
+  .bubble-assistant :global(h4),
+  .bubble-assistant :global(h5),
+  .bubble-assistant :global(h6) {
+    margin: 0.9em 0 0.42em;
+    font-weight: 700;
+    line-height: 1.25;
+    color: var(--ink);
+    letter-spacing: 0;
+  }
+
+  .bubble-assistant :global(h1) {
+    font-size: 1.22em;
+  }
+
+  .bubble-assistant :global(h2) {
+    font-size: 1.14em;
+  }
+
+  .bubble-assistant :global(h3),
+  .bubble-assistant :global(h4),
+  .bubble-assistant :global(h5),
+  .bubble-assistant :global(h6) {
+    font-size: 1.04em;
+  }
+
+  .bubble-assistant :global(ul),
+  .bubble-assistant :global(ol) {
+    margin: 0 0 0.78em;
+    padding-left: 1.25em;
+  }
+
+  .bubble-assistant :global(li) {
+    margin: 0.16em 0;
+  }
+
+  .bubble-assistant :global(li > p) {
+    margin: 0.22em 0;
+  }
+
+  .bubble-assistant :global(a) {
+    color: var(--teal-deep);
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-color: rgba(47, 110, 96, 0.32);
+    text-underline-offset: 2px;
+  }
+
+  .bubble-assistant :global(blockquote) {
+    margin: 0 0 0.82em;
+    padding: 0.08em 0 0.08em 0.85em;
+    border-left: 3px solid var(--line);
+    color: var(--muted);
+  }
+
+  .bubble-assistant :global(code) {
+    border: 1px solid var(--line-3);
+    border-radius: 5px;
+    background: var(--surface-2);
+    padding: 0.08em 0.32em;
+    font: 500 0.88em/1.5 "JetBrains Mono", monospace;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+
+  .bubble-assistant :global(pre) {
+    max-width: 100%;
+    margin: 0 0 0.86em;
+    overflow-x: auto;
+    border: 1px solid var(--line-3);
+    border-radius: 8px;
+    background: var(--surface-2);
+    padding: 11px 12px;
+  }
+
+  .bubble-assistant :global(pre code) {
+    display: block;
+    min-width: max-content;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 0;
+    color: var(--ink);
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+
+  .bubble-assistant :global(table) {
+    display: block;
+    width: 100%;
+    margin: 0 0 0.86em;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.94em;
+  }
+
+  .bubble-assistant :global(th),
+  .bubble-assistant :global(td) {
+    border: 1px solid var(--line-3);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .bubble-assistant :global(th) {
+    background: var(--surface-2);
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .bubble-assistant :global(hr) {
+    margin: 1em 0;
+    border: 0;
+    border-top: 1px solid var(--line-3);
   }
 
   .bubble-error {

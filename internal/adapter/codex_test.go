@@ -129,6 +129,9 @@ func TestCodexStreamsTurnAndRelaysApproval(t *testing.T) {
 	if req.TurnID != "podium-turn-1" || req.ToolName != "codex.command" || req.ToolUseID != "item-1" {
 		t.Fatalf("bad permission request: %+v", req)
 	}
+	if req.Description != "Run echo ok" {
+		t.Fatalf("bad permission request description %q", req.Description)
+	}
 }
 
 func TestCodexStreamsTurnAndRelaysUserInput(t *testing.T) {
@@ -392,6 +395,7 @@ func runFakeCodexAppServer() {
 					"turnId":      turnID,
 					"itemId":      "item-1",
 					"startedAtMs": time.Now().UnixMilli(),
+					"description": "Run echo ok",
 					"command":     "echo ok",
 					"cwd":         "/tmp",
 				})

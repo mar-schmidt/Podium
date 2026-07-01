@@ -34,6 +34,13 @@
     seed?: string;
   }
 
+  type PermissionReceiptDecision = "approved" | "denied";
+
+  interface ResolvedPermission {
+    request: PermissionRequest;
+    decision: PermissionReceiptDecision;
+  }
+
   let {
     agents = [],
     target = null,
@@ -61,6 +68,7 @@
   let messages = $state<Message[]>([]);
   let pendingAssistant = $state("");
   let pendingPermission = $state<PermissionRequest | null>(null);
+  let resolvedPermission = $state<ResolvedPermission | null>(null);
   let pendingUserInput = $state<UserInputRequest | null>(null);
   let userInputAnswers = $state<Record<string, string[]>>({});
   let permissionRemaining = $state(0);
@@ -243,6 +251,7 @@
         messages = msg.history ?? [];
         pendingAssistant = "";
         pendingPermission = null;
+        resolvedPermission = null;
         pendingUserInput = null;
         break;
       case "message":
@@ -268,6 +277,7 @@
       case "permission_request":
         if (!messageForActiveSession(msg)) break;
         pendingPermission = msg.request ?? null;
+        resolvedPermission = null;
         updatePermissionRemaining();
         break;
       case "user_input_request":
@@ -293,6 +303,7 @@
             // A stale approval (the request already timed out / the daemon moved
             // on) — clear the dead modal and show a gentle notice, not an error.
             pendingPermission = null;
+            resolvedPermission = null;
             permissionRemaining = 0;
             notice = "The approval request expired.";
             sending = false;
@@ -347,7 +358,12 @@
     if (state.session_id !== activeSession?.ID) return;
     sending = state.status === "running";
     pendingAssistant = state.pending_assistant ?? "";
-    pendingPermission = state.pending_permission ?? null;
+    if (state.pending_permission?.id === resolvedPermission?.request.id) {
+      pendingPermission = null;
+    } else {
+      pendingPermission = state.pending_permission ?? null;
+      if (pendingPermission) resolvedPermission = null;
+    }
     pendingUserInput = state.pending_user_input ?? null;
     if (pendingUserInput) userInputAnswers = initialUserInputAnswers(pendingUserInput);
     if (state.error) error = state.error;
@@ -393,6 +409,7 @@
       projectName = detail.project_name ?? (detail.session.ProjectID ? projectLabel(detail.session.ProjectID) : "");
       pendingAssistant = "";
       pendingPermission = null;
+      resolvedPermission = null;
       pendingUserInput = null;
       sending = !!activeTurns[detail.session.ID];
       attachActiveSession();
@@ -421,6 +438,7 @@
         projectName = "";
         pendingAssistant = "";
         pendingPermission = null;
+        resolvedPermission = null;
         pendingUserInput = null;
         sending = false;
         localStorage.removeItem(LAST_SESSION_KEY);
@@ -445,6 +463,7 @@
     sending = true;
     pendingAssistant = "";
     pendingPermission = null;
+    resolvedPermission = null;
     pendingUserInput = null;
     send({
       type: "send_turn",
@@ -475,6 +494,7 @@
     if (resetDrafts) resetDraftSettings();
     pendingAssistant = "";
     pendingPermission = null;
+    resolvedPermission = null;
     pendingUserInput = null;
     notice = null;
     error = null;
@@ -541,16 +561,19 @@
     // the decision would be rejected as "not found").
     if (!pendingPermission || permissionRemaining <= 0) {
       pendingPermission = null;
+      resolvedPermission = null;
       return;
     }
+    const request = pendingPermission;
     send({
       type: "permission_decision",
-      request_id: pendingPermission.id,
+      request_id: request.id,
       decision: allow
-        ? { behavior: "allow", updatedInput: pendingPermission.input }
+        ? { behavior: "allow", updatedInput: request.input }
         : { behavior: "deny", message: "Denied from web" },
     });
     pendingPermission = null;
+    resolvedPermission = { request, decision: allow ? "approved" : "denied" };
   }
 
   function initialUserInputAnswers(req: UserInputRequest | null): Record<string, string[]> {
@@ -620,6 +643,7 @@
     // than let the user click Approve and hit "permission request not found".
     if (permissionRemaining <= 0) {
       pendingPermission = null;
+      resolvedPermission = null;
       notice = "The approval request expired.";
     }
   }
@@ -639,6 +663,14 @@
     return Object.entries(input)
       .map(([k, v]) => (k === "command" ? String(v) : `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`))
       .join("\n");
+  }
+
+  function permissionTitle(req: PermissionRequest): string {
+    return req.description?.trim() || req.tool_name;
+  }
+
+  function permissionDecisionLabel(decision: PermissionReceiptDecision): string {
+    return decision === "approved" ? "Approved" : "Denied";
   }
 </script>
 
@@ -777,7 +809,7 @@
         </div>
       {/if}
 
-      {#if sending && !pendingAssistant && !pendingPermission && !pendingUserInput}
+      {#if sending && !pendingAssistant && !pendingPermission && !resolvedPermission && !pendingUserInput}
         <div class="row-start" style="align-items:center">
           <div style={avatarStyle(activeGrad, 30, 10, 13)}>{activeMono}</div>
           <span class="thinking">
@@ -838,7 +870,8 @@
           <div style={avatarStyle(activeGrad, 30, 10, 13)}>{activeMono}</div>
           <div class="approve-card">
             <div class="approve-head">
-              <span class="approve-tag mono">approve · {pendingPermission.tool_name}</span>
+              <span class="approve-tag mono">approve</span>
+              <span class="approve-title">{permissionTitle(pendingPermission)}</span>
               <span style="flex:1"></span>
               <span class="approve-timer mono">auto-denies in {permissionRemaining}s</span>
             </div>
@@ -848,6 +881,19 @@
                 <button class="approve-yes" onclick={() => decidePermission(true)}>Approve</button>
                 <button class="approve-no" onclick={() => decidePermission(false)}>Deny</button>
               </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#if resolvedPermission && !pendingPermission}
+        <div class="row-start approve-wrap">
+          <div style={avatarStyle(activeGrad, 30, 10, 13)}>{activeMono}</div>
+          <div class="approve-card approve-receipt" class:denied={resolvedPermission.decision === "denied"}>
+            <div class="approve-head receipt-head">
+              <span class="approve-status mono">{permissionDecisionLabel(resolvedPermission.decision)}</span>
+              <span class="approve-title">{permissionTitle(resolvedPermission.request)}</span>
+              <span class="approve-tool mono">{resolvedPermission.request.tool_name}</span>
             </div>
           </div>
         </div>
@@ -1588,15 +1634,71 @@
   .approve-tag {
     font-weight: 700;
     font-size: 11px;
-    letter-spacing: 0.06em;
+    letter-spacing: 0;
     color: var(--gold);
     text-transform: uppercase;
+    flex: none;
   }
 
   .approve-timer {
     font-size: 11px;
     font-weight: 500;
     color: #c99;
+    flex: none;
+  }
+
+  .approve-title {
+    min-width: 0;
+    color: var(--ink);
+    font: 700 13.5px/1.25 "Hanken Grotesk";
+    overflow-wrap: anywhere;
+  }
+
+  .approve-tool {
+    margin-left: auto;
+    color: #a98b56;
+    font-size: 10.5px;
+    overflow-wrap: anywhere;
+  }
+
+  .approve-status {
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #eaf5f0;
+    color: var(--teal-deep);
+    border: 1px solid #cfe3d8;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    flex: none;
+  }
+
+  .approve-receipt {
+    border-color: #cfe3d8;
+    box-shadow: 0 7px 18px -15px rgba(63, 143, 126, 0.38);
+    animation: receiptMinimize 0.2s ease-out;
+    transform-origin: top left;
+  }
+
+  .approve-receipt.denied {
+    border-color: #ead4ca;
+    box-shadow: 0 7px 18px -15px rgba(177, 78, 42, 0.34);
+  }
+
+  .approve-receipt .receipt-head {
+    padding: 8px 12px;
+    background: #f3faf7;
+    border-bottom: none;
+  }
+
+  .approve-receipt.denied .receipt-head {
+    background: #fbf0eb;
+  }
+
+  .approve-receipt.denied .approve-status {
+    background: #fbf0eb;
+    color: var(--orange-ink);
+    border-color: #ead4ca;
   }
 
   .approve-body {
@@ -1740,6 +1842,17 @@
     color: var(--muted);
     font: 600 13.5px "Hanken Grotesk";
     cursor: pointer;
+  }
+
+  @keyframes receiptMinimize {
+    0% {
+      opacity: 0.72;
+      transform: translateY(-5px) scaleY(1.1);
+    }
+    100% {
+      opacity: 1;
+      transform: none;
+    }
   }
 
   .notice {

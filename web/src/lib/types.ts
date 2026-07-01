@@ -245,6 +245,7 @@ export interface PermissionRequest {
   turn_id: string;
   tool_name: string;
   tool_use_id: string;
+  description?: string;
   input: Record<string, unknown>;
   expires_at?: string;
 }

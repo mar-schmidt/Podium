@@ -124,12 +124,13 @@ type Adapter interface {
 
 // PermissionRequest is the provider-neutral approval payload surfaced to a user.
 type PermissionRequest struct {
-	ID        string          `json:"id"`
-	TurnID    string          `json:"turn_id"`
-	ToolName  string          `json:"tool_name"`
-	ToolUseID string          `json:"tool_use_id"`
-	Input     json.RawMessage `json:"input"`
-	ExpiresAt time.Time       `json:"expires_at,omitempty"`
+	ID          string          `json:"id"`
+	TurnID      string          `json:"turn_id"`
+	ToolName    string          `json:"tool_name"`
+	ToolUseID   string          `json:"tool_use_id"`
+	Description string          `json:"description,omitempty"`
+	Input       json.RawMessage `json:"input"`
+	ExpiresAt   time.Time       `json:"expires_at,omitempty"`
 }
 
 // PermissionDecision is returned to the provider permission mechanism.

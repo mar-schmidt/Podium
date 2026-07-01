@@ -1079,11 +1079,12 @@ func codexPermissionRequest(method string, id, params json.RawMessage, active co
 		turnID = codexTurnID
 	}
 	return PermissionRequest{
-		ID:        "codex-" + sanitizeFilename(codexIDKey(id)) + "-" + sanitizeFilename(toolUseID),
-		TurnID:    turnID,
-		ToolName:  codexToolName(method),
-		ToolUseID: toolUseID,
-		Input:     append(json.RawMessage(nil), params...),
+		ID:          "codex-" + sanitizeFilename(codexIDKey(id)) + "-" + sanitizeFilename(toolUseID),
+		TurnID:      turnID,
+		ToolName:    codexToolName(method),
+		ToolUseID:   toolUseID,
+		Description: firstRawString(fields, "description"),
+		Input:       append(json.RawMessage(nil), params...),
 	}
 }
 

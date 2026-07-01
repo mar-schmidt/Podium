@@ -376,6 +376,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				inputs = nil
 				continue
 			}
+			s.markRoadmapQuestionPending(ctx, session.ID, input.ID)
 			writeStreamEvent(enc, flusher, streamEvent{Type: "user_input_request", Input: &input})
 		case event, ok := <-events:
 			if !ok {
@@ -399,6 +400,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			case adapter.EventPermissionRequest:
 				writeStreamEvent(enc, flusher, streamEvent{Type: "permission_request", Request: event.PermissionRequest})
 			case adapter.EventUserInputRequest:
+				if event.UserInputRequest != nil {
+					s.markRoadmapQuestionPending(ctx, session.ID, event.UserInputRequest.ID)
+				}
 				writeStreamEvent(enc, flusher, streamEvent{Type: "user_input_request", Input: event.UserInputRequest})
 			case adapter.EventTurnDone:
 				writeStreamEvent(enc, flusher, streamEvent{Type: "done"})
@@ -425,7 +429,9 @@ func (s *Server) handleUserInputDecision(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "answers are required", http.StatusBadRequest)
 		return
 	}
-	if !s.input.decide(id, decision) {
+	decided := s.input.decide(id, decision)
+	restored := s.markRoadmapQuestionResolved(r.Context(), id)
+	if !decided && !restored {
 		http.Error(w, "user input request not found", http.StatusNotFound)
 		return
 	}

@@ -644,6 +644,9 @@ func newChatCmd(addr *string) *cobra.Command {
 								return err
 							}
 							if event.Input.Provider == config.ProviderClaude {
+								if err := c.DecideUserInput(cmd.Context(), event.Input.ID, decision); err != nil {
+									return err
+								}
 								followup = text
 							} else if err := c.DecideUserInput(cmd.Context(), event.Input.ID, decision); err != nil {
 								return err

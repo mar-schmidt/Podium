@@ -15,12 +15,19 @@ type userInputBroker struct {
 	mu      sync.Mutex
 	turns   map[string]chan adapter.UserInputRequest
 	pending map[string]chan adapter.UserInputDecision
+	meta    map[string]userInputMeta
+}
+
+type userInputMeta struct {
+	sessionID      string
+	restoreRoadmap bool
 }
 
 func newUserInputBroker() *userInputBroker {
 	return &userInputBroker{
 		turns:   map[string]chan adapter.UserInputRequest{},
 		pending: map[string]chan adapter.UserInputDecision{},
+		meta:    map[string]userInputMeta{},
 	}
 }
 
@@ -89,4 +96,18 @@ func (b *userInputBroker) decide(id string, decision adapter.UserInputDecision) 
 	default:
 		return false
 	}
+}
+
+func (b *userInputBroker) attach(id, sessionID string, restoreRoadmap bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.meta[id] = userInputMeta{sessionID: sessionID, restoreRoadmap: restoreRoadmap}
+}
+
+func (b *userInputBroker) popMeta(id string) userInputMeta {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	meta := b.meta[id]
+	delete(b.meta, id)
+	return meta
 }

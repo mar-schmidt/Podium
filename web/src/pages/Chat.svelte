@@ -367,6 +367,7 @@
     const decision = { answers: userInputAnswers };
     pendingUserInput = null;
     if (req.provider === "claude") {
+      send({ type: "user_input_decision", request_id: req.id, input: decision });
       sendTurn(formatUserInputFollowup(req, userInputAnswers));
       return;
     }

@@ -127,7 +127,9 @@ func (s *Server) handleWSMessage(ctx context.Context, writer *wsWriter, msg Clie
 		if msg.Input == nil {
 			return errors.New("user input decision is required")
 		}
-		if !s.input.decide(msg.RequestID, *msg.Input) {
+		decided := s.input.decide(msg.RequestID, *msg.Input)
+		restored := s.markRoadmapQuestionResolved(ctx, msg.RequestID)
+		if !decided && !restored {
 			return errors.New("user input request not found")
 		}
 		return nil
@@ -211,6 +213,7 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 				inputs = nil
 				continue
 			}
+			s.markRoadmapQuestionPending(ctx, session.ID, input.ID)
 			_ = writer.write(ctx, ServerMessage{Type: "user_input_request", RequestID: msg.RequestID, Input: &input})
 		case event, ok := <-events:
 			if !ok {
@@ -219,7 +222,7 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 				inputs = nil
 				continue
 			}
-			if err := writeTurnEvent(ctx, writer, msg.RequestID, event); err != nil {
+			if err := s.writeTurnEvent(ctx, writer, msg.RequestID, session.ID, event); err != nil {
 				return
 			}
 		}
@@ -228,7 +231,7 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 	_ = s.writeState(ctx, writer)
 }
 
-func writeTurnEvent(ctx context.Context, writer *wsWriter, requestID string, event core.TurnEvent) error {
+func (s *Server) writeTurnEvent(ctx context.Context, writer *wsWriter, requestID, sessionID string, event core.TurnEvent) error {
 	switch event.Kind {
 	case "message_stored":
 		return writer.write(ctx, ServerMessage{Type: "message", RequestID: requestID, Message: event.Message})
@@ -239,6 +242,9 @@ func writeTurnEvent(ctx context.Context, writer *wsWriter, requestID string, eve
 	case adapter.EventPermissionRequest:
 		return writer.write(ctx, ServerMessage{Type: "permission_request", RequestID: requestID, Request: event.PermissionRequest})
 	case adapter.EventUserInputRequest:
+		if event.UserInputRequest != nil {
+			s.markRoadmapQuestionPending(ctx, sessionID, event.UserInputRequest.ID)
+		}
 		return writer.write(ctx, ServerMessage{Type: "user_input_request", RequestID: requestID, Input: event.UserInputRequest})
 	case adapter.EventTurnDone:
 		return writer.write(ctx, ServerMessage{Type: "done", RequestID: requestID})

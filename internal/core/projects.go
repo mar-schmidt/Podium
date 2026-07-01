@@ -99,6 +99,53 @@ func (c *Core) UpdateTask(ctx context.Context, task store.Task) (store.Task, err
 	return c.store.UpdateTask(ctx, task)
 }
 
+// MoveRoadmapSessionTaskForQuestion moves an in-progress roadmap task to review
+// while a human answer is needed. It returns true only when this call changed
+// the task, so callers can restore that exact transition after the answer.
+func (c *Core) MoveRoadmapSessionTaskForQuestion(ctx context.Context, sessionID string) (bool, error) {
+	sess, err := c.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if sess.Origin != store.OriginRoadmap || sess.TaskID == "" {
+		return false, nil
+	}
+	task, err := c.store.GetTask(ctx, sess.TaskID)
+	if err != nil {
+		return false, err
+	}
+	if task.Status != store.TaskInProgress {
+		return false, nil
+	}
+	task.Status = store.TaskReview
+	if _, err := c.store.UpdateTask(ctx, task); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RestoreRoadmapSessionTaskAfterQuestion moves a task back to in_progress after
+// a question that previously moved it to review has been answered.
+func (c *Core) RestoreRoadmapSessionTaskAfterQuestion(ctx context.Context, sessionID string) error {
+	sess, err := c.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Origin != store.OriginRoadmap || sess.TaskID == "" {
+		return nil
+	}
+	task, err := c.store.GetTask(ctx, sess.TaskID)
+	if err != nil {
+		return err
+	}
+	if task.Status != store.TaskReview {
+		return nil
+	}
+	task.Status = store.TaskInProgress
+	_, err = c.store.UpdateTask(ctx, task)
+	return err
+}
+
 // TaskSession returns the most recent roadmap session started from a task, if
 // any. The boolean is false when the task has not been started.
 func (c *Core) TaskSession(ctx context.Context, taskID string) (store.Session, bool, error) {

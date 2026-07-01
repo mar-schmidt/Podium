@@ -81,3 +81,15 @@ func TestUserInputBrokerDecision(t *testing.T) {
 		t.Fatalf("bad decision: %+v", got)
 	}
 }
+
+func TestUserInputBrokerMetadata(t *testing.T) {
+	b := newUserInputBroker()
+	b.attach("input-1", "session-1", true)
+	meta := b.popMeta("input-1")
+	if meta.sessionID != "session-1" || !meta.restoreRoadmap {
+		t.Fatalf("bad metadata: %+v", meta)
+	}
+	if empty := b.popMeta("input-1"); empty.sessionID != "" || empty.restoreRoadmap {
+		t.Fatalf("metadata should be removed after pop: %+v", empty)
+	}
+}

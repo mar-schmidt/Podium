@@ -289,18 +289,21 @@
         break;
       case "error":
         if (messageForActiveSession(msg)) {
-          // A stale approve/answer (the request already expired or the daemon
-          // moved on) is expected, not a failure — clear the modal and show a
-          // gentle notice rather than a red error banner.
-          if (msg.error === "permission request not found" || msg.error === "user input request not found") {
+          if (msg.error === "permission request not found") {
+            // A stale approval (the request already timed out / the daemon moved
+            // on) — clear the dead modal and show a gentle notice, not an error.
             pendingPermission = null;
-            pendingUserInput = null;
             permissionRemaining = 0;
-            notice = "That request already expired.";
+            notice = "The approval request expired.";
+            sending = false;
+          } else if (msg.error === "user input request not found") {
+            // Benign: Claude questions are answered by a follow-up turn, so the
+            // broker has no pending entry by the time the decision lands. Nothing
+            // failed (the follow-up turn is running) — swallow it silently.
           } else {
             error = msg.error ?? "Unknown server error";
+            sending = false;
           }
-          sending = false;
         }
         break;
     }

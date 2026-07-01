@@ -265,12 +265,13 @@
     }
   }
 
-  function send(msg: ClientMessage) {
+  function send(msg: ClientMessage): boolean {
     if (live.status !== "live") {
-      error = "WebSocket is offline";
-      return;
+      error = "WebSocket is offline — reconnecting…";
+      return false;
     }
     live.send(msg);
+    return true;
   }
 
   // handleServerMessage is registered with the live store and handles only this
@@ -335,11 +336,13 @@
         }
         resetApprovalForm();
         updatePermissionRemaining();
+        if (pendingPermission) forceScrollToBottom();
         break;
       case "user_input_request":
         if (!messageForActiveSession(msg)) break;
         pendingUserInput = msg.input ?? null;
         userInputAnswers = initialUserInputAnswers(pendingUserInput);
+        if (pendingUserInput) forceScrollToBottom();
         break;
       case "notice":
         notice = msg.notice ?? null;
@@ -372,6 +375,7 @@
             // failed (the follow-up turn is running) — swallow it silently.
           } else {
             error = msg.error ?? "Unknown server error";
+            pendingAssistant = "";
             sending = false;
           }
         }
@@ -444,6 +448,12 @@
     });
   }
 
+  // forceScrollToBottom re-engages auto-follow for events the user must see.
+  function forceScrollToBottom(behavior: ScrollBehavior = "smooth") {
+    stick = true;
+    void scrollMessagesToBottom(behavior);
+  }
+
   // onMsgsScroll tracks whether the user is near the bottom so auto-follow only
   // kicks in when they haven't deliberately scrolled up.
   function onMsgsScroll() {
@@ -458,6 +468,11 @@
     void messages.length;
     void pendingAssistant;
     if (stick) void scrollMessagesToBottom();
+  });
+
+  // Errors and notices render at the bottom; make their appearance visible.
+  $effect(() => {
+    if (error || notice) forceScrollToBottom();
   });
 
   async function loadHistory(session: Session) {
@@ -520,6 +535,10 @@
       error = "Create or select an agent first";
       return;
     }
+    if (live.status !== "live") {
+      error = "WebSocket is offline — reconnecting…";
+      return;
+    }
     error = null;
     notice = null;
     sending = true;
@@ -528,7 +547,7 @@
     pendingPermission = null;
     resetApprovalForm();
     pendingUserInput = null;
-    send({
+    if (!send({
       type: "send_turn",
       request_id: crypto.randomUUID(),
       agent_name: activeSession ? undefined : selectedAgent,
@@ -538,8 +557,9 @@
       effort: activeSession ? undefined : draftEffort || undefined,
       permission_mode: activeSession ? undefined : draftPermissionMode || undefined,
       project_id: activeSession ? undefined : draftProjectID || undefined,
-    });
+    })) return;
     messageText = "";
+    forceScrollToBottom();
   }
 
   function resetDraftSettings() {
@@ -684,14 +704,15 @@
       return;
     }
     const request = pendingPermission;
-    send({
+    if (!send({
       type: "permission_decision",
       request_id: request.id,
       decision: { behavior: "allow", updatedInput: request.input },
-    });
+    })) return;
     markApprovalRecord(activeApprovalSessionID(), request.id, "approved");
     pendingPermission = null;
     resetApprovalForm();
+    forceScrollToBottom();
   }
 
   function startDenyPermission() {
@@ -714,14 +735,15 @@
     }
     const request = pendingPermission;
     const message = denyText.trim() || "Denied from web";
-    send({
+    if (!send({
       type: "permission_decision",
       request_id: request.id,
       decision: { behavior: "deny", message },
-    });
+    })) return;
     markApprovalRecord(activeApprovalSessionID(), request.id, "denied", message);
     pendingPermission = null;
     resetApprovalForm();
+    forceScrollToBottom();
   }
 
   function onDenyKeydown(e: KeyboardEvent) {
@@ -764,13 +786,13 @@
     const req = pendingUserInput;
     if (!req || !userInputReady(req)) return;
     const decision = { answers: userInputAnswers };
+    if (!send({ type: "user_input_decision", request_id: req.id, input: decision })) return;
     pendingUserInput = null;
     if (req.provider === "claude") {
-      send({ type: "user_input_decision", request_id: req.id, input: decision });
       sendTurn(formatUserInputFollowup(req, userInputAnswers));
       return;
     }
-    send({ type: "user_input_decision", request_id: req.id, input: decision });
+    forceScrollToBottom();
   }
 
   function formatUserInputFollowup(req: UserInputRequest, answers: Record<string, string[]>): string {
@@ -1056,7 +1078,14 @@
       </div>
     {/if}
 
-    <div class="msgs" bind:this={msgsEl} onscroll={onMsgsScroll}>
+    <div
+      class="msgs"
+      bind:this={msgsEl}
+      onscroll={onMsgsScroll}
+      onloadcapture={() => {
+        if (stick) void scrollMessagesToBottom("auto");
+      }}
+    >
       {#each messages as m (m.ID)}
         {#if m.Role === "user"}
           <div class="row-end">

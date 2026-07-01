@@ -626,7 +626,7 @@ func (c *Core) sessionProjectExecutionContext(ctx context.Context, sess store.Se
 	if proj.Repo == nil {
 		return projectExecutionContext{}, nil
 	}
-	root := filepath.Join(c.paths.ProjectsDir, proj.Path)
+	root := filepath.Join(c.paths.ProjectsDir, proj.Path, "repo")
 	payload := map[string]any{
 		"project": map[string]any{
 			"id":          proj.ID,

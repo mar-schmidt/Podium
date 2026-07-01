@@ -33,7 +33,8 @@ Public GitHub App details for connecting project repositories.
 | `api_base` | URL | Optional override; defaults to `https://api.github.com`. |
 | `login_base` | URL | Optional override; defaults to `https://github.com/login`. |
 
-Connected repos are downloaded as source snapshots into the project directory.
+Connected repos are downloaded as source snapshots into each project's `repo/`
+subdirectory.
 This does not require Git or GitHub CLI.
 
 ## `profiles`

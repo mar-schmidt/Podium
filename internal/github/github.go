@@ -229,11 +229,18 @@ func (s *Service) SyncProject(ctx context.Context, req SyncRequest) (SyncResult,
 	}
 	repo := req.Repo
 	ref := firstNonEmpty(repo.Ref, repo.DefaultBranch, "HEAD")
-	root := filepath.Join(s.home, "projects", req.Project.Path)
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	projectRoot := filepath.Join(s.home, "projects", req.Project.Path)
+	repoRoot := projectRepoRoot(projectRoot)
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
 		return SyncResult{}, fmt.Errorf("create project dir: %w", err)
 	}
-	if !req.Force && needsConfirmation(root) {
+	if err := migrateLegacyRootSnapshot(projectRoot); err != nil {
+		return SyncResult{}, err
+	}
+	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		return SyncResult{}, fmt.Errorf("create repo dir: %w", err)
+	}
+	if !req.Force && needsConfirmation(projectRoot, repoRoot) {
 		return SyncResult{}, ErrConfirmationRequired
 	}
 	sha, _ := s.commitSHA(ctx, token.AccessToken, repo.Owner, repo.Name, ref)
@@ -241,7 +248,7 @@ func (s *Service) SyncProject(ctx context.Context, req SyncRequest) (SyncResult,
 	if err != nil {
 		return SyncResult{}, err
 	}
-	tmp, err := os.MkdirTemp(filepath.Dir(root), ".podium-snapshot-*")
+	tmp, err := os.MkdirTemp(projectRoot, ".podium-snapshot-*")
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("create snapshot staging: %w", err)
 	}
@@ -253,7 +260,7 @@ func (s *Service) SyncProject(ctx context.Context, req SyncRequest) (SyncResult,
 	if err := extractZipSnapshot(bytes.NewReader(archive), int64(len(archive)), stage); err != nil {
 		return SyncResult{}, err
 	}
-	if err := replaceProjectContents(root, stage); err != nil {
+	if err := replaceProjectContents(repoRoot, stage, filepath.Join(projectRoot, ".podium-backups")); err != nil {
 		return SyncResult{}, err
 	}
 	repo.SyncedAt = time.Now().UTC().Format(time.RFC3339)
@@ -263,10 +270,10 @@ func (s *Service) SyncProject(ctx context.Context, req SyncRequest) (SyncResult,
 	if repo.Ref == "" {
 		repo.Ref = ref
 	}
-	if err := writeManifest(root, repo, sha); err != nil {
+	if err := writeManifest(projectRoot, repo, sha); err != nil {
 		return SyncResult{}, err
 	}
-	return SyncResult{Repo: repo, Path: root}, nil
+	return SyncResult{Repo: repo, Path: repoRoot}, nil
 }
 
 func (s *Service) installURL() string {
@@ -476,30 +483,68 @@ func archiveRelativePath(name string) (string, bool, error) {
 	return rel, true, nil
 }
 
-func needsConfirmation(root string) bool {
-	if _, err := os.Stat(filepath.Join(root, ".podium-source.json")); err == nil {
+func projectRepoRoot(projectRoot string) string {
+	return filepath.Join(projectRoot, "repo")
+}
+
+func needsConfirmation(projectRoot, repoRoot string) bool {
+	if _, err := os.Stat(filepath.Join(projectRoot, ".podium-source.json")); err == nil {
 		return false
 	}
-	entries, err := os.ReadDir(root)
+	entries, err := os.ReadDir(repoRoot)
 	if err != nil {
 		return false
 	}
-	for _, entry := range entries {
-		if entry.Name() == ".podium-backups" {
-			continue
-		}
+	for range entries {
 		return true
 	}
 	return false
 }
 
-func replaceProjectContents(root, stage string) error {
+func migrateLegacyRootSnapshot(projectRoot string) error {
+	if _, err := os.Stat(filepath.Join(projectRoot, ".podium-source.json")); err != nil {
+		return nil
+	}
+	repoRoot := projectRepoRoot(projectRoot)
+	if entries, err := os.ReadDir(repoRoot); err == nil && len(entries) > 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(projectRoot)
+	if err != nil {
+		return err
+	}
+	var legacy []os.DirEntry
+	for _, entry := range entries {
+		switch entry.Name() {
+		case ".podium-source.json", ".podium-backups", "repo":
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".podium-snapshot-") {
+			continue
+		}
+		legacy = append(legacy, entry)
+	}
+	if len(legacy) == 0 {
+		return nil
+	}
+	backup := filepath.Join(projectRoot, ".podium-backups", time.Now().UTC().Format("20060102T150405Z"), "legacy-root")
+	if err := os.MkdirAll(backup, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range legacy {
+		if err := os.Rename(filepath.Join(projectRoot, entry.Name()), filepath.Join(backup, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func replaceProjectContents(root, stage, backupRoot string) error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return err
 	}
 	if len(entries) > 0 {
-		backupRoot := filepath.Join(root, ".podium-backups")
 		stamp := time.Now().UTC().Format("20060102T150405Z")
 		backup := filepath.Join(backupRoot, stamp)
 		for _, entry := range entries {

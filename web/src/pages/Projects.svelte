@@ -458,7 +458,7 @@
     <div class="modal-card np-modal" role="dialog" aria-modal="true" aria-label="Connect GitHub" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <div class="modal-head">
         <div class="modal-title">Connect GitHub</div>
-        <div class="modal-sub">Project source will be downloaded into <span class="mono">~/.podium/projects/{ghOpen.path}/</span>.</div>
+        <div class="modal-sub">Project source will be downloaded into <span class="mono">~/.podium/projects/{ghOpen.path}/repo/</span>.</div>
       </div>
       <div class="modal-body">
         <div class="connect-steps">
@@ -499,7 +499,7 @@
               <div class="success-mark">✓</div>
               <div class="success-title">Repository connected</div>
               <p class="repo-help">
-                {ghOpen.repo.full_name} is synced into <span class="mono">~/.podium/projects/{ghOpen.path}/</span>.
+                {ghOpen.repo.full_name} is synced into <span class="mono">~/.podium/projects/{ghOpen.path}/repo/</span>.
               </p>
               <button class="modal-cta" onclick={() => (ghOpen = null)}>Done</button>
             </div>
@@ -519,7 +519,7 @@
               <button class="link-btn" disabled={ghBusy === "status"} onclick={refreshGitHub}>Refresh list</button>
             </div>
             {#if ghReplacePending}
-              <div class="error-banner" style="margin-top:12px">This project folder already has files. Podium will back them up before syncing the snapshot.</div>
+              <div class="error-banner" style="margin-top:12px">This project repo folder already has files. Podium will back them up before syncing the snapshot.</div>
               <button class="modal-cta" disabled={ghBusy === "connect"} onclick={() => connectSelectedRepo(true)}>{ghBusy === "connect" ? "Connecting…" : "Back up and connect"}</button>
             {:else}
               <button class="modal-cta" disabled={!ghSelected || ghBusy === "connect"} onclick={() => connectSelectedRepo(false)}>{ghBusy === "connect" ? "Connecting…" : "Connect repo"}</button>

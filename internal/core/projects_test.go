@@ -113,7 +113,7 @@ func TestConnectedRepoContextIsSentToRoadmapSession(t *testing.T) {
 	if len(fake.Requests) != 1 {
 		t.Fatalf("fake requests = %d, want 1", len(fake.Requests))
 	}
-	root := filepath.Join(c.paths.ProjectsDir, "mission-control")
+	root := filepath.Join(c.paths.ProjectsDir, "mission-control", "repo")
 	req := fake.Requests[0]
 	if !strings.Contains(req.Message, "local source snapshot") || !strings.Contains(req.Message, root) {
 		t.Fatalf("request missing repo context:\n%s", req.Message)
@@ -161,7 +161,7 @@ func TestConnectedRepoContextIsSentToManualProjectSession(t *testing.T) {
 	if len(fake.Requests) != 1 {
 		t.Fatalf("fake requests = %d, want 1", len(fake.Requests))
 	}
-	root := filepath.Join(c.paths.ProjectsDir, "mission-control")
+	root := filepath.Join(c.paths.ProjectsDir, "mission-control", "repo")
 	req := fake.Requests[0]
 	if !strings.Contains(req.Message, "Podium project context for this session") || !strings.Contains(req.Message, root) {
 		t.Fatalf("request missing project context:\n%s", req.Message)

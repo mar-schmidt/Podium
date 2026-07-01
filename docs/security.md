@@ -87,8 +87,8 @@ flow, and Podium stores the returned local token under
 
 GitHub tokens, temporary archive redirect URLs, and downloaded archive URLs are
 treated as sensitive and must not be logged or returned from API responses.
-Connected repositories are downloaded as source snapshots into project
-directories; v1 does not create Git remotes, commits, pushes, or PRs.
+Connected repositories are downloaded as source snapshots into project `repo/`
+subdirectories; v1 does not create Git remotes, commits, pushes, or PRs.
 
 ## Structured run logging (R11.5)
 

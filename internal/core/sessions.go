@@ -303,7 +303,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 // provider process beyond its own workspace. The shared project ledger under
 // ~/.podium/projects/ is always included so agents can honor the base operating
 // rule to consult projects.yaml; a roadmap session additionally gets its bound
-// project's downloaded source snapshot (projectCtx.Root).
+// project's downloaded source snapshot repo directory (projectCtx.Root).
 func (c *Core) sessionExtraWorkspaceDirs(projectCtx projectExecutionContext) []string {
 	return nonEmptyStrings(c.paths.ProjectsDir, projectCtx.Root)
 }

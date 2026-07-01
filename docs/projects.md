@@ -48,8 +48,9 @@ repo:
   source_kind: archive
 ```
 
-Connecting a repo downloads a GitHub archive snapshot directly into the project
-directory (`~/.podium/projects/<project>/`) and writes `.podium-source.json`.
+Connecting a repo downloads a GitHub archive snapshot into the project's
+`repo/` directory (`~/.podium/projects/<project>/repo/`) and writes
+`.podium-source.json` in the project directory (`~/.podium/projects/<project>/`).
 This is source context for agents, not a Git checkout: there is no `.git`, no
 remote, and no push/write-back path in v1.
 

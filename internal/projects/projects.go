@@ -35,7 +35,7 @@ type Project struct {
 }
 
 // Repo describes an optional external source linked to a Podium project. v1
-// supports GitHub archive snapshots extracted into the project directory.
+// supports GitHub archive snapshots extracted into the project's repo directory.
 type Repo struct {
 	Provider      string `yaml:"provider" json:"provider"`
 	Mode          string `yaml:"mode" json:"mode"`

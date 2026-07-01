@@ -16,7 +16,7 @@
 #     notes: >
 #       Anything the next agent needs to know.
 #
-# Connected GitHub repos are downloaded as source snapshots directly into the
-# project directory. They are not Git checkouts unless a future explicit Git
+# Connected GitHub repos are downloaded as source snapshots into the project's
+# repo/ subdirectory. They are not Git checkouts unless a future explicit Git
 # workflow converts them.
 projects: []

@@ -49,6 +49,7 @@ export type PermissionMode = "approve" | "yolo";
 // re-route chain (profile names, bare providers, or "default").
 export interface GlobalConfig {
   provider: Provider;
+  profile: string;
   model: string;
   effort: string;
   permission_mode: PermissionMode;
@@ -60,6 +61,7 @@ export interface GlobalConfig {
 // current value; a present-but-empty fallback clears the chain.
 export interface GlobalConfigPatch {
   provider?: Provider;
+  profile?: string;
   model?: string;
   effort?: string;
   permission_mode?: PermissionMode;
@@ -85,6 +87,8 @@ export interface Agent {
 export interface ProfileInfo {
   Name: string;
   Provider: Provider;
+  ConfigDir?: string;
+  HomeDir?: string;
 }
 
 export interface Session {

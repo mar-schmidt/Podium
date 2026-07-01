@@ -115,6 +115,9 @@ func TestValidateGlobal(t *testing.T) {
 		{"bad permission", Global{Provider: ProviderClaude, PermissionMode: PermissionMode("preapprove")}, true},
 		{"bad timeout", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "soon"}, true},
 		{"unknown fallback profile", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, Fallback: []string{"ghost"}}, true},
+		{"ok default profile matches provider", Global{Provider: ProviderClaude, Profile: "personal", PermissionMode: PermissionApprove}, false},
+		{"unknown default profile", Global{Provider: ProviderClaude, Profile: "ghost", PermissionMode: PermissionApprove}, true},
+		{"default profile wrong provider", Global{Provider: ProviderClaude, Profile: "codex-main", PermissionMode: PermissionApprove}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

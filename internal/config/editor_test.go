@@ -94,3 +94,47 @@ func TestRemoveAgentNoOpsWhenAgentOrAgentsSectionAbsent(t *testing.T) {
 		t.Fatalf("missing agents edit should not rewrite file:\n%s", got)
 	}
 }
+
+func TestUpsertAndRemoveProfileKeepConfigValid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := `global:
+  provider: claude
+  permission_mode: approve
+profiles:
+  - name: work
+    provider: claude
+    config_dir: /tmp/old-claude
+server:
+  bind: 127.0.0.1
+  port: 8787
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertProfile(path, Profile{Name: "work", Provider: ProviderCodex, HomeDir: "/tmp/codex-work"}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+	if err := UpsertProfile(path, Profile{Name: "personal", Provider: ProviderClaude, ConfigDir: "/tmp/claude-personal"}); err != nil {
+		t.Fatalf("add profile: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load edited config: %v", err)
+	}
+	if len(cfg.Profiles) != 2 {
+		t.Fatalf("profiles = %+v", cfg.Profiles)
+	}
+	if cfg.Profiles[0].Provider != ProviderCodex || cfg.Profiles[0].HomeDir != "/tmp/codex-work" || cfg.Profiles[0].ConfigDir != "" {
+		t.Fatalf("updated profile = %+v", cfg.Profiles[0])
+	}
+	if err := RemoveProfile(path, "work"); err != nil {
+		t.Fatalf("remove profile: %v", err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("load after remove: %v", err)
+	}
+	if len(cfg.Profiles) != 1 || cfg.Profiles[0].Name != "personal" {
+		t.Fatalf("profiles after remove = %+v", cfg.Profiles)
+	}
+}

@@ -3,7 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -59,6 +63,10 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		agents, err := s.core.ListAgents(r.Context())
 		writeJSON(w, agents, err)
 	case http.MethodPost:
+		if err := s.refreshProfilesFromConfig(); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
 		var req agentCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -79,20 +87,261 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleProfiles serves GET /api/profiles: the configured auth profiles as
-// name + provider pairs (no directories), so the web UI can offer them as
-// fallback targets.
+type profileRequest struct {
+	Name      string          `json:"name,omitempty"`
+	Provider  config.Provider `json:"provider,omitempty"`
+	ConfigDir string          `json:"config_dir,omitempty"`
+	HomeDir   string          `json:"home_dir,omitempty"`
+}
+
+// handleProfiles serves configured auth profiles and creates new ones.
+//
+//	GET  /api/profiles -> profiles from config.yaml
+//	POST /api/profiles -> create/update a profile in config.yaml
 func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	if s.core == nil {
 		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		if err := s.refreshProfilesFromConfig(); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, s.core.ListProfileDetails(), nil)
+	case http.MethodPost:
+		s.saveProfile(w, r, "")
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleProfile serves update/delete for one configured auth profile.
+//
+//	PUT/PATCH /api/profiles/<name> -> update provider/path
+//	DELETE    /api/profiles/<name> -> remove when not referenced
+func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
+	if s.core == nil {
+		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, s.core.ListProfiles(), nil)
+	name := strings.TrimPrefix(r.URL.Path, "/api/profiles/")
+	if unescaped, err := url.PathUnescape(name); err == nil {
+		name = unescaped
+	}
+	if name == "" {
+		http.Error(w, "profile name is required", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodPut, http.MethodPatch:
+		s.saveProfile(w, r, name)
+	case http.MethodDelete:
+		s.deleteProfile(w, r, name)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
+
+func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request, currentName string) {
+	if !localRequest(r) {
+		http.Error(w, "profiles are only editable from loopback clients", http.StatusForbidden)
+		return
+	}
+	var req profileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if currentName != "" {
+		req.Name = currentName
+		old, ok := s.profileByName(currentName)
+		if !ok {
+			http.Error(w, "profile not found", http.StatusNotFound)
+			return
+		}
+		if req.Provider == "" {
+			req.Provider = old.Provider
+		}
+		if req.ConfigDir == "" {
+			req.ConfigDir = old.ConfigDir
+		}
+		if req.HomeDir == "" {
+			req.HomeDir = old.HomeDir
+		}
+	}
+	profile, err := s.profileFromRequest(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	existing := map[string]config.Provider{}
+	for _, p := range s.core.ListProfileDetails() {
+		if p.Name != currentName {
+			existing[p.Name] = p.Provider
+		}
+	}
+	if err := config.ValidateProfile(profile, existing); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if currentName != "" {
+		old, _ := s.profileByName(currentName)
+		if old.Provider != profile.Provider {
+			if err := s.ensureProfileProviderChangeSafe(currentName); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	if err := os.MkdirAll(s.profileDir(profile), 0o700); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	if err := config.UpsertProfile(s.paths.ConfigYAML, profile); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	if err := s.refreshProfilesFromConfig(); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	saved, ok := s.profileByName(profile.Name)
+	if !ok {
+		writeJSON(w, nil, errors.New("saved profile was not found after config reload"))
+		return
+	}
+	writeJSON(w, saved, nil)
+}
+
+func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request, name string) {
+	if !localRequest(r) {
+		http.Error(w, "profiles are only editable from loopback clients", http.StatusForbidden)
+		return
+	}
+	if _, ok := s.profileByName(name); !ok {
+		http.Error(w, "profile not found", http.StatusNotFound)
+		return
+	}
+	if err := s.ensureProfileUnused(name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := config.RemoveProfile(s.paths.ConfigYAML, name); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	if err := s.refreshProfilesFromConfig(); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	writeJSON(w, s.core.ListProfileDetails(), nil)
+}
+
+func (s *Server) profileFromRequest(req profileRequest) (config.Profile, error) {
+	p := config.Profile{
+		Name:     strings.TrimSpace(req.Name),
+		Provider: req.Provider,
+	}
+	if p.Provider == "" {
+		p.Provider = config.ProviderClaude
+	}
+	switch p.Provider {
+	case config.ProviderClaude:
+		p.ConfigDir = strings.TrimSpace(req.ConfigDir)
+		if p.ConfigDir == "" && p.Name != "" {
+			p.ConfigDir = filepath.Join(s.paths.Home, "profiles", "claude-"+p.Name)
+		}
+	case config.ProviderCodex:
+		p.HomeDir = strings.TrimSpace(req.HomeDir)
+		if p.HomeDir == "" && p.Name != "" {
+			p.HomeDir = filepath.Join(s.paths.Home, "profiles", "codex-"+p.Name)
+		}
+	default:
+		// Let config.ValidateProfile produce the canonical provider error.
+		p.ConfigDir = strings.TrimSpace(req.ConfigDir)
+		p.HomeDir = strings.TrimSpace(req.HomeDir)
+	}
+	return p, nil
+}
+
+func (s *Server) profileDir(p config.Profile) string {
+	if p.Provider == config.ProviderCodex {
+		return p.HomeDir
+	}
+	return p.ConfigDir
+}
+
+func (s *Server) profileByName(name string) (config.Profile, bool) {
+	if err := s.refreshProfilesFromConfig(); err != nil {
+		return config.Profile{}, false
+	}
+	for _, p := range s.core.ListProfileDetails() {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return config.Profile{}, false
+}
+
+func (s *Server) refreshProfilesFromConfig() error {
+	cfg, err := config.Load(s.paths.ConfigYAML)
+	if err != nil {
+		return err
+	}
+	s.core.SetProfiles(cfg.Profiles)
+	return nil
+}
+
+func (s *Server) ensureProfileProviderChangeSafe(name string) error {
+	return s.ensureProfileUnused(name)
+}
+
+func (s *Server) ensureProfileUnused(name string) error {
+	cfg, err := config.Load(s.paths.ConfigYAML)
+	if err != nil {
+		return err
+	}
+	for _, entry := range cfg.Global.Fallback {
+		if entry == name {
+			return errors.New("profile is used in the global fallback chain")
+		}
+	}
+	for _, agent := range cfg.Agents {
+		if agent.Profile == name {
+			return &profileInUseError{message: "profile is used by configured agent " + agent.Name}
+		}
+		for _, entry := range agent.Fallback {
+			if entry == name {
+				return &profileInUseError{message: "profile is used in fallback for configured agent " + agent.Name}
+			}
+		}
+	}
+	agents, err := s.core.ListAgents(context.Background())
+	if err != nil {
+		return err
+	}
+	for _, agent := range agents {
+		if agent.Profile == name {
+			return &profileInUseError{message: "profile is used by agent " + agent.Name}
+		}
+		for _, entry := range agent.Fallback {
+			if entry == name {
+				return &profileInUseError{message: "profile is used in fallback for agent " + agent.Name}
+			}
+		}
+	}
+	return nil
+}
+
+type profileInUseError struct {
+	message string
+}
+
+func (e *profileInUseError) Error() string { return e.message }
 
 // agentDetail bundles an agent's durable defaults with its editable SOUL.md
 // body so the web edit modal can load and save them together. MCPConfig stays
@@ -144,6 +393,10 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, agentDetail{Agent: agent, Soul: soul}, nil)
 	case http.MethodPut, http.MethodPatch:
+		if err := s.refreshProfilesFromConfig(); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
 		agent, err := s.core.GetAgent(r.Context(), name)
 		if err != nil {
 			writeJSON(w, nil, err)

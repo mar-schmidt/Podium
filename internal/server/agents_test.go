@@ -157,6 +157,103 @@ server:
 	}
 }
 
+func TestProfilesCreatePersistsToConfigAndRefreshesCore(t *testing.T) {
+	paths, srv, cleanup := newAgentAPITestServer(t)
+	defer cleanup()
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewBufferString(`{"name":"work","provider":"claude"}`))
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr := httptest.NewRecorder()
+	srv.handleProfiles(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := config.Load(paths.ConfigYAML)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Profiles) != 1 || cfg.Profiles[0].Name != "work" || cfg.Profiles[0].Provider != config.ProviderClaude {
+		t.Fatalf("profiles = %+v", cfg.Profiles)
+	}
+	if len(srv.core.ListProfiles()) != 1 {
+		t.Fatalf("core profiles were not refreshed")
+	}
+	if _, err := os.Stat(cfg.Profiles[0].ConfigDir); err != nil {
+		t.Fatalf("profile directory not created: %v", err)
+	}
+}
+
+func TestProfilesGetReflectsConfigYAMLEdits(t *testing.T) {
+	paths, srv, cleanup := newAgentAPITestServer(t)
+	defer cleanup()
+	writeConfig(t, paths.ConfigYAML, `global:
+  provider: claude
+  permission_mode: approve
+profiles:
+  - name: codex-main
+    provider: codex
+    home_dir: /tmp/codex-main
+server:
+  bind: 127.0.0.1
+  port: 8787
+`)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	rr := httptest.NewRecorder()
+	srv.handleProfiles(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	profiles := srv.core.ListProfileDetails()
+	if len(profiles) != 1 || profiles[0].Name != "codex-main" {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+}
+
+func TestProfilesDeleteRejectsReferencedProfile(t *testing.T) {
+	ctx := context.Background()
+	paths, srv, cleanup := newAgentAPITestServer(t)
+	defer cleanup()
+	writeConfig(t, paths.ConfigYAML, `global:
+  provider: claude
+  permission_mode: approve
+profiles:
+  - name: work
+    provider: claude
+    config_dir: /tmp/claude-work
+agents:
+  - name: atlas
+    provider: claude
+    profile: work
+server:
+  bind: 127.0.0.1
+  port: 8787
+`)
+	if err := srv.refreshProfilesFromConfig(); err != nil {
+		t.Fatalf("refresh profiles: %v", err)
+	}
+	if _, err := srv.core.CreateAgent(ctx, core.CreateAgentRequest{Name: "atlas", Provider: config.ProviderClaude, Profile: "work"}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/profiles/work", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr := httptest.NewRecorder()
+	srv.handleProfile(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := config.Load(paths.ConfigYAML)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Profiles) != 1 || cfg.Profiles[0].Name != "work" {
+		t.Fatalf("profile should remain, got %+v", cfg.Profiles)
+	}
+}
+
 func newAgentAPITestServer(t *testing.T) (config.Paths, *Server, func()) {
 	t.Helper()
 	home := t.TempDir()

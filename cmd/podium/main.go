@@ -50,6 +50,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newStatusCmd(&addr))
 	root.AddCommand(newAgentsCmd(&addr))
+	root.AddCommand(newProfilesCmd(&addr))
 	root.AddCommand(newChatCmd(&addr))
 	root.AddCommand(newSessionsCmd(&addr))
 	root.AddCommand(newSchedulesCmd(&addr))
@@ -491,6 +492,146 @@ func newAgentsCmd(addr *string) *cobra.Command {
 	cmd.AddCommand(newAgentsCreateCmd(addr))
 	cmd.AddCommand(newAgentsDeleteCmd(addr))
 	return cmd
+}
+
+func newProfilesCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "profiles",
+		Short: "Manage Claude and Codex auth profiles",
+		Long:  "List, create, update, and delete named auth profiles through the running podiumd daemon.",
+		Example: "  podium profiles list\n" +
+			"  podium profiles create work --provider claude\n" +
+			"  podium profiles update work --config-dir ~/.podium/profiles/claude-work\n" +
+			"  podium profiles delete work --yes",
+	}
+	cmd.AddCommand(newProfilesListCmd(addr))
+	cmd.AddCommand(newProfilesCreateCmd(addr))
+	cmd.AddCommand(newProfilesUpdateCmd(addr))
+	cmd.AddCommand(newProfilesDeleteCmd(addr))
+	return cmd
+}
+
+func newProfilesListCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Short:   "List auth profiles",
+		Example: "  podium profiles list",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			profiles, err := c.ListProfiles(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if len(profiles) == 0 {
+				fmt.Println("no profiles configured")
+				return nil
+			}
+			for _, profile := range profiles {
+				fmt.Printf("%s\tprovider=%s\tpath=%s\n", profile.Name, profile.Provider, profilePath(profile))
+			}
+			return nil
+		},
+	}
+}
+
+func newProfilesCreateCmd(addr *string) *cobra.Command {
+	var provider, configDir, homeDir string
+	cmd := &cobra.Command{
+		Use:     "create <name>",
+		Short:   "Create an auth profile",
+		Example: "  podium profiles create work --provider claude\n  podium profiles create codex-main --provider codex --home-dir ~/.podium/profiles/codex-main",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			profile, err := c.CreateProfile(cmd.Context(), client.ProfileRequest{
+				Name:      args[0],
+				Provider:  config.Provider(provider),
+				ConfigDir: configDir,
+				HomeDir:   homeDir,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("created profile %s (%s)\n", profile.Name, profile.Provider)
+			fmt.Printf("path: %s\n", profilePath(profile))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&provider, "provider", "claude", "provider: claude or codex")
+	cmd.Flags().StringVar(&configDir, "config-dir", "", "Claude config directory (default: ~/.podium/profiles/claude-<name>)")
+	cmd.Flags().StringVar(&homeDir, "home-dir", "", "Codex home directory (default: ~/.podium/profiles/codex-<name>)")
+	return cmd
+}
+
+func newProfilesUpdateCmd(addr *string) *cobra.Command {
+	var provider, configDir, homeDir string
+	cmd := &cobra.Command{
+		Use:     "update <name>",
+		Short:   "Update an auth profile",
+		Example: "  podium profiles update work --config-dir ~/.podium/profiles/claude-work\n  podium profiles update codex-main --provider codex --home-dir ~/.podium/profiles/codex-main",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			profile, err := c.UpdateProfile(cmd.Context(), args[0], client.ProfileRequest{
+				Provider:  config.Provider(provider),
+				ConfigDir: configDir,
+				HomeDir:   homeDir,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("updated profile %s (%s)\n", profile.Name, profile.Provider)
+			fmt.Printf("path: %s\n", profilePath(profile))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&provider, "provider", "", "provider: claude or codex (default: keep current)")
+	cmd.Flags().StringVar(&configDir, "config-dir", "", "Claude config directory")
+	cmd.Flags().StringVar(&homeDir, "home-dir", "", "Codex home directory")
+	return cmd
+}
+
+func newProfilesDeleteCmd(addr *string) *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:     "delete <name>",
+		Short:   "Delete an auth profile",
+		Example: "  podium profiles delete work --yes",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if !confirmDelete(os.Stdin, os.Stderr, fmt.Sprintf("Delete profile %s from config.yaml?", name), yes) {
+				return nil
+			}
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteProfile(cmd.Context(), name); err != nil {
+				return err
+			}
+			fmt.Printf("deleted profile %s\n", name)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
+	return cmd
+}
+
+func profilePath(profile config.Profile) string {
+	if profile.Provider == config.ProviderCodex {
+		return profile.HomeDir
+	}
+	return profile.ConfigDir
 }
 
 func newAgentsListCmd(addr *string) *cobra.Command {

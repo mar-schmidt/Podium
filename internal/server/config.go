@@ -11,6 +11,7 @@ import (
 // snake_case to match the YAML keys and the frontend GlobalConfig type.
 type globalConfigDTO struct {
 	Provider          config.Provider       `json:"provider"`
+	Profile           string                `json:"profile"`
 	Model             string                `json:"model"`
 	Effort            string                `json:"effort"`
 	PermissionMode    config.PermissionMode `json:"permission_mode"`
@@ -24,6 +25,7 @@ func globalToDTO(g config.Global) globalConfigDTO {
 	}
 	return globalConfigDTO{
 		Provider:          g.Provider,
+		Profile:           g.Profile,
 		Model:             g.Model,
 		Effort:            g.Effort,
 		PermissionMode:    g.PermissionMode,
@@ -36,6 +38,7 @@ func globalToDTO(g config.Global) globalConfigDTO {
 // fields keep their current value; a present-but-empty fallback clears it.
 type globalConfigPatch struct {
 	Provider       *config.Provider       `json:"provider,omitempty"`
+	Profile        *string                `json:"profile,omitempty"`
 	Model          *string                `json:"model,omitempty"`
 	Effort         *string                `json:"effort,omitempty"`
 	PermissionMode *config.PermissionMode `json:"permission_mode,omitempty"`
@@ -79,6 +82,9 @@ func (s *Server) patchConfig(w http.ResponseWriter, r *http.Request) {
 	g := s.core.GetGlobal()
 	if patch.Provider != nil {
 		g.Provider = *patch.Provider
+	}
+	if patch.Profile != nil {
+		g.Profile = *patch.Profile
 	}
 	if patch.Model != nil {
 		g.Model = *patch.Model

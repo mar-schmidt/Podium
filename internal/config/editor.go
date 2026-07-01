@@ -17,6 +17,21 @@ func RemoveAgent(path, name string) error {
 	})
 }
 
+// UpsertProfile creates or replaces one profile entry in config.yaml. It edits
+// the YAML syntax tree so user comments and unrelated settings survive.
+func UpsertProfile(path string, profile Profile) error {
+	return editFile(path, func(root *yaml.Node) (bool, error) {
+		return upsertProfile(root, profile), nil
+	})
+}
+
+// RemoveProfile removes a profile entry from config.yaml when it exists.
+func RemoveProfile(path, name string) error {
+	return editFile(path, func(root *yaml.Node) (bool, error) {
+		return removeProfile(root, name), nil
+	})
+}
+
 // SetGlobal upserts the daemon-wide defaults under the top-level `global:`
 // mapping in config.yaml. It edits the YAML syntax tree so user comments and
 // unrelated settings (including global.permission_timeout) survive. Only the
@@ -48,6 +63,7 @@ func setGlobal(root *yaml.Node, g Global) bool {
 
 	changed := false
 	changed = setScalarChild(global, "provider", string(g.Provider)) || changed
+	changed = setScalarChild(global, "profile", g.Profile) || changed
 	changed = setScalarChild(global, "model", g.Model) || changed
 	changed = setScalarChild(global, "effort", g.Effort) || changed
 	changed = setScalarChild(global, "permission_mode", string(g.PermissionMode)) || changed
@@ -207,6 +223,123 @@ func removeAgent(root *yaml.Node, name string) bool {
 		return changed
 	}
 	return false
+}
+
+func upsertProfile(root *yaml.Node, profile Profile) bool {
+	doc := root
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		doc = root.Content[0]
+	}
+	if doc.Kind != yaml.MappingNode {
+		return false
+	}
+	profiles := mappingChild(doc, "profiles")
+	if profiles == nil {
+		profiles = &yaml.Node{Kind: yaml.SequenceNode}
+		doc.Content = append(doc.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "profiles"},
+			profiles,
+		)
+	}
+	if profiles.Kind != yaml.SequenceNode {
+		return false
+	}
+	next := profileNode(profile)
+	for i, entry := range profiles.Content {
+		if profileNodeName(entry) != profile.Name {
+			continue
+		}
+		if profileNodeEqual(entry, profile) {
+			return false
+		}
+		profiles.Content[i] = next
+		return true
+	}
+	profiles.Content = append(profiles.Content, next)
+	return true
+}
+
+func removeProfile(root *yaml.Node, name string) bool {
+	doc := root
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		doc = root.Content[0]
+	}
+	if doc.Kind != yaml.MappingNode {
+		return false
+	}
+	profiles := mappingChild(doc, "profiles")
+	if profiles == nil || profiles.Kind != yaml.SequenceNode {
+		return false
+	}
+	changed := false
+	kept := profiles.Content[:0]
+	for _, entry := range profiles.Content {
+		if profileNodeName(entry) == name {
+			changed = true
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	if changed {
+		profiles.Content = kept
+	}
+	return changed
+}
+
+func profileNode(profile Profile) *yaml.Node {
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: profile.Name},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "provider"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: string(profile.Provider)},
+	)
+	switch profile.Provider {
+	case ProviderClaude:
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "config_dir"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: profile.ConfigDir},
+		)
+	case ProviderCodex:
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "home_dir"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: profile.HomeDir},
+		)
+	}
+	return node
+}
+
+func profileNodeName(node *yaml.Node) string {
+	if node.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "name" {
+			return node.Content[i+1].Value
+		}
+	}
+	return ""
+}
+
+func profileNodeEqual(node *yaml.Node, profile Profile) bool {
+	if node.Kind != yaml.MappingNode {
+		return false
+	}
+	values := map[string]string{}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		values[node.Content[i].Value] = node.Content[i+1].Value
+	}
+	if values["name"] != profile.Name || values["provider"] != string(profile.Provider) {
+		return false
+	}
+	switch profile.Provider {
+	case ProviderClaude:
+		return values["config_dir"] == profile.ConfigDir && values["home_dir"] == ""
+	case ProviderCodex:
+		return values["home_dir"] == profile.HomeDir && values["config_dir"] == ""
+	default:
+		return false
+	}
 }
 
 func agentNodeName(node *yaml.Node) string {

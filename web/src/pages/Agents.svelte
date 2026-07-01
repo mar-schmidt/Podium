@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { deleteAgent, getAgent, listProfiles, updateAgent } from "../lib/api";
+  import { createProfile, deleteAgent, getAgent, listProfiles, updateAgent } from "../lib/api";
+  import ProviderLogo from "../lib/ProviderLogo.svelte";
   import { agentGradient, avatarStyle, initial, modeChip, providerChip } from "../lib/theme";
   import type { Agent, ProfileInfo } from "../lib/types";
 
@@ -40,6 +41,10 @@
   let profiles = $state<ProfileInfo[]>([]);
   let saving = $state(false);
   let editError = $state<string | null>(null);
+  let inlineProfileOpen = $state(false);
+  let inlineProfileName = $state("");
+  let inlineProfilePath = $state("");
+  let inlineProfileSaving = $state(false);
 
   // Delete modal state.
   let deleteOpen = $state(false);
@@ -51,6 +56,7 @@
   const modelOptions = $derived(
     edProvider === "codex" ? ["gpt-5.1", "gpt-5.1-mini", "o4"] : ["sonnet", "opus", "haiku"],
   );
+  const edProfileOptions = $derived(profiles.filter((p) => p.Provider === edProvider));
 
   function specs(a: Agent): string {
     return `${a.Model || a.Provider} · ${a.Effort || "medium"} · profile: ${a.Profile || "default"}`;
@@ -87,6 +93,16 @@
     edFallback[i] = { provider, profile: valid ? row.profile : "" };
   }
 
+  function setProvider(provider: string) {
+    edProvider = provider;
+    inlineProfileOpen = false;
+    if (!profiles.some((p) => p.Name === edProfile && p.Provider === provider)) edProfile = "";
+    edFallback = edFallback.map((row) => {
+      const valid = profiles.some((p) => p.Name === row.profile && p.Provider === row.provider);
+      return { provider: row.provider, profile: valid ? row.profile : "" };
+    });
+  }
+
   function addRow() {
     edFallback = [...edFallback, { provider: edProvider, profile: "" }];
   }
@@ -113,6 +129,9 @@
     edPermission = a.PermissionMode;
     edSoul = "";
     edFallback = decodeFallback(a.Fallback, a.Provider);
+    inlineProfileOpen = false;
+    inlineProfileName = "";
+    inlineProfilePath = "";
     editOpen = true;
     try {
       profiles = await listProfiles();
@@ -158,6 +177,28 @@
       editError = e instanceof Error ? e.message : String(e);
     } finally {
       saving = false;
+    }
+  }
+
+  async function createInlineProfile() {
+    inlineProfileSaving = true;
+    editError = null;
+    try {
+      const created = await createProfile({
+        name: inlineProfileName.trim(),
+        provider: edProvider,
+        config_dir: edProvider === "claude" ? inlineProfilePath.trim() : "",
+        home_dir: edProvider === "codex" ? inlineProfilePath.trim() : "",
+      });
+      profiles = [created, ...profiles.filter((p) => p.Name !== created.Name)];
+      edProfile = created.Name;
+      inlineProfileOpen = false;
+      inlineProfileName = "";
+      inlineProfilePath = "";
+    } catch (e) {
+      editError = e instanceof Error ? e.message : String(e);
+    } finally {
+      inlineProfileSaving = false;
     }
   }
 
@@ -290,8 +331,12 @@
 
         <div class="label-mono" style="margin-bottom:8px">provider</div>
         <div style="display:flex;gap:9px">
-          <button style={seg(edProvider === "claude")} onclick={() => { edProvider = "claude"; }}>Claude</button>
-          <button style={seg(edProvider === "codex")} onclick={() => { edProvider = "codex"; }}>Codex</button>
+          <button class="provider-choice" style={seg(edProvider === "claude")} onclick={() => setProvider("claude")}>
+            <ProviderLogo provider="claude" />Claude
+          </button>
+          <button class="provider-choice" style={seg(edProvider === "codex")} onclick={() => setProvider("codex")}>
+            <ProviderLogo provider="codex" />Codex
+          </button>
         </div>
 
         <div class="ed-row">
@@ -312,7 +357,30 @@
         </div>
         <div class="ed-row">
           <span class="ed-key">profile</span>
-          <input class="field-input" style="flex:1" bind:value={edProfile} placeholder="auth profile (optional)" />
+          <div class="profile-pick">
+            <div class="ed-chips">
+              <button style={chip(edProfile === "")} onclick={() => (edProfile = "")}>default · global login</button>
+              {#each edProfileOptions as p}
+                <button style={chip(edProfile === p.Name)} onclick={() => (edProfile = p.Name)}>{p.Name}</button>
+              {/each}
+              <button class="chip-new" onclick={() => { inlineProfileOpen = !inlineProfileOpen; inlineProfileName = ""; inlineProfilePath = ""; }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>New
+              </button>
+            </div>
+            {#if inlineProfileOpen}
+              <div class="inline-profile">
+                <div class="np-title">new profile · uses selected provider</div>
+                <input class="field-input" bind:value={inlineProfileName} placeholder="profile name" />
+                <input class="field-input mono" bind:value={inlineProfilePath} placeholder={edProvider === "claude" ? "CLAUDE_CONFIG_DIR — optional" : "CODEX_HOME — optional"} />
+                <div class="np-actions">
+                  <button class="np-create" disabled={inlineProfileSaving || !inlineProfileName.trim()} onclick={createInlineProfile}>
+                    {inlineProfileSaving ? "Saving…" : "Create & select"}
+                  </button>
+                  <button class="np-cancel" onclick={() => (inlineProfileOpen = false)}>Cancel</button>
+                </div>
+              </div>
+            {/if}
+          </div>
         </div>
 
         <div class="label-mono" style="margin:18px 0 4px">fallback chain</div>
@@ -320,8 +388,12 @@
         {#each edFallback as row, i (i)}
           <div class="fb-row">
             <div class="fb-provs">
-              <button style={chip(row.provider === "claude")} onclick={() => setRowProvider(i, "claude")}>claude</button>
-              <button style={chip(row.provider === "codex")} onclick={() => setRowProvider(i, "codex")}>codex</button>
+              <button class="provider-choice" style={chip(row.provider === "claude")} onclick={() => setRowProvider(i, "claude")}>
+                <ProviderLogo provider="claude" size={13} />claude
+              </button>
+              <button class="provider-choice" style={chip(row.provider === "codex")} onclick={() => setRowProvider(i, "codex")}>
+                <ProviderLogo provider="codex" size={13} />codex
+              </button>
             </div>
             <select class="fb-select" bind:value={row.profile}>
               <option value="">no profile</option>
@@ -633,6 +705,74 @@
     background: rgba(255, 253, 251, 0.5);
     color: #a8825e;
     font: 600 12.5px "Hanken Grotesk";
+    cursor: pointer;
+  }
+
+  .profile-pick {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .chip-new {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 9px;
+    cursor: pointer;
+    font: 600 12px "JetBrains Mono", monospace;
+    border: 1px dashed #c9bdad;
+    background: transparent;
+    color: #8a7560;
+  }
+
+  .inline-profile {
+    margin-top: 8px;
+    padding: 12px;
+    border: 1px solid var(--line-3);
+    border-radius: 12px;
+    background: var(--surface-3);
+  }
+
+  .inline-profile .field-input {
+    margin-top: 8px;
+  }
+
+  .np-title {
+    font: 600 10px "JetBrains Mono", monospace;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    text-transform: uppercase;
+  }
+
+  .np-actions {
+    display: flex;
+    gap: 9px;
+    margin-top: 12px;
+  }
+
+  .np-create {
+    border: none;
+    border-radius: 11px;
+    padding: 9px 18px;
+    background: var(--teal);
+    color: #fff;
+    font: 700 13px "Hanken Grotesk";
+    cursor: pointer;
+  }
+
+  .np-create:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .np-cancel {
+    border: 1px solid var(--field-line);
+    border-radius: 11px;
+    padding: 9px 16px;
+    background: #fff;
+    color: var(--muted-2);
+    font: 600 13px "Hanken Grotesk";
     cursor: pointer;
   }
 

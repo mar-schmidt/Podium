@@ -41,7 +41,8 @@ type Core struct {
 	store *store.Store
 
 	adapter adapter.Adapter
-	// mu guards global, which the Settings API mutates at runtime via SetGlobal.
+	// mu guards global and profiles, which the Settings/Profile APIs mutate at
+	// runtime after persisting config.yaml.
 	mu       sync.RWMutex
 	global   config.Global
 	profiles map[string]config.Profile
@@ -127,6 +128,8 @@ func (c *Core) profileDir(provider config.Provider, name string) string {
 	if name == "" {
 		return ""
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	profile, ok := c.profiles[name]
 	if !ok || profile.Provider != provider {
 		return ""
@@ -171,10 +174,38 @@ func (c *Core) SetGlobal(g config.Global) {
 // ListProfiles returns the configured profiles (name + provider only), sorted
 // by name for a stable response.
 func (c *Core) ListProfiles() []ProfileInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]ProfileInfo, 0, len(c.profiles))
 	for _, p := range c.profiles {
 		out = append(out, ProfileInfo{Name: p.Name, Provider: p.Provider})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// ListProfileDetails returns configured profiles including their backing
+// directories. Those paths are not credentials and are needed by Settings/CLI
+// profile management.
+func (c *Core) ListProfileDetails() []config.Profile {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]config.Profile, 0, len(c.profiles))
+	for _, p := range c.profiles {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// SetProfiles replaces the configured profile map. Persisting to config.yaml is
+// the caller's responsibility.
+func (c *Core) SetProfiles(profiles []config.Profile) {
+	next := make(map[string]config.Profile, len(profiles))
+	for _, p := range profiles {
+		next[p.Name] = p
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.profiles = next
 }

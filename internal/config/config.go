@@ -49,6 +49,7 @@ type Config struct {
 // Global holds defaults applied across agents unless overridden per agent.
 type Global struct {
 	Provider          Provider       `yaml:"provider"`
+	Profile           string         `yaml:"profile"`
 	Model             string         `yaml:"model"`
 	Effort            string         `yaml:"effort"`
 	PermissionMode    PermissionMode `yaml:"permission_mode"`
@@ -348,9 +349,49 @@ func ValidateGlobal(g Global, profileNames map[string]Provider) error {
 			return fmt.Errorf("permission_timeout: %w", err)
 		}
 	}
+	if g.Profile != "" {
+		prov, ok := profileNames[g.Profile]
+		if !ok {
+			return fmt.Errorf("profile: unknown profile %q", g.Profile)
+		}
+		if prov != g.Provider {
+			return fmt.Errorf("profile: %q belongs to provider %q, not the default provider %q", g.Profile, prov, g.Provider)
+		}
+	}
 	for i, entry := range g.Fallback {
 		if err := validateFallbackEntry(entry, profileNames); err != nil {
 			return fmt.Errorf("fallback[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// ValidateProfile checks one profile entry in isolation. Existing names may be
+// passed when validating creates/renames; the profile's own current name should
+// be omitted for ordinary updates.
+func ValidateProfile(p Profile, existing map[string]Provider) error {
+	if p.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if p.Name == "default" || p.Name == string(ProviderClaude) || p.Name == string(ProviderCodex) {
+		return fmt.Errorf("profile name %q is reserved", p.Name)
+	}
+	if existing != nil {
+		if _, dup := existing[p.Name]; dup {
+			return fmt.Errorf("duplicate profile name %q", p.Name)
+		}
+	}
+	if err := validateProvider(p.Provider); err != nil {
+		return err
+	}
+	switch p.Provider {
+	case ProviderClaude:
+		if p.ConfigDir == "" {
+			return fmt.Errorf("claude profile needs config_dir")
+		}
+	case ProviderCodex:
+		if p.HomeDir == "" {
+			return fmt.Errorf("codex profile needs home_dir")
 		}
 	}
 	return nil

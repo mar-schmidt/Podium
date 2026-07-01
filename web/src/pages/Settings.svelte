@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { getConfig, listProfiles, updateConfig } from "../lib/api";
+  import { createProfile, deleteProfile, getConfig, listProfiles, updateConfig, updateProfile } from "../lib/api";
+  import ProviderLogo from "../lib/ProviderLogo.svelte";
   import type { GlobalConfig, Health, PermissionMode, ProfileInfo, Provider, UpdateStatus } from "../lib/types";
   import Logs from "./Logs.svelte";
 
@@ -35,9 +36,17 @@
   let saving = $state(false);
   let saved = $state(false);
   let profiles = $state<ProfileInfo[]>([]);
+  // Inline "new / edit profile" panel state (chip-driven, per design).
+  let profileError = $state<string | null>(null);
+  let profileSaving = $state(false);
+  let npOpen = $state(false);
+  let npEditing = $state<string | null>(null); // profile name being edited, else null
+  let npName = $state("");
+  let npDir = $state("");
 
   // Editable default config + fallback.
   let provider = $state<Provider>("claude");
+  let profile = $state(""); // "" = default global login
   let model = $state(""); // "" = provider default
   let effort = $state("medium");
   let permission = $state<PermissionMode>("approve");
@@ -70,8 +79,93 @@
     }
   }
 
+  function pathForProfile(p: ProfileInfo): string {
+    return p.Provider === "codex" ? (p.HomeDir ?? "") : (p.ConfigDir ?? "");
+  }
+
+  // Profiles selectable for the current default provider (chips).
+  const profileChips = $derived(profiles.filter((p) => p.Provider === provider).map((p) => p.Name));
+  const npDirPh = $derived(
+    provider === "codex" ? "CODEX_HOME — optional" : "CLAUDE_CONFIG_DIR — optional",
+  );
+
+  function setProfile(name: string) {
+    profile = name;
+    saved = false;
+  }
+
+  function toggleNewProfile() {
+    if (npOpen) {
+      npOpen = false;
+      npEditing = null;
+    } else {
+      npOpen = true;
+      npEditing = null;
+      npName = "";
+      npDir = "";
+      profileError = null;
+    }
+  }
+
+  function startEditProfile(name: string) {
+    const p = profiles.find((x) => x.Name === name);
+    if (!p) return;
+    npOpen = true;
+    npEditing = name;
+    npName = p.Name;
+    npDir = pathForProfile(p);
+    profileError = null;
+  }
+
+  async function saveInlineProfile() {
+    const name = npName.trim();
+    if (!name) return;
+    profileSaving = true;
+    profileError = null;
+    try {
+      const body = {
+        name,
+        provider,
+        config_dir: provider === "claude" ? npDir.trim() : "",
+        home_dir: provider === "codex" ? npDir.trim() : "",
+      };
+      if (npEditing) {
+        await updateProfile(npEditing, body);
+      } else {
+        await createProfile(body);
+      }
+      profiles = await listProfiles();
+      if (!npEditing) setProfile(name); // "Create & select"
+      npOpen = false;
+      npEditing = null;
+      npName = "";
+      npDir = "";
+    } catch (e) {
+      profileError = e instanceof Error ? e.message : String(e);
+    } finally {
+      profileSaving = false;
+    }
+  }
+
+  async function removeProfile(name: string) {
+    if (!window.confirm(`Delete profile ${name}?`)) return;
+    profileError = null;
+    try {
+      await deleteProfile(name);
+      profiles = await listProfiles();
+      if (profile === name) setProfile("");
+      if (npEditing === name) {
+        npOpen = false;
+        npEditing = null;
+      }
+    } catch (e) {
+      profileError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   function applyConfig(cfg: GlobalConfig) {
     provider = cfg.provider;
+    profile = cfg.profile ?? "";
     model = cfg.model;
     effort = cfg.effort || "medium";
     permission = cfg.permission_mode;
@@ -110,7 +204,7 @@
   }
 
   function canonical(): string {
-    return JSON.stringify({ provider, model, effort, permission, fallback: buildFallback() });
+    return JSON.stringify({ provider, profile, model, effort, permission, fallback: buildFallback() });
   }
 
   const dirty = $derived(canonical() !== baseline);
@@ -120,6 +214,10 @@
     provider = p;
     saved = false;
     if (!modelsFor(p).includes(model)) model = ""; // fall back to provider default
+    // The default profile is tied to the provider; drop it if it no longer fits.
+    if (profile && !profiles.some((x) => x.Name === profile && x.Provider === p)) profile = "";
+    npOpen = false;
+    npEditing = null;
   }
   function setModel(m: string) {
     model = m;
@@ -154,6 +252,7 @@
     try {
       const cfg = await updateConfig({
         provider,
+        profile,
         model,
         effort,
         permission_mode: permission,
@@ -239,8 +338,66 @@
           <div class="row">
             <span class="row-key">provider</span>
             <div class="seg-group">
-              <button class="seg" class:on={provider === "claude"} onclick={() => setProvider("claude")}>Claude</button>
-              <button class="seg" class:on={provider === "codex"} onclick={() => setProvider("codex")}>Codex</button>
+              <button class="seg provider-choice" class:on={provider === "claude"} onclick={() => setProvider("claude")}>
+                <ProviderLogo provider="claude" />Claude
+              </button>
+              <button class="seg provider-choice" class:on={provider === "codex"} onclick={() => setProvider("codex")}>
+                <ProviderLogo provider="codex" />Codex
+              </button>
+            </div>
+          </div>
+          <div class="row top">
+            <span class="row-key">profile</span>
+            <div class="chips-col">
+              <div class="chips">
+                <button class="chip" class:on={profile === ""} onclick={() => setProfile("")}>default · global login</button>
+                {#each profileChips as name}
+                  <button class="chip prof-chip" class:on={profile === name} onclick={() => setProfile(name)}>
+                    <span class="prof-label">{name}</span>
+                    <span class="prof-tools">
+                      <span
+                        class="prof-edit"
+                        role="button"
+                        tabindex="0"
+                        title="Edit profile"
+                        onclick={(e) => { e.stopPropagation(); startEditProfile(name); }}
+                        onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); startEditProfile(name); } }}>
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                      </span>
+                      <span
+                        class="prof-del"
+                        role="button"
+                        tabindex="0"
+                        title="Delete profile"
+                        onclick={(e) => { e.stopPropagation(); removeProfile(name); }}
+                        onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); removeProfile(name); } }}>×</span>
+                    </span>
+                  </button>
+                {/each}
+                <button class="chip-new" onclick={toggleNewProfile}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New
+                </button>
+              </div>
+              <div class="hint">
+                Connect multiple Claude or Codex accounts. Each profile has its own login and rate limit, so Podium can
+                switch accounts when one runs out. No profile means your normal login is used.
+              </div>
+              {#if npOpen}
+                <div class="np-panel">
+                  <div class="np-title">{npEditing ? `edit profile · ${provider}` : "new profile · uses selected provider"}</div>
+                  <input class="np-input" bind:value={npName} disabled={Boolean(npEditing)} placeholder="profile name" />
+                  <input class="np-input mono" bind:value={npDir} placeholder={npDirPh} />
+                  <div class="np-actions">
+                    <button class="np-create" disabled={profileSaving || !npName.trim()} onclick={saveInlineProfile}>
+                      {profileSaving ? "Saving…" : npEditing ? "Save changes" : "Create & select"}
+                    </button>
+                    <button class="np-cancel" onclick={toggleNewProfile}>Cancel</button>
+                  </div>
+                </div>
+              {/if}
+              {#if profileError}
+                <div class="error-banner" style="margin-top:10px">{profileError}</div>
+              {/if}
             </div>
           </div>
           <div class="row top">
@@ -304,8 +461,12 @@
           <span class="row-key">route to</span>
           <div class="seg-group">
             <button class="seg" class:on={fbTarget === "none"} onclick={() => setFbTarget("none")}>None</button>
-            <button class="seg" class:on={fbTarget === "claude"} onclick={() => setFbTarget("claude")}>Claude</button>
-            <button class="seg" class:on={fbTarget === "codex"} onclick={() => setFbTarget("codex")}>Codex</button>
+            <button class="seg provider-choice" class:on={fbTarget === "claude"} onclick={() => setFbTarget("claude")}>
+              <ProviderLogo provider="claude" />Claude
+            </button>
+            <button class="seg provider-choice" class:on={fbTarget === "codex"} onclick={() => setFbTarget("codex")}>
+              <ProviderLogo provider="codex" />Codex
+            </button>
           </div>
         </div>
         {#if fbTarget !== "none" && fbHasProfiles}
@@ -579,6 +740,127 @@
   .hint {
     font: 400 11.5px/1.45 "Hanken Grotesk";
     color: var(--muted-2);
+  }
+
+  /* profile chips: select the default profile + manage inline */
+  .prof-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .prof-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 7px;
+    padding-left: 8px;
+    border-left: 1px solid rgba(90, 80, 72, 0.16);
+  }
+
+  .prof-edit {
+    display: inline-flex;
+    align-items: center;
+    color: #a0937f;
+    cursor: pointer;
+  }
+
+  .prof-edit:hover {
+    color: var(--teal-deep);
+  }
+
+  .prof-del {
+    color: #b79e86;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .prof-del:hover {
+    color: #c2705e;
+  }
+
+  .chip-new {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 9px;
+    cursor: pointer;
+    font: 600 12px "JetBrains Mono", monospace;
+    border: 1px dashed #c9bdad;
+    background: transparent;
+    color: #8a7560;
+  }
+
+  .np-panel {
+    margin-top: 11px;
+    background: var(--surface-3);
+    border: 1px solid var(--line-3);
+    border-radius: 14px;
+    padding: 14px;
+    max-width: 380px;
+  }
+
+  .np-title {
+    font: 600 10px "JetBrains Mono", monospace;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .np-input {
+    width: 100%;
+    border: 1px solid var(--field-line);
+    border-radius: 11px;
+    padding: 10px 13px;
+    font: 600 14px "Hanken Grotesk";
+    color: var(--ink);
+    outline: none;
+    background: #fff;
+  }
+
+  .np-input.mono {
+    font: 500 12px "JetBrains Mono", monospace;
+    color: var(--muted);
+    margin-top: 9px;
+  }
+
+  .np-input:disabled {
+    background: #f4efe8;
+    color: var(--muted-2);
+  }
+
+  .np-actions {
+    display: flex;
+    gap: 9px;
+    margin-top: 12px;
+  }
+
+  .np-create {
+    border: none;
+    border-radius: 11px;
+    padding: 9px 18px;
+    background: var(--teal);
+    color: #fff;
+    font: 700 13px "Hanken Grotesk";
+    cursor: pointer;
+  }
+
+  .np-create:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .np-cancel {
+    border: 1px solid var(--field-line);
+    border-radius: 11px;
+    padding: 9px 16px;
+    background: #fff;
+    color: var(--muted-2);
+    font: 600 13px "Hanken Grotesk";
+    cursor: pointer;
   }
 
   /* fallback route summary */

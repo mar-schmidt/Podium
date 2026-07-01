@@ -81,6 +81,46 @@ type AgentCreateRequest struct {
 	Fallback       []string              `json:"fallback,omitempty"`
 }
 
+// ProfileRequest is the transport shape for creating/updating auth profiles.
+type ProfileRequest struct {
+	Name      string          `json:"name,omitempty"`
+	Provider  config.Provider `json:"provider,omitempty"`
+	ConfigDir string          `json:"config_dir,omitempty"`
+	HomeDir   string          `json:"home_dir,omitempty"`
+}
+
+// ListProfiles lists configured auth profiles from the daemon.
+func (c *Client) ListProfiles(ctx context.Context) ([]config.Profile, error) {
+	var profiles []config.Profile
+	if err := c.getJSON(ctx, "/api/profiles", &profiles); err != nil {
+		return nil, err
+	}
+	return profiles, nil
+}
+
+// CreateProfile creates an auth profile through the daemon.
+func (c *Client) CreateProfile(ctx context.Context, req ProfileRequest) (config.Profile, error) {
+	var profile config.Profile
+	if err := c.postJSON(ctx, "/api/profiles", req, &profile); err != nil {
+		return profile, err
+	}
+	return profile, nil
+}
+
+// UpdateProfile updates a configured auth profile through the daemon.
+func (c *Client) UpdateProfile(ctx context.Context, name string, req ProfileRequest) (config.Profile, error) {
+	var profile config.Profile
+	if err := c.putJSON(ctx, "/api/profiles/"+urlPathEscape(name), req, &profile); err != nil {
+		return profile, err
+	}
+	return profile, nil
+}
+
+// DeleteProfile deletes a configured auth profile through the daemon.
+func (c *Client) DeleteProfile(ctx context.Context, name string) error {
+	return c.deleteJSON(ctx, "/api/profiles/"+urlPathEscape(name), nil, nil)
+}
+
 // CreateAgent creates an agent through the daemon.
 func (c *Client) CreateAgent(ctx context.Context, req AgentCreateRequest) (store.Agent, error) {
 	var agent store.Agent

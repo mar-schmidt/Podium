@@ -63,6 +63,37 @@ export async function listProfiles(): Promise<ProfileInfo[]> {
   return (await asJSON<ProfileInfo[] | null>(await fetch("/api/profiles"))) ?? [];
 }
 
+export interface ProfileRequest {
+  name?: string;
+  provider?: string;
+  config_dir?: string;
+  home_dir?: string;
+}
+
+export async function createProfile(req: ProfileRequest): Promise<ProfileInfo> {
+  return asJSON(
+    await fetch("/api/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+export async function updateProfile(name: string, req: ProfileRequest): Promise<ProfileInfo> {
+  return asJSON(
+    await fetch(`/api/profiles/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+export async function deleteProfile(name: string): Promise<void> {
+  await asJSON(await fetch(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }));
+}
+
 export async function getConfig(): Promise<GlobalConfig> {
   return asJSON(await fetch("/api/config"));
 }
@@ -111,6 +142,7 @@ export async function followLogs(lines: number, signal: AbortSignal, onEvent: (e
 export interface HireRequest {
   name: string;
   provider: string;
+  profile?: string;
   model: string;
   effort: string;
   permission_mode: string;

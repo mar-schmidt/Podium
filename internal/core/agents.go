@@ -103,6 +103,8 @@ func (c *Core) validateAgentTargets(agent store.Agent) error {
 	if agent.Provider != config.ProviderClaude && agent.Provider != config.ProviderCodex {
 		return fmt.Errorf("unknown provider %q (want claude|codex)", agent.Provider)
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if agent.Profile != "" {
 		p, ok := c.profiles[agent.Profile]
 		if !ok {
@@ -316,6 +318,11 @@ func (c *Core) applyAgentDefaults(agent *store.Agent) {
 	g := c.GetGlobal()
 	if agent.Provider == "" {
 		agent.Provider = g.Provider
+	}
+	// The default profile is tied to the default provider, so only inherit it
+	// when this agent runs on that same provider.
+	if agent.Profile == "" && agent.Provider == g.Provider {
+		agent.Profile = g.Profile
 	}
 	if agent.Model == "" {
 		agent.Model = g.Model

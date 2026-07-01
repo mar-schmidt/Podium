@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { applyUpdate, checkUpdate, getHealth, hireAgent, listAgents } from "./lib/api";
-  import type { Agent, Health, PermissionMode, Provider, UpdateStatus } from "./lib/types";
+  import { applyUpdate, checkUpdate, createProfile, getHealth, hireAgent, listAgents, listProfiles } from "./lib/api";
+  import ProviderLogo from "./lib/ProviderLogo.svelte";
+  import type { Agent, Health, PermissionMode, ProfileInfo, Provider, UpdateStatus } from "./lib/types";
   import Chat from "./pages/Chat.svelte";
   import Roadmap from "./pages/Roadmap.svelte";
   import Agents from "./pages/Agents.svelte";
@@ -69,8 +70,14 @@
   let hireOpen = $state(false);
   let hireName = $state("");
   let hireProvider = $state<Provider>("claude");
+  let hireProfile = $state("");
   let hirePermission = $state<PermissionMode>("approve");
   let hireError = $state<string | null>(null);
+  let profiles = $state<ProfileInfo[]>([]);
+  let profileCreateOpen = $state(false);
+  let profileName = $state("");
+  let profilePath = $state("");
+  let profileSaving = $state(false);
 
   onMount(async () => {
     await refreshHealth();
@@ -104,6 +111,14 @@
       agents = await listAgents();
     } catch {
       // leave agents as-is
+    }
+  }
+
+  async function refreshProfiles() {
+    try {
+      profiles = await listProfiles();
+    } catch {
+      profiles = [];
     }
   }
 
@@ -171,9 +186,14 @@
   function openHire() {
     hireName = "";
     hireProvider = "claude";
+    hireProfile = "";
     hirePermission = "approve";
     hireError = null;
+    profileCreateOpen = false;
+    profileName = "";
+    profilePath = "";
     hireOpen = true;
+    void refreshProfiles();
   }
 
   async function submitHire() {
@@ -182,6 +202,7 @@
       const agent = await hireAgent({
         name: hireName.trim(),
         provider: hireProvider,
+        profile: hireProfile,
         model: "",
         effort: "high",
         permission_mode: hirePermission,
@@ -193,6 +214,30 @@
       hireError = e instanceof Error ? e.message : String(e);
     }
   }
+
+  async function submitProfileFromHire() {
+    profileSaving = true;
+    hireError = null;
+    try {
+      const created = await createProfile({
+        name: profileName.trim(),
+        provider: hireProvider,
+        config_dir: hireProvider === "claude" ? profilePath.trim() : "",
+        home_dir: hireProvider === "codex" ? profilePath.trim() : "",
+      });
+      profiles = [created, ...profiles.filter((p) => p.Name !== created.Name)];
+      hireProfile = created.Name;
+      profileCreateOpen = false;
+      profileName = "";
+      profilePath = "";
+    } catch (e) {
+      hireError = e instanceof Error ? e.message : String(e);
+    } finally {
+      profileSaving = false;
+    }
+  }
+
+  const hireProfileOptions = $derived(profiles.filter((p) => p.Provider === hireProvider));
 
   const daemonLabel = $derived(daemonStatus === "live" ? "podiumd live" : `podiumd ${daemonStatus}`);
   const daemonAddr = $derived(health ? `${health.version} · ${health.commit}` : "127.0.0.1:8787");
@@ -207,6 +252,15 @@
   function seg(on: boolean): string {
     return (
       "flex:1;padding:11px;border-radius:11px;cursor:pointer;font:600 13.5px 'Hanken Grotesk';" +
+      (on
+        ? "border:1px solid #BFE0D6;background:#E3F1EC;color:#2F6E60"
+        : "border:1px solid #EAE0D4;background:#fff;color:#6F6459")
+    );
+  }
+
+  function chip(on: boolean): string {
+    return (
+      "padding:6px 12px;border-radius:9px;cursor:pointer;font:600 12px 'JetBrains Mono',monospace;" +
       (on
         ? "border:1px solid #BFE0D6;background:#E3F1EC;color:#2F6E60"
         : "border:1px solid #EAE0D4;background:#fff;color:#6F6459")
@@ -330,9 +384,38 @@
 
           <div class="label-mono" style="margin:18px 0 8px">backend</div>
           <div style="display:flex;gap:9px">
-            <button style={seg(hireProvider === "claude")} onclick={() => (hireProvider = "claude")}>Claude</button>
-            <button style={seg(hireProvider === "codex")} onclick={() => (hireProvider = "codex")}>Codex</button>
+            <button class="provider-choice" style={seg(hireProvider === "claude")} onclick={() => { hireProvider = "claude"; hireProfile = ""; profileCreateOpen = false; }}>
+              <ProviderLogo provider="claude" />Claude
+            </button>
+            <button class="provider-choice" style={seg(hireProvider === "codex")} onclick={() => { hireProvider = "codex"; hireProfile = ""; profileCreateOpen = false; }}>
+              <ProviderLogo provider="codex" />Codex
+            </button>
           </div>
+
+          <div class="label-mono" style="margin:18px 0 8px">profile</div>
+          <div class="prof-chips">
+            <button style={chip(hireProfile === "")} onclick={() => (hireProfile = "")}>default · global login</button>
+            {#each hireProfileOptions as p}
+              <button style={chip(hireProfile === p.Name)} onclick={() => (hireProfile = p.Name)}>{p.Name}</button>
+            {/each}
+            <button class="chip-new" type="button" onclick={() => { profileCreateOpen = !profileCreateOpen; profileName = ""; profilePath = ""; }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>New
+            </button>
+          </div>
+
+          {#if profileCreateOpen}
+            <div class="inline-create">
+              <div class="np-title">new profile · uses selected provider</div>
+              <input class="field-input" bind:value={profileName} placeholder="profile name" />
+              <input class="field-input mono" bind:value={profilePath} placeholder={hireProvider === "claude" ? "CLAUDE_CONFIG_DIR — optional" : "CODEX_HOME — optional"} />
+              <div class="np-actions">
+                <button class="np-create" disabled={profileSaving || !profileName.trim()} onclick={submitProfileFromHire}>
+                  {profileSaving ? "Saving…" : "Create & select"}
+                </button>
+                <button class="np-cancel" type="button" onclick={() => (profileCreateOpen = false)}>Cancel</button>
+              </div>
+            </div>
+          {/if}
 
           <div class="label-mono" style="margin:18px 0 8px">permission mode</div>
           <div style="display:flex;gap:9px">
@@ -564,6 +647,76 @@
     font: 700 15px "Hanken Grotesk";
     cursor: pointer;
     box-shadow: 0 10px 22px -8px rgba(63, 143, 126, 0.7);
+  }
+
+  .prof-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .chip-new {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 9px;
+    cursor: pointer;
+    font: 600 12px "JetBrains Mono", monospace;
+    border: 1px dashed #c9bdad;
+    background: transparent;
+    color: #8a7560;
+  }
+
+  .inline-create {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--line-3);
+    border-radius: 12px;
+    background: var(--surface-3);
+  }
+
+  .inline-create .field-input {
+    margin-top: 8px;
+  }
+
+  .np-title {
+    font: 600 10px "JetBrains Mono", monospace;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    text-transform: uppercase;
+  }
+
+  .np-actions {
+    display: flex;
+    gap: 9px;
+    margin-top: 12px;
+  }
+
+  .np-create {
+    border: none;
+    border-radius: 11px;
+    padding: 9px 18px;
+    background: var(--teal);
+    color: #fff;
+    font: 700 13px "Hanken Grotesk";
+    cursor: pointer;
+  }
+
+  .np-create:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .np-cancel {
+    border: 1px solid var(--field-line);
+    border-radius: 11px;
+    padding: 9px 16px;
+    background: #fff;
+    color: var(--muted-2);
+    font: 600 13px "Hanken Grotesk";
+    cursor: pointer;
   }
 
   @media (max-width: 768px) {

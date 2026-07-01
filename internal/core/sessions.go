@@ -272,7 +272,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", 0)
 				return
 			}
-			assistantMessages, err := c.store.AppendMessages(ctx, sessionID, []store.Message{{
+			assistantMessages, err := c.appendFinalMessages(ctx, sessionID, []store.Message{{
 				Role:    store.RoleAssistant,
 				Content: assistant.String(),
 			}})
@@ -281,22 +281,28 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 				return
 			}
+			if !c.noBg {
+				go c.autoNameSessionBackground(sessionID)
+				go c.refreshRollingSummaryBackground(sessionID)
+			}
+			runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", assistant.Len())
 			for _, msg := range assistantMessages {
 				msg := msg
 				if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "message_stored", Message: &msg}) {
 					return
 				}
 			}
-			if !c.noBg {
-				go c.autoNameSessionBackground(sessionID)
-				go c.refreshRollingSummaryBackground(sessionID)
-			}
-			runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", assistant.Len())
 			_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: adapter.EventTurnDone})
 			return
 		}
 	}()
 	return streamOut, nil
+}
+
+func (c *Core) appendFinalMessages(ctx context.Context, sessionID string, messages []store.Message) ([]store.Message, error) {
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return c.store.AppendMessages(persistCtx, sessionID, messages)
 }
 
 // sessionExtraWorkspaceDirs returns the directories exposed to a session's

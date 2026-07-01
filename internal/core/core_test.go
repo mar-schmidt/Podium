@@ -152,6 +152,36 @@ func TestAppendTurnHistorySurvivesReopen(t *testing.T) {
 	}
 }
 
+func TestFinalAssistantPersistSurvivesCanceledTurnContext(t *testing.T) {
+	ctx := context.Background()
+	c, cleanup := newTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "analyst", Provider: config.ProviderCodex}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "analyst", Origin: store.OriginWeb})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	turnCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := c.appendFinalMessages(turnCtx, session.ID, []store.Message{
+		{Role: store.RoleAssistant, Content: "finished after the socket closed"},
+	}); err != nil {
+		t.Fatalf("append final message with canceled context: %v", err)
+	}
+
+	history, err := c.History(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(history) != 1 || history[0].Role != store.RoleAssistant || history[0].Content != "finished after the socket closed" {
+		t.Fatalf("final assistant message was not persisted: %+v", history)
+	}
+}
+
 func TestSlashCommandsUpdateSessionSettingsAndMetadata(t *testing.T) {
 	ctx := context.Background()
 	c, cleanup := newTestCore(t)

@@ -455,3 +455,31 @@ export async function taskSession(id: string): Promise<Session | null> {
   if (res.status === 404) return null;
   return asJSON(res);
 }
+
+// getVapidKey returns the daemon's VAPID public key for Web Push subscription.
+// An empty key means push is disabled on the daemon.
+export async function getVapidKey(): Promise<{ public_key: string }> {
+  return asJSON(await fetch("/api/push/vapid"));
+}
+
+// subscribePush registers a browser Web Push subscription with the daemon.
+export async function subscribePush(subscription: unknown): Promise<void> {
+  await asJSON(
+    await fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(subscription),
+    }),
+  );
+}
+
+// unsubscribePush removes a browser Web Push subscription from the daemon.
+export async function unsubscribePush(subscription: unknown): Promise<void> {
+  await asJSON(
+    await fetch("/api/push/unsubscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(subscription),
+    }),
+  );
+}

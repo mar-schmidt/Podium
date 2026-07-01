@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { deleteSession, getSession, listProjects } from "../lib/api";
+  import { live } from "../lib/live.svelte";
   import ConfirmModal from "../lib/ConfirmModal.svelte";
   import {
     agentGradient,
@@ -13,7 +14,6 @@
   } from "../lib/theme";
   import type {
     Agent,
-    ActiveTurnSummary,
     ClientMessage,
     Message,
     PermissionMode,
@@ -37,17 +37,19 @@
     agents = [],
     target = null,
     onConsumeTarget = () => {},
-    onStatus = (_s: "connecting" | "live" | "offline") => {},
   }: {
     agents?: Agent[];
     target?: ChatTarget | null;
     onConsumeTarget?: () => void;
-    onStatus?: (s: "connecting" | "live" | "offline") => void;
   } = $props();
 
-  let status = $state<"connecting" | "live" | "offline">("connecting");
-  let sessions = $state<Session[]>([]);
-  let activeTurns = $state<Record<string, ActiveTurnSummary>>({});
+  // Connection + session-list state is owned by the shared live store so it
+  // survives navigating away from the chat page (attention signalling must keep
+  // working everywhere). This page reads it reactively and drives its own
+  // per-session view state locally.
+  const status = $derived(live.status);
+  const sessions = $derived(live.sessions);
+  const activeTurns = $derived(live.activeTurns);
   let activeSession = $state<Session | null>(null);
   let projectName = $state<string>("");
 
@@ -74,8 +76,7 @@
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let sending = $state(false);
-  let ws: WebSocket | null = null;
-  let poll: number | undefined;
+  let unsubscribe: (() => void) | undefined;
   let countdown: number | undefined;
   let pendingSeed: string | null = null;
   let msgsEl: HTMLDivElement | null = null;
@@ -152,17 +153,25 @@
     };
     syncPhone();
     mq.addEventListener("change", syncPhone);
-    connect();
+    live.connect();
+    unsubscribe = live.subscribe(handleServerMessage);
     listProjects().then((p) => (projects = p)).catch(() => {});
     restoreLastSession();
-    poll = window.setInterval(() => send({ type: "list" }), 4000);
     countdown = window.setInterval(updatePermissionRemaining, 1000);
     return () => {
       mq.removeEventListener("change", syncPhone);
-      if (poll) window.clearInterval(poll);
       if (countdown) window.clearInterval(countdown);
-      ws?.close();
+      unsubscribe?.();
     };
+  });
+
+  // When the shared socket (re)connects, re-attach to the open session and flush
+  // any pending seed so a freshly opened chat still starts its turn.
+  $effect(() => {
+    if (live.status === "live") {
+      attachActiveSession();
+      flushSeed();
+    }
   });
 
   $effect(() => {
@@ -194,44 +203,24 @@
     }
   }
 
-  function connect() {
-    const protocol = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${protocol}://${location.host}/api/ws`);
-    setStatus("connecting");
-    ws.onopen = () => {
-      setStatus("live");
-      send({ type: "list" });
-      attachActiveSession();
-      flushSeed();
-    };
-    ws.onclose = () => setStatus("offline");
-    ws.onerror = () => setStatus("offline");
-    ws.onmessage = (event) => handleServerMessage(JSON.parse(event.data) as ServerMessage);
-  }
-
-  function setStatus(s: "connecting" | "live" | "offline") {
-    status = s;
-    onStatus(s);
-  }
-
   function send(msg: ClientMessage) {
-    if (ws?.readyState !== WebSocket.OPEN) {
+    if (live.status !== "live") {
       error = "WebSocket is offline";
       return;
     }
-    ws.send(JSON.stringify(msg));
+    live.send(msg);
   }
 
+  // handleServerMessage is registered with the live store and handles only this
+  // page's view concerns; the store owns sessions/activeTurns/attention itself.
   function handleServerMessage(msg: ServerMessage) {
     switch (msg.type) {
       case "state":
-        sessions = msg.sessions ?? [];
-        activeTurns = activeTurnMap(msg.active_turns ?? []);
         if (!selectedAgent && agents.length > 0) selectedAgent = agents[0].Name;
         if (activeSession) {
-          const replacement = sessions.find((s) => s.ID === activeSession?.ID);
+          const replacement = live.sessions.find((s) => s.ID === activeSession?.ID);
           if (replacement) activeSession = replacement;
-          sending = !!activeTurns[activeSession.ID];
+          sending = !!live.activeTurns[activeSession.ID];
         }
         break;
       case "session":
@@ -241,7 +230,6 @@
           rememberSession(msg.session.ID);
           if (!msg.session.ProjectID) projectName = "";
           resetDraftSettings();
-          sessions = [msg.session, ...sessions.filter((s) => s.ID !== msg.session?.ID)];
         }
         break;
       case "turn_state":
@@ -286,28 +274,20 @@
         sending = false;
         break;
       case "done":
-        if (msg.session_id) removeActiveTurn(msg.session_id);
         if (messageForActiveSession(msg)) {
           pendingPermission = null;
           if (pendingUserInput?.provider !== "claude") pendingUserInput = null;
           sending = false;
         }
-        window.setTimeout(() => send({ type: "list" }), 1200);
+        window.setTimeout(() => live.send({ type: "list" }), 1200);
         break;
       case "error":
-        if (msg.session_id) removeActiveTurn(msg.session_id);
         if (messageForActiveSession(msg)) {
           error = msg.error ?? "Unknown server error";
           sending = false;
         }
         break;
     }
-  }
-
-  function activeTurnMap(turns: ActiveTurnSummary[]): Record<string, ActiveTurnSummary> {
-    const next: Record<string, ActiveTurnSummary> = {};
-    for (const turn of turns) next[turn.session_id] = turn;
-    return next;
   }
 
   function rememberSession(id: string) {
@@ -321,8 +301,8 @@
   }
 
   function attachActiveSession() {
-    if (activeSession?.ID && ws?.readyState === WebSocket.OPEN) {
-      send({ type: "attach_session", request_id: crypto.randomUUID(), session_id: activeSession.ID });
+    if (activeSession?.ID && live.status === "live") {
+      live.send({ type: "attach_session", request_id: crypto.randomUUID(), session_id: activeSession.ID });
     }
   }
 
@@ -330,26 +310,10 @@
     return !msg.session_id || msg.session_id === activeSession?.ID;
   }
 
-  function removeActiveTurn(sessionID: string) {
-    const { [sessionID]: _removed, ...rest } = activeTurns;
-    activeTurns = rest;
-  }
-
+  // applyTurnState updates only this page's view of the active session; the
+  // store maintains the activeTurns map (and thus attention) independently.
   function applyTurnState(state: TurnState | undefined) {
     if (!state?.session_id) return;
-    if (state.status === "running") {
-      activeTurns = {
-        ...activeTurns,
-        [state.session_id]: {
-          session_id: state.session_id,
-          turn_id: state.turn_id,
-          status: state.status,
-          pending: state.pending_permission ? "permission" : state.pending_user_input ? "question" : state.pending_assistant ? "assistant" : "",
-        },
-      };
-    } else {
-      removeActiveTurn(state.session_id);
-    }
     if (state.session_id !== activeSession?.ID) return;
     sending = state.status === "running";
     pendingAssistant = state.pending_assistant ?? "";
@@ -399,7 +363,8 @@
     deleteError = null;
     try {
       await deleteSession(id);
-      sessions = sessions.filter((s) => s.ID !== id);
+      // The store owns the session list; refresh it from the daemon.
+      live.send({ type: "list" });
       if (activeSession?.ID === id) {
         activeSession = null;
         messages = [];
@@ -677,7 +642,12 @@
         {#each filteredSessions as s (s.ID)}
           <div class="sess-row-wrap">
             <button class="sess-row" class:sel={activeSession?.ID === s.ID} onclick={() => loadHistory(s)}>
-              <span style={avatarStyle(agentGradient(s.AgentName), 32, 10, 13)}>{initial(s.AgentName)}</span>
+              <span class="sess-avatar-wrap">
+                <span style={avatarStyle(agentGradient(s.AgentName), 32, 10, 13)}>{initial(s.AgentName)}</span>
+                {#if live.attention.has(s.ID)}
+                  <span class="attn-dot" title="Needs your attention"></span>
+                {/if}
+              </span>
               <span class="sess-row-text">
                 <span class="sess-row-title">{s.Name || s.AgentName}</span>
                 <span class="sess-row-sub mono">{sessionSub(s)}</span>
@@ -1206,6 +1176,25 @@
     border-color: #f0dca9;
     background: #fbf1dd;
     color: #9a6e1e;
+  }
+
+  .sess-avatar-wrap {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+  }
+
+  /* Red dot flags a session that is blocked on the user (permission/question). */
+  .attn-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 999px;
+    background: #d64528;
+    border: 2px solid var(--surface);
+    box-shadow: 0 0 0 2px rgba(214, 69, 40, 0.22);
   }
 
   .conv {

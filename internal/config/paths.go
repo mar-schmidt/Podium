@@ -30,6 +30,7 @@ type Paths struct {
 	ProfilesDir  string // profiles/
 	LogsDir      string // logs/
 	ArchiveDir   string // archive/ (archived tasks and other exports)
+	PushDir      string // push/ (VAPID keypair for Web Push)
 }
 
 // ResolveHome returns the absolute storage root. Precedence:
@@ -68,6 +69,7 @@ func NewPaths(home string) Paths {
 		ProfilesDir:  filepath.Join(home, "profiles"),
 		LogsDir:      filepath.Join(home, "logs"),
 		ArchiveDir:   filepath.Join(home, "archive"),
+		PushDir:      filepath.Join(home, "push"),
 	}
 }
 

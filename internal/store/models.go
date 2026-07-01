@@ -118,6 +118,19 @@ type ScheduleRun struct {
 	FinishedAt   string
 }
 
+// PushSubscription is a registered destination for OS/native notifications. It
+// is delivery-technology-neutral: Kind names the channel ('webpush' today;
+// 'apns'/'fcm' later) and Payload carries the kind-specific credentials as JSON
+// (for webpush: {"p256dh":..,"auth":..}). Endpoint is the stable identity used
+// to upsert and to prune dead subscriptions.
+type PushSubscription struct {
+	ID        string
+	Kind      string
+	Endpoint  string
+	Payload   string
+	CreatedAt string
+}
+
 // TaskStatus is a roadmap task's kanban column.
 type TaskStatus string
 

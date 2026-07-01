@@ -1,0 +1,275 @@
+// live.svelte.ts — the single, app-wide WebSocket connection and the reactive
+// state derived from it. It is deliberately owned above any page so it survives
+// route changes: attention signalling (toasts, the session red dot, the Chat
+// nav badge) must work no matter where the user is in the dashboard. Chat.svelte
+// consumes this store rather than opening its own socket.
+//
+// In-app attention state here is live-derived (no persistence). Out-of-app
+// notifications (Web Push, future native) are handled by the daemon; this module
+// only registers the browser for push and routes taps back to a session.
+
+import { getVapidKey, subscribePush } from "./api";
+import type { ActiveTurnSummary, ClientMessage, ServerMessage, Session } from "./types";
+
+export type ConnStatus = "connecting" | "live" | "offline";
+
+export interface Toast {
+  id: string;
+  title: string;
+  body: string;
+  kind: "permission" | "question";
+  sessionId: string;
+}
+
+type Pending = "permission" | "question" | "assistant" | "";
+
+const TOAST_TTL_MS = 8000;
+
+class LiveStore {
+  status = $state<ConnStatus>("connecting");
+  sessions = $state<Session[]>([]);
+  activeTurns = $state<Record<string, ActiveTurnSummary>>({});
+  toasts = $state<Toast[]>([]);
+
+  // Session IDs currently blocked on the user (permission or question). Drives
+  // the session-row red dot and the Chat nav badge.
+  attention = $derived(
+    new Set(
+      Object.values(this.activeTurns)
+        .filter((t) => t.pending === "permission" || t.pending === "question")
+        .map((t) => t.session_id),
+    ),
+  );
+
+  private ws: WebSocket | null = null;
+  private started = false;
+  private reconnect: number | undefined;
+  // Rising-edge tracking so a toast fires once per transition into a pending
+  // state, regardless of which message (direct event vs. list state) reveals it.
+  private lastPending: Record<string, Pending> = {};
+  private subscribers = new Set<(msg: ServerMessage) => void>();
+  private navigator: ((sessionId: string) => void) | null = null;
+
+  // connect is idempotent: the first caller (App.svelte on mount) opens the
+  // socket; later callers are no-ops so multiple components can call it safely.
+  connect() {
+    if (this.started) return;
+    this.started = true;
+    this.open();
+    window.setInterval(() => this.send({ type: "list" }), 4000);
+    this.listenForServiceWorker();
+  }
+
+  private open() {
+    const protocol = location.protocol === "https:" ? "wss" : "ws";
+    this.status = "connecting";
+    const ws = new WebSocket(`${protocol}://${location.host}/api/ws`);
+    this.ws = ws;
+    ws.onopen = () => {
+      this.status = "live";
+      this.send({ type: "list" });
+    };
+    ws.onclose = () => {
+      this.status = "offline";
+      this.scheduleReconnect();
+    };
+    ws.onerror = () => {
+      this.status = "offline";
+    };
+    ws.onmessage = (event) => this.handle(JSON.parse(event.data) as ServerMessage);
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnect) return;
+    this.reconnect = window.setTimeout(() => {
+      this.reconnect = undefined;
+      this.open();
+    }, 2000);
+  }
+
+  send(msg: ClientMessage) {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify(msg));
+  }
+
+  // subscribe registers a raw-message handler (Chat.svelte uses it for its own
+  // rendering). Returns an unsubscribe function.
+  subscribe(fn: (msg: ServerMessage) => void): () => void {
+    this.subscribers.add(fn);
+    return () => this.subscribers.delete(fn);
+  }
+
+  // setNavigator lets App.svelte wire "open this session" so toast taps and
+  // Web Push notification clicks can route to the right chat.
+  setNavigator(fn: (sessionId: string) => void) {
+    this.navigator = fn;
+  }
+
+  navigateToSession(sessionId: string) {
+    this.navigator?.(sessionId);
+  }
+
+  dismissToast(id: string) {
+    this.toasts = this.toasts.filter((t) => t.id !== id);
+  }
+
+  private handle(msg: ServerMessage) {
+    // Store-owned state first (sessions, turns, attention, toasts)…
+    switch (msg.type) {
+      case "state":
+        this.sessions = msg.sessions ?? [];
+        this.applyTurnSummaries(msg.active_turns ?? []);
+        break;
+      case "session":
+        if (msg.session) {
+          const s = msg.session;
+          this.sessions = [s, ...this.sessions.filter((e) => e.ID !== s.ID)];
+        }
+        break;
+      case "turn_state":
+        if (msg.turn_state) {
+          const ts = msg.turn_state;
+          if (ts.status === "running") {
+            const pending: Pending = ts.pending_permission
+              ? "permission"
+              : ts.pending_user_input
+                ? "question"
+                : ts.pending_assistant
+                  ? "assistant"
+                  : "";
+            this.setTurn({ session_id: ts.session_id, turn_id: ts.turn_id, status: ts.status, pending });
+          } else {
+            this.clearTurn(ts.session_id);
+          }
+        }
+        break;
+      case "permission_request":
+        if (msg.session_id) this.markPending(msg.session_id, "permission");
+        break;
+      case "user_input_request":
+        if (msg.session_id) this.markPending(msg.session_id, "question");
+        break;
+      case "done":
+      case "error":
+        if (msg.session_id) this.clearTurn(msg.session_id);
+        break;
+    }
+    // …then hand the raw message to page-level subscribers (chat rendering).
+    for (const fn of this.subscribers) fn(msg);
+  }
+
+  private applyTurnSummaries(turns: ActiveTurnSummary[]) {
+    const next: Record<string, ActiveTurnSummary> = {};
+    for (const t of turns) next[t.session_id] = t;
+    this.activeTurns = next;
+    // Reconcile rising edges: any session now pending that wasn't fires a toast;
+    // sessions no longer present reset their edge so a future request re-alerts.
+    const seen = new Set<string>();
+    for (const t of turns) {
+      seen.add(t.session_id);
+      this.edge(t.session_id, (t.pending ?? "") as Pending);
+    }
+    for (const id of Object.keys(this.lastPending)) {
+      if (!seen.has(id)) this.lastPending[id] = "";
+    }
+  }
+
+  private setTurn(summary: ActiveTurnSummary) {
+    this.activeTurns = { ...this.activeTurns, [summary.session_id]: summary };
+    this.edge(summary.session_id, (summary.pending ?? "") as Pending);
+  }
+
+  private markPending(sessionId: string, pending: "permission" | "question") {
+    const existing = this.activeTurns[sessionId];
+    this.activeTurns = {
+      ...this.activeTurns,
+      [sessionId]: {
+        session_id: sessionId,
+        turn_id: existing?.turn_id ?? "",
+        status: "running",
+        pending,
+      },
+    };
+    this.edge(sessionId, pending);
+  }
+
+  private clearTurn(sessionId: string) {
+    const { [sessionId]: _gone, ...rest } = this.activeTurns;
+    this.activeTurns = rest;
+    this.lastPending[sessionId] = "";
+  }
+
+  // edge fires a toast on a rising transition into a blocked state.
+  private edge(sessionId: string, pending: Pending) {
+    const prev = this.lastPending[sessionId] ?? "";
+    this.lastPending[sessionId] = pending;
+    if (prev === pending) return;
+    if (pending === "permission" || pending === "question") {
+      this.pushToast(sessionId, pending);
+    }
+  }
+
+  private pushToast(sessionId: string, kind: "permission" | "question") {
+    const agent = this.sessions.find((s) => s.ID === sessionId)?.AgentName ?? "An agent";
+    const toast: Toast = {
+      id: crypto.randomUUID(),
+      kind,
+      sessionId,
+      title: kind === "permission" ? `${agent} needs approval` : `${agent} has a question`,
+      body: kind === "permission" ? "A tool action is waiting for your decision." : "Answer to let the agent continue.",
+    };
+    this.toasts = [...this.toasts, toast];
+    window.setTimeout(() => this.dismissToast(toast.id), TOAST_TTL_MS);
+  }
+
+  // ---- Web Push ---------------------------------------------------------
+
+  // enablePush registers the service worker, requests OS notification
+  // permission, and subscribes this browser with the daemon. Must be invoked
+  // from a user gesture (browsers gate the permission prompt on one).
+  async enablePush(): Promise<"enabled" | "denied" | "unsupported"> {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return "unsupported";
+    // Confirm the daemon actually has push configured before prompting the user.
+    const { public_key } = await getVapidKey();
+    if (!public_key) return "unsupported";
+
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return "denied";
+
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    const ready = await navigator.serviceWorker.ready.catch(() => reg);
+
+    const existing = await ready.pushManager.getSubscription();
+    const sub =
+      existing ??
+      (await ready.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(public_key) as BufferSource,
+      }));
+    await subscribePush(sub.toJSON());
+    return "enabled";
+  }
+
+  private listenForServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      const data = event.data as { type?: string; session_id?: string } | undefined;
+      if (data?.type === "notification-click" && data.session_id) {
+        this.navigateToSession(data.session_id);
+      }
+    });
+  }
+}
+
+// urlBase64ToUint8Array converts a VAPID public key (URL-safe base64) into the
+// byte array PushManager.subscribe expects.
+function urlBase64ToUint8Array(base64: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const normalized = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(normalized);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+export const live = new LiveStore();

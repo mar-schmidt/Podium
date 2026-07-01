@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
+	"github.com/mar-schmidt/Podium/internal/notify"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -52,10 +53,64 @@ type activeTurn struct {
 type activeTurnHub struct {
 	mu    sync.Mutex
 	turns map[string]*activeTurn
+	// notifier + resolveAgent drive out-of-app (Web Push / native) notifications
+	// when a turn blocks on the user. Both are optional; nil disables push.
+	notifier     *notify.Dispatcher
+	resolveAgent func(ctx context.Context, sessionID string) (string, error)
 }
 
 func newActiveTurnHub() *activeTurnHub {
 	return &activeTurnHub{turns: map[string]*activeTurn{}}
+}
+
+// attachNotifier wires the out-of-app notification dispatcher and an agent-name
+// resolver (the hub only knows session IDs) into the hub.
+func (h *activeTurnHub) attachNotifier(n *notify.Dispatcher, resolve func(ctx context.Context, sessionID string) (string, error)) {
+	h.notifier = n
+	h.resolveAgent = resolve
+}
+
+// notifyAttention fires an out-of-app notification for a blocked turn. It runs
+// off the hot path (own goroutine) so push latency never delays the turn, and
+// resolves the agent name for the notification text.
+func (h *activeTurnHub) notifyAttention(sessionID, kind string) {
+	if h.notifier == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		agent := ""
+		if h.resolveAgent != nil {
+			if a, err := h.resolveAgent(ctx, sessionID); err == nil {
+				agent = a
+			}
+		}
+		title, body := attentionText(agent, kind)
+		h.notifier.Notify(ctx, notify.Notification{
+			SessionID: sessionID,
+			AgentName: agent,
+			Title:     title,
+			Body:      body,
+			Kind:      kind,
+		})
+	}()
+}
+
+// attentionText renders the human-facing notification strings for a blocked
+// turn. kind is "permission" or "question".
+func attentionText(agent, kind string) (title, body string) {
+	if agent == "" {
+		agent = "An agent"
+	}
+	switch kind {
+	case "permission":
+		return agent + " needs approval", "A tool action is waiting for your decision."
+	case "question":
+		return agent + " has a question", "Answer to let the agent continue."
+	default:
+		return agent + " needs your attention", ""
+	}
 }
 
 func (h *activeTurnHub) start(sessionID, turnID, requestID string, writer *wsWriter, cancel context.CancelFunc) (TurnState, error) {
@@ -160,6 +215,10 @@ func (h *activeTurnHub) recordDelta(sessionID, delta string) {
 		return
 	}
 	turn.pendingAssistant += delta
+	// The agent has resumed producing output, so it is no longer blocked on the
+	// user — clear any pending request that attention indicators keyed off.
+	turn.pendingPermission = nil
+	turn.pendingUserInput = nil
 	writers := activeTurnWritersLocked(turn)
 	requestID := turn.requestID
 	h.mu.Unlock()
@@ -176,6 +235,10 @@ func (h *activeTurnHub) recordAssistant(sessionID, text string) {
 	if text != "" {
 		turn.pendingAssistant = text
 	}
+	// A finalized assistant message means the agent is no longer waiting on the
+	// user; clear pending request state that attention indicators keyed off.
+	turn.pendingPermission = nil
+	turn.pendingUserInput = nil
 	writers := activeTurnWritersLocked(turn)
 	requestID := turn.requestID
 	h.mu.Unlock()
@@ -195,6 +258,7 @@ func (h *activeTurnHub) recordPermission(sessionID string, req *adapter.Permissi
 	requestID := turn.requestID
 	h.mu.Unlock()
 	h.broadcast(writers, ServerMessage{Type: "permission_request", RequestID: requestID, SessionID: sessionID, Request: req})
+	h.notifyAttention(sessionID, "permission")
 }
 
 func (h *activeTurnHub) recordUserInput(sessionID string, req *adapter.UserInputRequest) {
@@ -210,6 +274,7 @@ func (h *activeTurnHub) recordUserInput(sessionID string, req *adapter.UserInput
 	requestID := turn.requestID
 	h.mu.Unlock()
 	h.broadcast(writers, ServerMessage{Type: "user_input_request", RequestID: requestID, SessionID: sessionID, Input: req})
+	h.notifyAttention(sessionID, "question")
 }
 
 func (h *activeTurnHub) finish(sessionID string) {

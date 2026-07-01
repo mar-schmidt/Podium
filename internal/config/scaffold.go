@@ -44,7 +44,7 @@ func Scaffold(p Paths) (ScaffoldResult, error) {
 		res.CreatedHome = true
 	}
 
-	dirs := []string{p.Home, p.AgentsDir, p.ProjectsDir, p.SchedulesDir, p.ProfilesDir, p.LogsDir}
+	dirs := []string{p.Home, p.AgentsDir, p.ProjectsDir, p.SchedulesDir, p.ProfilesDir, p.LogsDir, p.PushDir}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return res, fmt.Errorf("create dir %s: %w", d, err)

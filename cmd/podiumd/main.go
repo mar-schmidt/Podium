@@ -21,6 +21,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
 	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
+	"github.com/mar-schmidt/Podium/internal/notify"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
 	"github.com/mar-schmidt/Podium/internal/skills"
@@ -170,6 +171,19 @@ func run() error {
 	defer scheduler.Stop()
 	log.Info("scheduler started", "dir", paths.SchedulesDir)
 
+	// Web Push: load (or first-time generate) the VAPID keypair and build the
+	// notification dispatcher. Failure here is non-fatal — the daemon still runs,
+	// just without out-of-app push (in-app toasts/red dots are unaffected).
+	var notifier *notify.Dispatcher
+	var vapidPublic string
+	if keys, err := notify.LoadOrCreateVAPIDKeys(paths.PushDir); err != nil {
+		log.Warn("web push disabled: vapid keys unavailable", "error", err)
+	} else {
+		vapidPublic = keys.Public
+		notifier = notify.NewDispatcher(log, notify.NewWebPushChannel(db, keys, "", log))
+		log.Info("web push enabled", "vapid_dir", paths.PushDir)
+	}
+
 	srv := server.New(server.Options{
 		Bind: cfg.Server.Bind,
 		Port: cfg.Server.Port,
@@ -177,10 +191,13 @@ func run() error {
 			Version: buildinfo.Version,
 			Commit:  buildinfo.Commit,
 		},
-		Core:      coreSvc,
-		Scheduler: scheduler,
-		Paths:     paths,
-		GitHub:    cfg.GitHub,
+		Core:           coreSvc,
+		Scheduler:      scheduler,
+		Paths:          paths,
+		GitHub:         cfg.GitHub,
+		Logger:         log,
+		Notifier:       notifier,
+		VAPIDPublicKey: vapidPublic,
 	})
 
 	// Serve until a termination signal arrives, then shut down gracefully.

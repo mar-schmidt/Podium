@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { applyUpdate, checkUpdate, createProfile, getHealth, hireAgent, listAgents, listProfiles } from "./lib/api";
+  import { live } from "./lib/live.svelte";
   import ProviderLogo from "./lib/ProviderLogo.svelte";
   import type { Agent, Health, PermissionMode, ProfileInfo, Provider, UpdateStatus } from "./lib/types";
   import Chat from "./pages/Chat.svelte";
@@ -79,11 +80,29 @@
   let profilePath = $state("");
   let profileSaving = $state(false);
 
+  // Notification opt-in state for the Web Push toggle.
+  let pushState = $state<"idle" | "enabling" | "enabled" | "denied" | "unsupported">("idle");
+
   onMount(async () => {
+    // Open the app-wide socket once, above any page, so attention signalling
+    // (toasts, red dots, nav badge) keeps working on every route. Wire toast /
+    // push taps to open the relevant chat session.
+    live.connect();
+    live.setNavigator((sessionId) => openChat({ sessionId }));
     await refreshHealth();
     await refreshAgents();
     await refreshUpdate();
   });
+
+  async function enablePush() {
+    pushState = "enabling";
+    try {
+      const result = await live.enablePush();
+      pushState = result;
+    } catch {
+      pushState = "unsupported";
+    }
+  }
 
   // Keep the daemon indicator and update status fresh independently of the
   // chat socket: health is the source of truth for "live", and we poll for new
@@ -300,6 +319,9 @@
             stroke-linejoin="round">{@html item.icon}</svg
           >
           {item.label}
+          {#if item.key === "chat" && live.attention.size > 0}
+            <span class="nav-badge" title="A session needs your attention">{live.attention.size}</span>
+          {/if}
         </button>
       {/each}
     </nav>
@@ -339,6 +361,27 @@
           </div>
         </div>
       {/if}
+      <button
+        class="push-toggle"
+        class:on={pushState === "enabled"}
+        disabled={pushState === "enabling" || pushState === "enabled" || pushState === "unsupported"}
+        title="Get desktop notifications when an agent needs you"
+        onclick={enablePush}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        </svg>
+        {#if pushState === "enabled"}
+          Notifications on
+        {:else if pushState === "enabling"}
+          Enabling…
+        {:else if pushState === "denied"}
+          Notifications blocked
+        {:else if pushState === "unsupported"}
+          Push unavailable
+        {:else}
+          Enable notifications
+        {/if}
+      </button>
       <button class="hire-btn" onclick={openHire}><span class="hire-plus">+</span> Hire agent</button>
     </div>
   </aside>
@@ -428,6 +471,40 @@
       </div>
     </div>
   {/if}
+
+  <!-- ============ TOASTS (global, top-right) ============ -->
+  <div class="toasts" aria-live="polite">
+    {#each live.toasts as t (t.id)}
+      <button
+        class="toast"
+        class:permission={t.kind === "permission"}
+        onclick={() => {
+          live.navigateToSession(t.sessionId);
+          live.dismissToast(t.id);
+        }}>
+        <span class="toast-dot"></span>
+        <span class="toast-body">
+          <span class="toast-title">{t.title}</span>
+          <span class="toast-sub">{t.body}</span>
+        </span>
+        <span
+          class="toast-x"
+          role="button"
+          tabindex="0"
+          aria-label="Dismiss"
+          onclick={(e) => {
+            e.stopPropagation();
+            live.dismissToast(t.id);
+          }}
+          onkeydown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.stopPropagation();
+              live.dismissToast(t.id);
+            }
+          }}>✕</span>
+      </button>
+    {/each}
+  </div>
 </div>
 
 <style>
@@ -499,6 +576,126 @@
   .nav-link.active {
     background: #e3f1ec;
     color: var(--teal-deep);
+  }
+
+  .nav-badge {
+    margin-left: auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: #d64528;
+    color: #fff;
+    font: 700 11px "JetBrains Mono", monospace;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 2px rgba(214, 69, 40, 0.2);
+  }
+
+  .push-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid var(--line-3);
+    background: var(--surface-3);
+    cursor: pointer;
+    padding: 9px 10px;
+    border-radius: 12px;
+    font: 600 12px "Hanken Grotesk";
+    color: var(--muted);
+  }
+
+  .push-toggle:hover:not(:disabled) {
+    background: #f6efe6;
+  }
+
+  .push-toggle.on {
+    border-color: #bfe0d6;
+    background: #e3f1ec;
+    color: var(--teal-deep);
+  }
+
+  .push-toggle:disabled {
+    cursor: default;
+    opacity: 0.85;
+  }
+
+  /* Global toast stack, top-right, above modals (z 40). */
+  .toasts {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: min(360px, 92vw);
+    pointer-events: none;
+  }
+
+  .toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 13px;
+    padding: 13px 14px;
+    box-shadow: 0 14px 34px -14px rgba(43, 37, 32, 0.4);
+    animation: popIn 0.18s ease;
+  }
+
+  .toast-dot {
+    flex: none;
+    margin-top: 4px;
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: var(--gold);
+    box-shadow: 0 0 0 3px rgba(154, 110, 30, 0.16);
+  }
+
+  .toast.permission .toast-dot {
+    background: #d64528;
+    box-shadow: 0 0 0 3px rgba(214, 69, 40, 0.16);
+  }
+
+  .toast-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .toast-title {
+    font: 700 13.5px "Hanken Grotesk";
+    color: var(--ink);
+  }
+
+  .toast-sub {
+    font: 400 12px/1.4 "Hanken Grotesk";
+    color: var(--muted);
+  }
+
+  .toast-x {
+    margin-left: auto;
+    flex: none;
+    color: var(--faint);
+    font-size: 12px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 6px;
+  }
+
+  .toast-x:hover {
+    background: #f2ebe1;
+    color: var(--muted);
   }
 
   .nav-foot {

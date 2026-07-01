@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
 	podiumgithub "github.com/mar-schmidt/Podium/internal/github"
+	"github.com/mar-schmidt/Podium/internal/notify"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 )
 
@@ -36,6 +38,11 @@ type Server struct {
 	input     *userInputBroker
 	turns     *activeTurnHub
 	paths     config.Paths
+	log       *slog.Logger
+	notifier  *notify.Dispatcher
+	// vapidPublic is the VAPID public key served to browsers so they can create
+	// a Web Push subscription bound to this daemon. Empty disables push.
+	vapidPublic string
 }
 
 // Options configures the server.
@@ -47,23 +54,47 @@ type Options struct {
 	Scheduler *schedule.Scheduler
 	Paths     config.Paths
 	GitHub    config.GitHub
+	Logger    *slog.Logger
+	// Notifier delivers out-of-app (Web Push / future native) attention
+	// notifications. Optional; nil disables out-of-app delivery.
+	Notifier *notify.Dispatcher
+	// VAPIDPublicKey is served at GET /api/push/vapid for browser subscription.
+	VAPIDPublicKey string
 }
 
 // New constructs a Server bound to the given address. It does not start
 // listening; call Start.
 func New(opts Options) *Server {
 	addr := net.JoinHostPort(opts.Bind, fmt.Sprintf("%d", opts.Port))
+	log := opts.Logger
+	if log == nil {
+		log = slog.Default()
+	}
 	s := &Server{
-		addr:      addr,
-		build:     opts.Build,
-		started:   time.Now(),
-		core:      opts.Core,
-		scheduler: opts.Scheduler,
-		github:    podiumgithub.New(podiumgithub.Options{Config: opts.GitHub, Home: opts.Paths.Home}),
-		broker:    newPermissionBroker(),
-		input:     newUserInputBroker(),
-		turns:     newActiveTurnHub(),
-		paths:     opts.Paths,
+		addr:        addr,
+		build:       opts.Build,
+		started:     time.Now(),
+		core:        opts.Core,
+		scheduler:   opts.Scheduler,
+		github:      podiumgithub.New(podiumgithub.Options{Config: opts.GitHub, Home: opts.Paths.Home}),
+		broker:      newPermissionBroker(),
+		input:       newUserInputBroker(),
+		turns:       newActiveTurnHub(),
+		paths:       opts.Paths,
+		log:         log,
+		notifier:    opts.Notifier,
+		vapidPublic: opts.VAPIDPublicKey,
+	}
+	// Let the turn hub raise out-of-app notifications when a turn blocks on the
+	// user, resolving the session's agent name for the notification text.
+	if opts.Core != nil {
+		s.turns.attachNotifier(opts.Notifier, func(ctx context.Context, sessionID string) (string, error) {
+			sess, err := opts.Core.GetSession(ctx, sessionID)
+			if err != nil {
+				return "", err
+			}
+			return sess.AgentName, nil
+		})
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -95,6 +126,9 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/update", s.handleUpdate)
 	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/push/vapid", s.handlePushVAPID)
+	mux.HandleFunc("/api/push/subscribe", s.handlePushSubscribe)
+	mux.HandleFunc("/api/push/unsubscribe", s.handlePushUnsubscribe)
 	mux.Handle("/", spaHandler())
 
 	s.httpSrv = &http.Server{

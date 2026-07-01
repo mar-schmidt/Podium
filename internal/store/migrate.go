@@ -178,6 +178,25 @@ var migrations = []migration{
 		sql: `ALTER TABLE sessions ADD COLUMN project_id TEXT NOT NULL DEFAULT '';
 		CREATE INDEX idx_sessions_project_id ON sessions(project_id);`,
 	},
+	{
+		version: 8,
+		name:    "push_subscriptions",
+		// Generic push-subscription registry. `kind` selects the delivery
+		// technology ('webpush' today; 'apns'/'fcm' later) and `payload` holds
+		// the kind-specific credentials as JSON, so native device tokens reuse
+		// this table without a schema change. `endpoint` is the natural identity
+		// (the webpush endpoint URL, or a native device token) and is unique so
+		// re-subscribing the same client upserts rather than duplicates.
+		sql: `CREATE TABLE push_subscriptions (
+			id         TEXT PRIMARY KEY,
+			kind       TEXT NOT NULL,
+			endpoint   TEXT NOT NULL UNIQUE,
+			payload    TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE INDEX idx_push_subscriptions_kind ON push_subscriptions(kind);`,
+	},
 }
 
 // migrate applies every migration whose version has not yet been recorded. Each

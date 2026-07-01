@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -82,8 +83,11 @@ func TestConnectedRepoContextIsSentToRoadmapSession(t *testing.T) {
 	if !strings.Contains(req.Message, "local source snapshot") || !strings.Contains(req.Message, root) {
 		t.Fatalf("request missing repo context:\n%s", req.Message)
 	}
-	if len(req.Settings.ExtraWorkspaceDirs) != 1 || req.Settings.ExtraWorkspaceDirs[0] != root {
-		t.Fatalf("extra workspace dirs = %#v, want %q", req.Settings.ExtraWorkspaceDirs, root)
+	// Every session gets the shared projects ledger dir; a roadmap session bound
+	// to a repo additionally gets its downloaded project snapshot.
+	wantDirs := []string{c.paths.ProjectsDir, root}
+	if !reflect.DeepEqual(req.Settings.ExtraWorkspaceDirs, wantDirs) {
+		t.Fatalf("extra workspace dirs = %#v, want %#v", req.Settings.ExtraWorkspaceDirs, wantDirs)
 	}
 	if _, err := c.AppendTurn(ctx, sess.ID, "Continue with repo context"); err != nil {
 		t.Fatalf("append second turn: %v", err)

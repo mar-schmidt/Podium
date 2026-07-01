@@ -74,7 +74,7 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 		Effort:             created.Effort,
 		PermissionMode:     created.PermissionMode,
 		WorkspaceDir:       c.AgentPaths(agent.Name).Workspace,
-		ExtraWorkspaceDirs: nonEmptyStrings(projectCtx.Root),
+		ExtraWorkspaceDirs: c.sessionExtraWorkspaceDirs(projectCtx),
 		Instructions:       payload.Bytes,
 	})
 	if err != nil {
@@ -219,7 +219,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 			if strings.TrimSpace(projectCtx.Prompt) != "" {
 				providerMessage = projectCtx.Prompt + "\n\nUser message:\n" + userMessage
 			}
-			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, providerMessage, opts, nonEmptyStrings(projectCtx.Root)))
+			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, providerMessage, opts, c.sessionExtraWorkspaceDirs(projectCtx)))
 			if err != nil {
 				runLog.Warn("turn failed", "stage", "dispatch", "provider", string(current.Provider), "error", err)
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
@@ -276,6 +276,15 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 		}
 	}()
 	return streamOut, nil
+}
+
+// sessionExtraWorkspaceDirs returns the directories exposed to a session's
+// provider process beyond its own workspace. The shared project ledger under
+// ~/.podium/projects/ is always included so agents can honor the base operating
+// rule to consult projects.yaml; a roadmap session additionally gets its bound
+// project's downloaded source snapshot (projectCtx.Root).
+func (c *Core) sessionExtraWorkspaceDirs(projectCtx projectExecutionContext) []string {
+	return nonEmptyStrings(c.paths.ProjectsDir, projectCtx.Root)
 }
 
 func (c *Core) turnRequest(sess store.Session, history []store.Message, userMessage string, opts TurnOptions, extraWorkspaceDirs []string) adapter.TurnRequest {

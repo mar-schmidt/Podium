@@ -309,6 +309,27 @@ func (s *Scheduler) run(ctx context.Context, name string, trigger store.RunTrigg
 	return finished, runErr
 }
 
+// Delete removes a schedule: it deletes the markdown file, resyncs so the cron
+// entry is unregistered (Sync drops jobs whose file is gone, R7.2a), and clears
+// the schedule's run history. The sessions those runs produced are preserved.
+func (s *Scheduler) Delete(ctx context.Context, name string) error {
+	path := s.pathFor(name)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("schedule %q not found", name)
+		}
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("delete schedule %q: %w", name, err)
+	}
+	s.Sync()
+	if err := s.store.DeleteScheduleRuns(ctx, name); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Scheduler) pathFor(name string) string {
 	return filepath.Join(s.dir, name+".md")
 }

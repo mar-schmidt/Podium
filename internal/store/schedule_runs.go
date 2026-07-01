@@ -88,6 +88,16 @@ func (s *Store) ListScheduleRuns(ctx context.Context, scheduleName string, limit
 	return runs, rows.Err()
 }
 
+// DeleteScheduleRuns removes all run-history rows for a schedule. The sessions
+// those runs produced are left intact; only the run linkage is dropped, which is
+// used when a schedule file is deleted.
+func (s *Store) DeleteScheduleRuns(ctx context.Context, scheduleName string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schedule_runs WHERE schedule_name = ?`, scheduleName); err != nil {
+		return fmt.Errorf("delete schedule runs for %q: %w", scheduleName, err)
+	}
+	return nil
+}
+
 const scheduleRunSelect = `SELECT id, schedule_name, COALESCE(session_id, ''), trigger, status, error,
 	started_at, COALESCE(finished_at, '') FROM schedule_runs`
 

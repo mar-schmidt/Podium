@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getSession, listProjects } from "../lib/api";
+  import { deleteSession, getSession, listProjects } from "../lib/api";
+  import ConfirmModal from "../lib/ConfirmModal.svelte";
   import {
     agentGradient,
     avatarStyle,
@@ -45,6 +46,11 @@
   let sessions = $state<Session[]>([]);
   let activeSession = $state<Session | null>(null);
   let projectName = $state<string>("");
+
+  // Session delete confirmation.
+  let pendingDelete = $state<Session | null>(null);
+  let deleteBusy = $state(false);
+  let deleteError = $state<string | null>(null);
   let messages = $state<Message[]>([]);
   let pendingAssistant = $state("");
   let pendingPermission = $state<PermissionRequest | null>(null);
@@ -272,6 +278,30 @@
     }
   }
 
+  async function confirmDeleteSession() {
+    if (!pendingDelete) return;
+    const id = pendingDelete.ID;
+    deleteBusy = true;
+    deleteError = null;
+    try {
+      await deleteSession(id);
+      sessions = sessions.filter((s) => s.ID !== id);
+      if (activeSession?.ID === id) {
+        activeSession = null;
+        messages = [];
+        projectName = "";
+        pendingAssistant = "";
+        pendingUserInput = null;
+      }
+      pendingDelete = null;
+      send({ type: "list" });
+    } catch (e) {
+      deleteError = e instanceof Error ? e.message : String(e);
+    } finally {
+      deleteBusy = false;
+    }
+  }
+
   function sendTurn(text = messageText.trim()) {
     if (!text) return;
     if (!activeSession && !selectedAgent) {
@@ -473,14 +503,19 @@
 
       <div class="sess-list">
         {#each filteredSessions as s (s.ID)}
-          <button class="sess-row" class:sel={activeSession?.ID === s.ID} onclick={() => loadHistory(s)}>
-            <span style={avatarStyle(agentGradient(s.AgentName), 32, 10, 13)}>{initial(s.AgentName)}</span>
-            <span class="sess-row-text">
-              <span class="sess-row-title">{s.Name || s.AgentName}</span>
-              <span class="sess-row-sub mono">{sessionSub(s)}</span>
-            </span>
-            <span style={originStyle(s.Origin)}>{originLabel(s.Origin)}</span>
-          </button>
+          <div class="sess-row-wrap">
+            <button class="sess-row" class:sel={activeSession?.ID === s.ID} onclick={() => loadHistory(s)}>
+              <span style={avatarStyle(agentGradient(s.AgentName), 32, 10, 13)}>{initial(s.AgentName)}</span>
+              <span class="sess-row-text">
+                <span class="sess-row-title">{s.Name || s.AgentName}</span>
+                <span class="sess-row-sub mono">{sessionSub(s)}</span>
+              </span>
+              <span style={originStyle(s.Origin)}>{originLabel(s.Origin)}</span>
+            </button>
+            <button class="sess-x" title="Delete session" aria-label="Delete session" onclick={() => (pendingDelete = s)}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            </button>
+          </div>
         {/each}
         {#if filteredSessions.length === 0}
           <p class="empty-note">No sessions yet. Pick an agent and say hello.</p>
@@ -739,6 +774,18 @@
   </div>
 {/if}
 
+{#if pendingDelete}
+  <ConfirmModal
+    title="Delete session"
+    message="This permanently removes {pendingDelete.Name || pendingDelete.AgentName} and its chat history. This cannot be undone."
+    confirmLabel="Delete session"
+    busy={deleteBusy}
+    error={deleteError}
+    onConfirm={confirmDeleteSession}
+    onCancel={() => (pendingDelete = null)}
+  />
+{/if}
+
 <style>
   .sess-col {
     width: 286px;
@@ -855,6 +902,10 @@
     padding: 0 12px 16px;
   }
 
+  .sess-row-wrap {
+    position: relative;
+  }
+
   .sess-row {
     display: flex;
     align-items: center;
@@ -867,6 +918,33 @@
     background: transparent;
     border: 1px solid transparent;
     text-align: left;
+  }
+
+  .sess-x {
+    position: absolute;
+    top: 5px;
+    right: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #b98b7c;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .sess-row-wrap:hover .sess-x {
+    opacity: 1;
+  }
+
+  .sess-x:hover {
+    background: #fbeeea;
+    color: #a23e22;
   }
 
   .sess-row:hover {

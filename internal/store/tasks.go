@@ -74,6 +74,24 @@ func (s *Store) UpdateTask(ctx context.Context, task Task) (Task, error) {
 	return s.GetTask(ctx, task.ID)
 }
 
+// DeleteTask removes a task by ID. Sessions started from the task are left
+// intact — their task_id simply becomes a dangling reference — so deleting a
+// task never destroys the durable record of work done.
+func (s *Store) DeleteTask(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete task %q: %w", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete task %q rows affected: %w", id, err)
+	}
+	if changed == 0 {
+		return fmt.Errorf("task %q: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // ListDueTasks returns backlog tasks with an assigned agent whose pickup time
 // has arrived (pickup_at <= cutoff), so the scheduler can start them
 // automatically.

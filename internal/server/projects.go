@@ -239,6 +239,12 @@ type taskDescribeRequest struct {
 	AssignedAgent string `json:"assigned_agent,omitempty"`
 }
 
+// taskArchiveDoneRequest optionally scopes an archive-done operation to a single
+// project. An empty ProjectID archives every done task.
+type taskArchiveDoneRequest struct {
+	ProjectID string `json:"project_id,omitempty"`
+}
+
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if s.core == nil {
 		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
@@ -310,6 +316,19 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if id == "archive-done" && action == "" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req taskArchiveDoneRequest
+		// An empty body is valid: archive every done task.
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		result, err := s.core.ArchiveDoneTasks(r.Context(), strings.TrimSpace(req.ProjectID))
+		writeJSON(w, result, err)
+		return
+	}
+
 	if action == "start" {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -378,6 +397,12 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		applyTaskUpdate(&task, req)
 		updated, err := s.core.UpdateTask(r.Context(), task)
 		writeJSON(w, updated, err)
+	case http.MethodDelete:
+		if err := s.core.DeleteTask(r.Context(), id); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, map[string]string{"deleted": id}, nil)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

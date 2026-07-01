@@ -111,6 +111,16 @@ func (c *Core) GetSession(ctx context.Context, id string) (store.Session, error)
 	return c.store.GetSession(ctx, id)
 }
 
+// DeleteSession removes a durable session and its message history. Like agent
+// deletion, it does not explicitly stop a running provider adapter — the handle
+// simply becomes unreferenced — so an in-flight turn should be avoided.
+func (c *Core) DeleteSession(ctx context.Context, id string) error {
+	if _, err := c.store.GetSession(ctx, id); err != nil {
+		return err
+	}
+	return c.store.DeleteSession(ctx, id)
+}
+
 // TurnOptions configures one live adapter turn.
 type TurnOptions struct {
 	PermissionTurnID string

@@ -51,6 +51,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newStatusCmd(&addr))
 	root.AddCommand(newAgentsCmd(&addr))
 	root.AddCommand(newChatCmd(&addr))
+	root.AddCommand(newSessionsCmd(&addr))
 	root.AddCommand(newSchedulesCmd(&addr))
 	root.AddCommand(newProjectsCmd(&addr))
 	root.AddCommand(newTasksCmd(&addr))
@@ -346,6 +347,35 @@ func newTasksCmd(addr *string) *cobra.Command {
 			return nil
 		},
 	})
+	cmd.AddCommand(newTasksDeleteCmd(addr))
+	return cmd
+}
+
+func newTasksDeleteCmd(addr *string) *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:     "delete <id>",
+		Short:   "Delete a roadmap task",
+		Long:    "Removes a roadmap task. Any session started from the task is preserved. A task that is in progress must be moved out of in_progress first.",
+		Example: "  podium tasks delete <id>",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := args[0]
+			if !confirmDelete(os.Stdin, os.Stderr, fmt.Sprintf("Delete task %s? Its session (if any) is kept.", id), yes) {
+				return nil
+			}
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteTask(cmd.Context(), id); err != nil {
+				return err
+			}
+			fmt.Printf("deleted task %s\n", id)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
 	return cmd
 }
 
@@ -586,6 +616,22 @@ func confirmAgentDeletion(in io.Reader, out io.Writer, name string) (string, boo
 	return confirmation, true
 }
 
+// confirmDelete asks a simple y/N question before a destructive action. It is
+// the CLI analogue of the UI's confirmation modal. Passing yes skips the prompt.
+func confirmDelete(in io.Reader, out io.Writer, prompt string, yes bool) bool {
+	if yes {
+		return true
+	}
+	fmt.Fprintf(out, "%s [y/N] ", prompt)
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer == "y" || answer == "yes" {
+		return true
+	}
+	fmt.Fprintln(out, "aborted")
+	return false
+}
+
 func newChatCmd(addr *string) *cobra.Command {
 	var agentName, sessionID string
 	cmd := &cobra.Command{
@@ -675,6 +721,76 @@ func newChatCmd(addr *string) *cobra.Command {
 	return cmd
 }
 
+func newSessionsCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "sessions",
+		Short:   "Inspect and delete chat sessions",
+		Long:    "Durable sessions are the chat threads Podium keeps for each agent, whether started from the web UI, the CLI, a schedule, or a roadmap task.",
+		Example: "  podium sessions list\n  podium sessions delete <id>",
+	}
+	cmd.AddCommand(newSessionsListCmd(addr))
+	cmd.AddCommand(newSessionsDeleteCmd(addr))
+	return cmd
+}
+
+func newSessionsListCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Short:   "List durable sessions",
+		Example: "  podium sessions list",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			sessions, err := c.ListSessions(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if len(sessions) == 0 {
+				fmt.Println("no sessions yet")
+				return nil
+			}
+			for _, s := range sessions {
+				name := s.Name
+				if name == "" {
+					name = "-"
+				}
+				fmt.Printf("%s\tagent=%s\torigin=%s\t%s\n", s.ID, s.AgentName, s.Origin, name)
+			}
+			return nil
+		},
+	}
+}
+
+func newSessionsDeleteCmd(addr *string) *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:     "delete <id>",
+		Short:   "Delete a session and its chat history",
+		Long:    "Permanently removes a session and its message history. This cannot be undone.",
+		Example: "  podium sessions delete <id>",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := args[0]
+			if !confirmDelete(os.Stdin, os.Stderr, fmt.Sprintf("Delete session %s and its chat history?", id), yes) {
+				return nil
+			}
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteSession(cmd.Context(), id); err != nil {
+				return err
+			}
+			fmt.Printf("deleted session %s\n", id)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
+	return cmd
+}
+
 func newSchedulesCmd(addr *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "schedules",
@@ -685,6 +801,35 @@ func newSchedulesCmd(addr *string) *cobra.Command {
 	}
 	cmd.AddCommand(newSchedulesListCmd(addr))
 	cmd.AddCommand(newSchedulesRunCmd(addr))
+	cmd.AddCommand(newSchedulesDeleteCmd(addr))
+	return cmd
+}
+
+func newSchedulesDeleteCmd(addr *string) *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:     "delete <name>",
+		Short:   "Delete a schedule",
+		Long:    "Deletes a schedule's markdown file and its run history through podiumd. Sessions produced by past runs are preserved.",
+		Example: "  podium schedules delete morning-calendar",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if !confirmDelete(os.Stdin, os.Stderr, fmt.Sprintf("Delete schedule %q and its run history?", name), yes) {
+				return nil
+			}
+			c, err := daemonClient(*addr)
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteSchedule(cmd.Context(), name); err != nil {
+				return err
+			}
+			fmt.Printf("deleted schedule %s\n", name)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
 	return cmd
 }
 

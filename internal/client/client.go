@@ -164,6 +164,20 @@ func (c *Client) CreateSession(ctx context.Context, req SessionCreateRequest) (s
 	return session, nil
 }
 
+// ListSessions fetches all durable sessions from the daemon.
+func (c *Client) ListSessions(ctx context.Context) ([]store.Session, error) {
+	var sessions []store.Session
+	if err := c.getJSON(ctx, "/api/sessions", &sessions); err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
+// DeleteSession removes a durable session and its history through the daemon.
+func (c *Client) DeleteSession(ctx context.Context, id string) error {
+	return c.deleteJSON(ctx, "/api/sessions/"+urlPathEscape(id), nil, nil)
+}
+
 // ChatRequest sends one message, either to an existing session or to a new
 // session created from AgentName.
 type ChatRequest struct {
@@ -277,6 +291,11 @@ func (c *Client) RunSchedule(ctx context.Context, name string) (store.ScheduleRu
 	return run, nil
 }
 
+// DeleteSchedule removes a schedule file and its run history through the daemon.
+func (c *Client) DeleteSchedule(ctx context.Context, name string) error {
+	return c.deleteJSON(ctx, "/api/schedules/"+urlPathEscape(name), nil, nil)
+}
+
 // ListProjects fetches the shared project ledger from the daemon.
 func (c *Client) ListProjects(ctx context.Context) ([]projects.Project, error) {
 	var list []projects.Project
@@ -293,6 +312,29 @@ func (c *Client) ListTasks(ctx context.Context) ([]store.Task, error) {
 		return nil, err
 	}
 	return tasks, nil
+}
+
+// DeleteTask removes a roadmap task through the daemon. Sessions started from the
+// task are preserved.
+func (c *Client) DeleteTask(ctx context.Context, id string) error {
+	return c.deleteJSON(ctx, "/api/tasks/"+urlPathEscape(id), nil, nil)
+}
+
+// ArchiveDoneResult is the POST /api/tasks/archive-done response.
+type ArchiveDoneResult struct {
+	ArchivePath      string `json:"archive_path,omitempty"`
+	ArchivedTasks    int    `json:"archived_tasks"`
+	ArchivedSessions int    `json:"archived_sessions"`
+}
+
+// ArchiveDoneTasks archives every done task (and its sessions) to disk and
+// removes them from the active app through the daemon.
+func (c *Client) ArchiveDoneTasks(ctx context.Context) (ArchiveDoneResult, error) {
+	var result ArchiveDoneResult
+	if err := c.postJSON(ctx, "/api/tasks/archive-done", map[string]string{}, &result); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // UpdateApplyRequest starts an update through the daemon.

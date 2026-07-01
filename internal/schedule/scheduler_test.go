@@ -131,3 +131,50 @@ func TestRunNowFailsForMissingSchedule(t *testing.T) {
 		t.Fatal("expected error for missing schedule, got nil")
 	}
 }
+
+func TestDeleteRemovesFileRegistrationAndRuns(t *testing.T) {
+	ctx := context.Background()
+	s, c, paths, cleanup := newTestScheduler(t)
+	defer cleanup()
+
+	writeSchedule(t, paths.SchedulesDir, "morning.md", `---
+agent: jared
+cron: "0 7 * * *"
+run_permission: preapproved
+enabled: true
+---
+Summarise the calendar.
+`)
+
+	// A run creates history we expect Delete to clear.
+	if _, err := s.RunNow(ctx, "morning"); err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+
+	if err := s.Delete(ctx, "morning"); err != nil {
+		t.Fatalf("delete schedule: %v", err)
+	}
+	if _, err := os.Stat(paths.SchedulesDir + "/morning.md"); !os.IsNotExist(err) {
+		t.Fatalf("schedule file should be gone: err = %v", err)
+	}
+	statuses, err := s.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, st := range statuses {
+		if st.Name == "morning" {
+			t.Fatalf("deleted schedule should not be listed: %+v", st)
+		}
+	}
+	runs, err := c.Store().ListScheduleRuns(ctx, "morning", 10)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("run history should be cleared, got %d", len(runs))
+	}
+
+	if err := s.Delete(ctx, "ghost"); err == nil {
+		t.Fatal("expected error deleting a missing schedule")
+	}
+}

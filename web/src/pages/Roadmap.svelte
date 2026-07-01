@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    archiveDoneTasks,
     createProject,
     createTask,
+    deleteTask,
     describeTask,
     listProjects,
     listTasks,
@@ -12,6 +14,7 @@
   } from "../lib/api";
   import { agentGradient, avatarStyle, initial, projectColor } from "../lib/theme";
   import type { Agent, Project, Task, TaskStatus } from "../lib/types";
+  import ConfirmModal from "../lib/ConfirmModal.svelte";
 
   interface ChatTarget {
     sessionId?: string;
@@ -42,6 +45,16 @@
   let activeColumn = $state<TaskStatus>("backlog");
   let taskHasSession = $state<Record<string, boolean>>({});
   let busyDescribe = $state("");
+
+  // Task delete confirmation.
+  let pendingDelete = $state<Task | null>(null);
+  let deleteBusy = $state(false);
+  let deleteError = $state<string | null>(null);
+
+  // Archive-done confirmation.
+  let archiveOpen = $state(false);
+  let archiveBusy = $state(false);
+  let archiveError = $state<string | null>(null);
 
   // New-task modal.
   let creating = $state(false);
@@ -108,6 +121,37 @@
       await load();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function confirmDeleteTask() {
+    if (!pendingDelete) return;
+    const id = pendingDelete.ID;
+    deleteBusy = true;
+    deleteError = null;
+    try {
+      await deleteTask(id);
+      if (openCard?.ID === id) openCard = null;
+      pendingDelete = null;
+      await load();
+    } catch (e) {
+      deleteError = e instanceof Error ? e.message : String(e);
+    } finally {
+      deleteBusy = false;
+    }
+  }
+
+  async function confirmArchiveDone() {
+    archiveBusy = true;
+    archiveError = null;
+    try {
+      await archiveDoneTasks();
+      archiveOpen = false;
+      await load();
+    } catch (e) {
+      archiveError = e instanceof Error ? e.message : String(e);
+    } finally {
+      archiveBusy = false;
     }
   }
 
@@ -346,6 +390,10 @@
           <span class="col-dot" style="background:{isStart ? '#2E8E78' : col.dot}"></span>
           <span class="col-label" style="color:{isStart ? '#2A7A68' : '#2B2520'}">{isStart ? "Start" : col.label}</span>
           <span class="col-count mono">{tasksFor(col.key).length}</span>
+          {#if col.key === "done" && tasksFor("done").length > 0}
+            <span class="spacer"></span>
+            <button class="col-archive" onclick={() => (archiveOpen = true)}>Archive</button>
+          {/if}
         </div>
         <div class="col-zone" class:hot={isStart} class:donecol={col.key === "done"}>
           {#each tasksFor(col.key) as task (task.ID)}
@@ -360,6 +408,11 @@
               onclick={() => (openCard = task)}
               onkeydown={(e) => { if (e.key === "Enter") openCard = task; }}
             >
+              {#if task.Status !== "in_progress"}
+                <button class="tc-x" title="Delete task" aria-label="Delete task" onclick={(e) => { e.stopPropagation(); pendingDelete = task; }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              {/if}
               <div class="tc-proj">
                 <span class="proj-dot" style="background:{projectColor(task.ProjectID)}"></span>
                 <span class="tc-proj-name mono">{projectName(task.ProjectID)}</span>
@@ -433,9 +486,36 @@
         {#if openCard.Status === "done"}
           <button class="cm-reopen" onclick={() => move(openCard!, "review")}>Reopen task</button>
         {/if}
+        {#if openCard.Status !== "in_progress"}
+          <button class="cm-delete" onclick={() => (pendingDelete = openCard)}>Delete task</button>
+        {/if}
       </div>
     </div>
   </div>
+{/if}
+
+{#if pendingDelete}
+  <ConfirmModal
+    title="Delete task"
+    message={hasSession(pendingDelete) ? "This removes the task from the board. Its session and chat history are kept." : "This permanently removes this task from the board. This cannot be undone."}
+    confirmLabel="Delete task"
+    busy={deleteBusy}
+    error={deleteError}
+    onConfirm={confirmDeleteTask}
+    onCancel={() => (pendingDelete = null)}
+  />
+{/if}
+
+{#if archiveOpen}
+  <ConfirmModal
+    title="Archive done tasks"
+    message="Archive {tasksFor('done').length} done task(s)? Each task, its session, and full message history are saved to disk (~/.podium/archive/tasks), then removed from the board and the sessions list."
+    confirmLabel="Archive"
+    busy={archiveBusy}
+    error={archiveError}
+    onConfirm={confirmArchiveDone}
+    onCancel={() => (archiveOpen = false)}
+  />
 {/if}
 
 <!-- ===== New task modal ===== -->
@@ -688,6 +768,68 @@
     padding: 7px;
     font: 600 12px "Hanken Grotesk";
     cursor: pointer;
+  }
+
+  .task-card {
+    position: relative;
+  }
+
+  .tc-x {
+    position: absolute;
+    top: 7px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #b98b7c;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .task-card:hover .tc-x {
+    opacity: 1;
+  }
+
+  .tc-x:hover {
+    background: #fbeeea;
+    color: #a23e22;
+  }
+
+  .col-archive {
+    border: 1px solid var(--field-line);
+    border-radius: 8px;
+    padding: 5px 11px;
+    background: #fff;
+    color: var(--muted);
+    font: 600 11.5px "Hanken Grotesk";
+    cursor: pointer;
+  }
+
+  .col-archive:hover {
+    border-color: #d9c7ba;
+    color: #6f5b45;
+  }
+
+  .cm-delete {
+    width: 100%;
+    margin-top: 9px;
+    border: 1px solid #e7c3b5;
+    border-radius: 11px;
+    padding: 10px;
+    background: #fff;
+    color: #a23e22;
+    font: 600 13.5px "Hanken Grotesk";
+    cursor: pointer;
+  }
+
+  .cm-delete:hover {
+    background: #fbeeea;
   }
 
   /* card modal */

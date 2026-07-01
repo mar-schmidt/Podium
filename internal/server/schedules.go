@@ -68,6 +68,16 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch action {
+	case "":
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := s.scheduler.Delete(r.Context(), name); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, map[string]string{"deleted": name}, nil)
 	case "run":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

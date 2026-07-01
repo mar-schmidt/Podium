@@ -29,6 +29,7 @@ type Paths struct {
 	SchedulesDir string // schedules/
 	ProfilesDir  string // profiles/
 	LogsDir      string // logs/
+	ArchiveDir   string // archive/ (archived tasks and other exports)
 }
 
 // ResolveHome returns the absolute storage root. Precedence:
@@ -66,6 +67,7 @@ func NewPaths(home string) Paths {
 		SchedulesDir: filepath.Join(home, "schedules"),
 		ProfilesDir:  filepath.Join(home, "profiles"),
 		LogsDir:      filepath.Join(home, "logs"),
+		ArchiveDir:   filepath.Join(home, "archive"),
 	}
 }
 

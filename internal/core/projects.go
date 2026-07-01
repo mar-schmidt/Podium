@@ -2,9 +2,12 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/store"
@@ -212,6 +215,151 @@ func (c *Core) UpdateTask(ctx context.Context, task store.Task) (store.Task, err
 		return store.Task{}, err
 	}
 	return updated, nil
+}
+
+// DeleteTask removes a roadmap task. A task that is currently in progress cannot
+// be deleted — it must be moved out of in_progress first — which keeps the CLI
+// and API consistent with the hidden delete affordance in the UI. Any sessions
+// started from the task are preserved; only the task record is removed.
+func (c *Core) DeleteTask(ctx context.Context, id string) error {
+	task, err := c.store.GetTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	if task.Status == store.TaskInProgress {
+		return fmt.Errorf("task %q is in progress; move it out of in-progress before deleting", id)
+	}
+	if err := c.store.DeleteTask(ctx, id); err != nil {
+		return err
+	}
+	return c.syncProjectRoadmaps(ctx)
+}
+
+// ArchiveDoneTasksResult reports what an archive-done operation wrote and removed.
+type ArchiveDoneTasksResult struct {
+	ArchivePath      string `json:"archive_path,omitempty"`
+	ArchivedTasks    int    `json:"archived_tasks"`
+	ArchivedSessions int    `json:"archived_sessions"`
+}
+
+// ArchiveDoneTasks archives every done task (optionally scoped to one project)
+// together with its sessions and full message history to a timestamped folder on
+// disk, then removes both the tasks and their sessions from the active app. This
+// mirrors how deleting an agent archives its sessions before removing them.
+func (c *Core) ArchiveDoneTasks(ctx context.Context, projectID string) (ArchiveDoneTasksResult, error) {
+	tasks, err := c.store.ListTasks(ctx)
+	if err != nil {
+		return ArchiveDoneTasksResult{}, err
+	}
+	var done []store.Task
+	for _, task := range tasks {
+		if task.Status != store.TaskDone {
+			continue
+		}
+		if projectID != "" && task.ProjectID != projectID {
+			continue
+		}
+		done = append(done, task)
+	}
+	if len(done) == 0 {
+		return ArchiveDoneTasksResult{}, nil
+	}
+	archivePath, sessionCount, err := c.archiveTasks(ctx, done, time.Now().UTC())
+	if err != nil {
+		return ArchiveDoneTasksResult{}, err
+	}
+	for _, task := range done {
+		if err := c.store.DeleteSessionsByTask(ctx, task.ID); err != nil {
+			return ArchiveDoneTasksResult{}, err
+		}
+		if err := c.store.DeleteTask(ctx, task.ID); err != nil {
+			return ArchiveDoneTasksResult{}, err
+		}
+	}
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return ArchiveDoneTasksResult{}, err
+	}
+	return ArchiveDoneTasksResult{
+		ArchivePath:      archivePath,
+		ArchivedTasks:    len(done),
+		ArchivedSessions: sessionCount,
+	}, nil
+}
+
+type taskArchive struct {
+	ExportedAt string               `json:"exported_at"`
+	Task       store.Task           `json:"task"`
+	Sessions   []taskArchiveSession `json:"sessions"`
+}
+
+type taskArchiveSession struct {
+	Session  archivedSession `json:"session"`
+	Messages []store.Message `json:"messages"`
+}
+
+// archiveTasks writes one JSON file per task (task + its sessions + messages)
+// into <ArchiveDir>/tasks/<timestamp>/, committing the batch atomically via a
+// .tmp-* directory rename. It returns the final directory and the total number
+// of sessions archived.
+func (c *Core) archiveTasks(ctx context.Context, tasks []store.Task, archivedAt time.Time) (string, int, error) {
+	archiveRoot := filepath.Join(c.paths.ArchiveDir, "tasks")
+	dirName := archivedAt.Format("20060102T150405.000000000Z")
+	tmpDir := filepath.Join(archiveRoot, ".tmp-"+dirName)
+	finalDir := filepath.Join(archiveRoot, dirName)
+
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		return "", 0, fmt.Errorf("create task archive dir: %w", err)
+	}
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+
+	exportedAt := archivedAt.Format(time.RFC3339Nano)
+	sessionCount := 0
+	for _, task := range tasks {
+		sessions, err := c.store.ListSessionsByTask(ctx, task.ID)
+		if err != nil {
+			return "", 0, err
+		}
+		archivedSessions := make([]taskArchiveSession, 0, len(sessions))
+		for _, sess := range sessions {
+			messages, err := c.store.ListMessages(ctx, sess.ID)
+			if err != nil {
+				return "", 0, err
+			}
+			archivedSessions = append(archivedSessions, taskArchiveSession{
+				Session:  archiveSession(sess),
+				Messages: messages,
+			})
+		}
+		sessionCount += len(sessions)
+		payload := taskArchive{
+			ExportedAt: exportedAt,
+			Task:       task,
+			Sessions:   archivedSessions,
+		}
+		raw, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return "", 0, fmt.Errorf("encode task archive %q: %w", task.ID, err)
+		}
+		raw = append(raw, '\n')
+		if err := os.WriteFile(filepath.Join(tmpDir, archiveTaskFilename(task)), raw, 0o600); err != nil {
+			return "", 0, fmt.Errorf("write task archive %q: %w", task.ID, err)
+		}
+	}
+	if err := os.Rename(tmpDir, finalDir); err != nil {
+		return "", 0, fmt.Errorf("finalize task archive: %w", err)
+	}
+	removeTmp = false
+	return finalDir, sessionCount, nil
+}
+
+func archiveTaskFilename(task store.Task) string {
+	stamp := firstNonEmpty(task.UpdatedAt, task.CreatedAt, "unknown-time")
+	return sanitizeArchiveName(stamp) + "_" + sanitizeArchiveName(task.ID) + ".json"
 }
 
 // MoveRoadmapSessionTaskForQuestion moves an in-progress roadmap task to review

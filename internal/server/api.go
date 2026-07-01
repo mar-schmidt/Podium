@@ -251,13 +251,23 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "core unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	if id == "" {
 		http.Error(w, "session id is required", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		// handled below
+	case http.MethodDelete:
+		if err := s.core.DeleteSession(r.Context(), id); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, map[string]string{"deleted": id}, nil)
+		return
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	session, err := s.core.GetSession(r.Context(), id)

@@ -173,12 +173,20 @@ export async function getSession(id: string): Promise<SessionDetail> {
   return asJSON(await fetch(`/api/sessions/${id}`));
 }
 
+export async function deleteSession(id: string): Promise<void> {
+  await asJSON(await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}
+
 export async function listSchedules(): Promise<ScheduleStatus[]> {
   return (await asJSON<ScheduleStatus[] | null>(await fetch("/api/schedules"))) ?? [];
 }
 
 export async function runSchedule(name: string): Promise<unknown> {
   return asJSON(await fetch(`/api/schedules/${name}/run`, { method: "POST" }));
+}
+
+export async function deleteSchedule(name: string): Promise<void> {
+  await asJSON(await fetch(`/api/schedules/${encodeURIComponent(name)}`, { method: "DELETE" }));
 }
 
 export interface NewScheduleRequest {
@@ -381,6 +389,26 @@ export async function updateTask(id: string, patch: TaskPatch): Promise<Task> {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export async function deleteTask(id: string): Promise<void> {
+  await asJSON(await fetch(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}
+
+export interface ArchiveDoneResult {
+  archive_path?: string;
+  archived_tasks: number;
+  archived_sessions: number;
+}
+
+export async function archiveDoneTasks(): Promise<ArchiveDoneResult> {
+  return asJSON(
+    await fetch("/api/tasks/archive-done", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
     }),
   );
 }

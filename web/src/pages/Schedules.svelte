@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { createSchedule, listSchedules, runSchedule } from "../lib/api";
+  import { createSchedule, deleteSchedule, listSchedules, runSchedule } from "../lib/api";
   import { agentGradient, avatarStyle, initial, modeChip } from "../lib/theme";
   import type { Agent, RunStatus, ScheduleRun, ScheduleStatus } from "../lib/types";
+  import ConfirmModal from "../lib/ConfirmModal.svelte";
 
   interface ChatTarget {
     sessionId?: string;
@@ -19,6 +20,11 @@
   let error = $state<string | null>(null);
   let busy = $state<string>("");
   let hoverRun = $state<string>("");
+
+  // Delete confirmation.
+  let pendingDelete = $state<ScheduleStatus | null>(null);
+  let deleteBusy = $state(false);
+  let deleteError = $state<string | null>(null);
 
   // New-schedule modal.
   let creating = $state(false);
@@ -124,6 +130,21 @@
     }
   }
 
+  async function confirmDeleteSchedule() {
+    if (!pendingDelete) return;
+    deleteBusy = true;
+    deleteError = null;
+    try {
+      await deleteSchedule(pendingDelete.name);
+      pendingDelete = null;
+      await load();
+    } catch (e) {
+      deleteError = e instanceof Error ? e.message : String(e);
+    } finally {
+      deleteBusy = false;
+    }
+  }
+
   function timing(s: ScheduleStatus) {
     return s.every ? `every ${s.every}` : s.cron;
   }
@@ -192,6 +213,9 @@
             <span class="sched-next">next {nextLabel(s)}</span>
             <button class="sched-run" disabled={busy === s.name} onclick={() => runNow(s.name)}>{busy === s.name ? "Running…" : "Run now"}</button>
           {/if}
+          <button class="sched-x" title="Delete schedule" aria-label="Delete schedule" onclick={() => (pendingDelete = s)}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
         </div>
 
         {#if s.parse_error}
@@ -298,6 +322,18 @@
   </div>
 {/if}
 
+{#if pendingDelete}
+  <ConfirmModal
+    title="Delete {pendingDelete.name}"
+    message="This deletes the schedule file and its run history. Sessions produced by past runs are kept."
+    confirmLabel="Delete schedule"
+    busy={deleteBusy}
+    error={deleteError}
+    onConfirm={confirmDeleteSchedule}
+    onCancel={() => (pendingDelete = null)}
+  />
+{/if}
+
 <style>
   .ns-modal {
     width: 560px;
@@ -391,6 +427,24 @@
     color: var(--teal-deep);
     font: 600 12.5px "Hanken Grotesk";
     cursor: pointer;
+  }
+
+  .sched-x {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #e7c3b5;
+    border-radius: 9px;
+    background: #fff;
+    color: #a23e22;
+    cursor: pointer;
+  }
+
+  .sched-x:hover {
+    background: #fbeeea;
   }
 
   .sched-fm {

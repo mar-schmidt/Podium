@@ -309,6 +309,33 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 	return messages, rows.Err()
 }
 
+// DeleteSession removes a single session. Its message history is removed by the
+// messages.session_id ON DELETE CASCADE foreign key.
+func (s *Store) DeleteSession(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete session %q: %w", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete session %q rows affected: %w", id, err)
+	}
+	if changed == 0 {
+		return fmt.Errorf("session %q: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// DeleteSessionsByTask removes every session started from a roadmap task.
+// Message history is removed by the messages.session_id ON DELETE CASCADE
+// foreign key.
+func (s *Store) DeleteSessionsByTask(ctx context.Context, taskID string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE task_id = ?`, taskID); err != nil {
+		return fmt.Errorf("delete sessions for task %q: %w", taskID, err)
+	}
+	return nil
+}
+
 // DeleteSessionsByAgent removes all sessions for one agent. Message history is
 // removed by the messages.session_id ON DELETE CASCADE foreign key.
 func (s *Store) DeleteSessionsByAgent(ctx context.Context, agentName string) error {

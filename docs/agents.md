@@ -41,3 +41,10 @@ The delivery artifact depends on the provider:
 Claude wiring landed in Phase 2 and Codex wiring landed in Phase 5. The
 workspace artifacts are generated and disposable; users edit only the canonical
 base, per-agent, and `SOUL.md` sources.
+
+The Podium-owned base `AGENTS.md` also tells agents to pause before risky,
+broad, destructive, security-sensitive, or architecturally comprehensive code
+implementation. In those cases, agents write a Markdown plan under the active
+project's `$PODIUM_HOME/projects/<project>/plans/` directory (defaulting to
+`~/.podium/projects/<project>/plans/`) and ask the user to approve it before
+making code changes.

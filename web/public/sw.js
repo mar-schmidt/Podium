@@ -34,19 +34,29 @@ async function handlePush(event) {
     return;
   }
 
+  const actions = data.kind === "permission" && data.approval?.request_id
+    ? [{ action: "approve", title: "Approve" }]
+    : [];
+
   await self.registration.showNotification(data.title || "Podium", {
     body: data.body || "",
     tag: data.session_id || "podium",
     renotify: true,
     icon: "/favicon.svg",
     badge: "/favicon.svg",
+    actions,
     data,
   });
 }
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  event.waitUntil(focusSession(event.notification.data || {}));
+  const data = event.notification.data || {};
+  if (event.action === "approve") {
+    event.waitUntil(approvePermission(data));
+    return;
+  }
+  event.waitUntil(focusSession(data));
 });
 
 async function focusSession(data) {
@@ -61,5 +71,24 @@ async function focusSession(data) {
   }
   if (self.clients.openWindow) {
     await self.clients.openWindow("/");
+  }
+}
+
+async function approvePermission(data) {
+  const approval = data.approval || {};
+  if (!approval.request_id) {
+    await focusSession(data);
+    return;
+  }
+  const res = await fetch(`/api/permission-decisions/${encodeURIComponent(approval.request_id)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      behavior: "allow",
+      updatedInput: approval.input || {},
+    }),
+  });
+  if (!res.ok) {
+    await focusSession(data);
   }
 }

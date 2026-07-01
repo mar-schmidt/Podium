@@ -50,6 +50,24 @@ snapshot lives under `~/.podium/projects/<id>/repo/`. Treat that `repo/`
 directory as the local codebase for inspection, but do **not** assume it is a Git
 checkout: there may be no `.git`, no remote, and no branch/push/PR capability.
 
+## Risky or comprehensive implementation work
+
+When the user asks you to implement code and you determine the work is risky,
+broad, destructive, security-sensitive, or architecturally comprehensive, pause
+before making code changes and create an implementation plan for user approval.
+Non-mutating exploration is allowed when it is needed to make the plan accurate.
+
+Write the plan as Markdown in the active project's `plans/` directory:
+`$PODIUM_HOME/projects/<project>/plans/`, which defaults to
+`~/.podium/projects/<project>/plans/`. Create that directory if it does not
+exist. Use a sortable, collision-resistant filename:
+`YYYYMMDD-HHMM-<short-topic>.md`.
+
+The plan must include the goal, why the work is risky or comprehensive, intended
+files or subsystems, implementation approach, tests and verification, rollback
+or recovery notes, and any open questions. After writing the file, ask the user
+to approve the plan before proceeding with implementation.
+
 ## Workspace
 
 Your working directory is your own `workspace/` — agent-local scratch space. Use

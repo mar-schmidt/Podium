@@ -101,6 +101,7 @@ func handleMCPRequest(ctx context.Context, addr, turnID string, timeout time.Dur
 						"properties": map[string]any{
 							"tool_name":   map[string]any{"type": "string"},
 							"tool_use_id": map[string]any{"type": "string"},
+							"description": map[string]any{"type": "string"},
 							"input":       map[string]any{"type": "object"},
 						},
 					},
@@ -147,8 +148,14 @@ func forwardPermission(ctx context.Context, addr, turnID string, timeout time.Du
 	if raw := args["tool_use_id"]; len(raw) > 0 {
 		_ = json.Unmarshal(raw, &req.ToolUseID)
 	}
+	if raw := args["description"]; len(raw) > 0 {
+		_ = json.Unmarshal(raw, &req.Description)
+	}
 	if raw := args["input"]; len(raw) > 0 {
 		req.Input = raw
+	}
+	if req.Description == "" {
+		req.Description = permissionInputDescription(req.Input)
 	}
 	body, _ := json.Marshal(req)
 	requestCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
@@ -175,4 +182,18 @@ func forwardPermission(ctx context.Context, addr, turnID string, timeout time.Du
 		decision.Behavior = "deny"
 	}
 	return decision, nil
+}
+
+func permissionInputDescription(input json.RawMessage) string {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return ""
+	}
+	raw := fields["description"]
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+	var desc string
+	_ = json.Unmarshal(raw, &desc)
+	return desc
 }

@@ -11,6 +11,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 )
 
@@ -23,6 +24,14 @@ type Notification struct {
 	Title     string
 	Body      string
 	Kind      string // "permission" | "question"
+	Approval  *ApprovalAction
+}
+
+// ApprovalAction is the minimal data a trusted same-origin client needs to
+// allow a pending permission request from an OS notification action.
+type ApprovalAction struct {
+	RequestID string          `json:"request_id"`
+	Input     json.RawMessage `json:"input"`
 }
 
 // Channel is one delivery technology. Implementations are responsible for their

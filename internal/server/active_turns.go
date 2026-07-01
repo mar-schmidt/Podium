@@ -73,7 +73,7 @@ func (h *activeTurnHub) attachNotifier(n *notify.Dispatcher, resolve func(ctx co
 // notifyAttention fires an out-of-app notification for a blocked turn. It runs
 // off the hot path (own goroutine) so push latency never delays the turn, and
 // resolves the agent name for the notification text.
-func (h *activeTurnHub) notifyAttention(sessionID, kind string) {
+func (h *activeTurnHub) notifyAttention(sessionID, kind string, approval *adapter.PermissionRequest) {
 	if h.notifier == nil {
 		return
 	}
@@ -87,12 +87,20 @@ func (h *activeTurnHub) notifyAttention(sessionID, kind string) {
 			}
 		}
 		title, body := attentionText(agent, kind)
+		var action *notify.ApprovalAction
+		if approval != nil {
+			action = &notify.ApprovalAction{
+				RequestID: approval.ID,
+				Input:     append([]byte(nil), approval.Input...),
+			}
+		}
 		h.notifier.Notify(ctx, notify.Notification{
 			SessionID: sessionID,
 			AgentName: agent,
 			Title:     title,
 			Body:      body,
 			Kind:      kind,
+			Approval:  action,
 		})
 	}()
 }
@@ -258,7 +266,7 @@ func (h *activeTurnHub) recordPermission(sessionID string, req *adapter.Permissi
 	requestID := turn.requestID
 	h.mu.Unlock()
 	h.broadcast(writers, ServerMessage{Type: "permission_request", RequestID: requestID, SessionID: sessionID, Request: req})
-	h.notifyAttention(sessionID, "permission")
+	h.notifyAttention(sessionID, "permission", req)
 }
 
 func (h *activeTurnHub) recordUserInput(sessionID string, req *adapter.UserInputRequest) {
@@ -274,7 +282,7 @@ func (h *activeTurnHub) recordUserInput(sessionID string, req *adapter.UserInput
 	requestID := turn.requestID
 	h.mu.Unlock()
 	h.broadcast(writers, ServerMessage{Type: "user_input_request", RequestID: requestID, SessionID: sessionID, Input: req})
-	h.notifyAttention(sessionID, "question")
+	h.notifyAttention(sessionID, "question", nil)
 }
 
 func (h *activeTurnHub) finish(sessionID string) {

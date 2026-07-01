@@ -24,10 +24,11 @@ type WebPushStore interface {
 
 // webPushPayload is the JSON delivered to the service worker's `push` handler.
 type webPushPayload struct {
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	SessionID string `json:"session_id"`
-	Kind      string `json:"kind"`
+	Title     string          `json:"title"`
+	Body      string          `json:"body"`
+	SessionID string          `json:"session_id"`
+	Kind      string          `json:"kind"`
+	Approval  *ApprovalAction `json:"approval,omitempty"`
 }
 
 // WebPushChannel delivers notifications to every registered browser Web Push
@@ -64,12 +65,7 @@ func (c *WebPushChannel) Send(ctx context.Context, n Notification) error {
 	if len(subs) == 0 {
 		return nil
 	}
-	payload, err := json.Marshal(webPushPayload{
-		Title:     n.Title,
-		Body:      n.Body,
-		SessionID: n.SessionID,
-		Kind:      n.Kind,
-	})
+	payload, err := json.Marshal(webPushPayloadForNotification(n))
 	if err != nil {
 		return fmt.Errorf("encode web push payload: %w", err)
 	}
@@ -84,6 +80,16 @@ func (c *WebPushChannel) Send(ctx context.Context, n Notification) error {
 		}
 	}
 	return firstErr
+}
+
+func webPushPayloadForNotification(n Notification) webPushPayload {
+	return webPushPayload{
+		Title:     n.Title,
+		Body:      n.Body,
+		SessionID: n.SessionID,
+		Kind:      n.Kind,
+		Approval:  n.Approval,
+	}
 }
 
 func (c *WebPushChannel) sendOne(ctx context.Context, row store.PushSubscription, payload []byte) error {

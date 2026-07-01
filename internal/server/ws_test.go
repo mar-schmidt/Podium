@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
@@ -16,7 +17,8 @@ import (
 )
 
 func TestWebSocketSendTurn(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	home := t.TempDir()
 	paths := config.NewPaths(home)
 	if _, err := config.Scaffold(paths); err != nil {
@@ -60,13 +62,17 @@ func TestWebSocketSendTurn(t *testing.T) {
 		t.Fatalf("write send_turn: %v", err)
 	}
 
-	var sawSession, sawAssistant, sawDone bool
-	for i := 0; i < 10; i++ {
+	var sawSession, sawAssistant, sawDone, sawFinalState bool
+	for i := 0; i < 12; i++ {
 		var msg ServerMessage
 		if err := wsjson.Read(ctx, conn, &msg); err != nil {
 			t.Fatalf("read ws: %v", err)
 		}
 		switch msg.Type {
+		case "state":
+			if sawDone {
+				sawFinalState = true
+			}
 		case "session":
 			sawSession = msg.Session != nil && msg.Session.Origin == store.OriginWeb
 		case "assistant":
@@ -74,9 +80,9 @@ func TestWebSocketSendTurn(t *testing.T) {
 		case "done":
 			sawDone = true
 		}
-		if sawSession && sawAssistant && sawDone {
+		if sawSession && sawAssistant && sawDone && sawFinalState {
 			return
 		}
 	}
-	t.Fatalf("missing expected events: session=%v assistant=%v done=%v", sawSession, sawAssistant, sawDone)
+	t.Fatalf("missing expected events: session=%v assistant=%v done=%v final_state=%v", sawSession, sawAssistant, sawDone, sawFinalState)
 }

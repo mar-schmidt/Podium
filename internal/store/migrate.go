@@ -172,6 +172,12 @@ var migrations = []migration{
 		CREATE INDEX idx_sessions_schedule_id ON sessions(schedule_id);
 		CREATE INDEX idx_sessions_task_id ON sessions(task_id);`,
 	},
+	{
+		version: 7,
+		name:    "session_project_id",
+		sql: `ALTER TABLE sessions ADD COLUMN project_id TEXT NOT NULL DEFAULT '';
+		CREATE INDEX idx_sessions_project_id ON sessions(project_id);`,
+	},
 }
 
 // migrate applies every migration whose version has not yet been recorded. Each

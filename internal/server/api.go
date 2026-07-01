@@ -31,14 +31,22 @@ type agentCreateRequest struct {
 }
 
 type sessionCreateRequest struct {
-	AgentName string              `json:"agent_name"`
-	Origin    store.SessionOrigin `json:"origin"`
+	AgentName      string                `json:"agent_name"`
+	Origin         store.SessionOrigin   `json:"origin"`
+	Model          string                `json:"model,omitempty"`
+	Effort         string                `json:"effort,omitempty"`
+	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	ProjectID      string                `json:"project_id,omitempty"`
 }
 
 type chatRequest struct {
-	SessionID string `json:"session_id,omitempty"`
-	AgentName string `json:"agent_name,omitempty"`
-	Message   string `json:"message"`
+	SessionID      string                `json:"session_id,omitempty"`
+	AgentName      string                `json:"agent_name,omitempty"`
+	Message        string                `json:"message"`
+	Model          string                `json:"model,omitempty"`
+	Effort         string                `json:"effort,omitempty"`
+	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
+	ProjectID      string                `json:"project_id,omitempty"`
 }
 
 type streamEvent struct {
@@ -482,8 +490,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			req.Origin = store.OriginCLI
 		}
 		session, err := s.core.CreateSession(r.Context(), core.CreateSessionRequest{
-			AgentName: req.AgentName,
-			Origin:    req.Origin,
+			AgentName:      req.AgentName,
+			Origin:         req.Origin,
+			Model:          req.Model,
+			Effort:         req.Effort,
+			PermissionMode: req.PermissionMode,
+			ProjectID:      req.ProjectID,
 		})
 		writeJSON(w, session, err)
 	default:
@@ -534,13 +546,26 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail := sessionDetail{Session: session, History: history}
-	// Attach roadmap provenance so the chat can show "part of <project>".
+	detail.ProjectID = session.ProjectID
+	if detail.ProjectID != "" {
+		if project, err := s.core.GetProject(r.Context(), detail.ProjectID); err == nil {
+			detail.ProjectName = project.Name
+		}
+	}
+	// Attach roadmap task provenance when this session came from a task.
 	if session.TaskID != "" {
 		if task, err := s.core.GetTask(r.Context(), session.TaskID); err == nil {
 			detail.Task = &task
-			detail.ProjectID = task.ProjectID
-			if task.ProjectID != "" {
-				if project, err := s.core.GetProject(r.Context(), task.ProjectID); err == nil {
+			if detail.ProjectID == "" {
+				detail.ProjectID = task.ProjectID
+				if task.ProjectID != "" {
+					if project, err := s.core.GetProject(r.Context(), task.ProjectID); err == nil {
+						detail.ProjectName = project.Name
+					}
+				}
+			}
+			if detail.ProjectName == "" && detail.ProjectID != "" {
+				if project, err := s.core.GetProject(r.Context(), detail.ProjectID); err == nil {
 					detail.ProjectName = project.Name
 				}
 			}
@@ -576,7 +601,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "agent_name is required when session_id is omitted", http.StatusBadRequest)
 			return
 		}
-		session, err = s.core.CreateSession(ctx, core.CreateSessionRequest{AgentName: req.AgentName, Origin: store.OriginCLI})
+		session, err = s.core.CreateSession(ctx, core.CreateSessionRequest{
+			AgentName:      req.AgentName,
+			Origin:         store.OriginCLI,
+			Model:          req.Model,
+			Effort:         req.Effort,
+			PermissionMode: req.PermissionMode,
+			ProjectID:      req.ProjectID,
+		})
 	} else {
 		session, err = s.core.GetSession(ctx, req.SessionID)
 	}

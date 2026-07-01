@@ -98,8 +98,12 @@ func (s *Server) handleWSMessage(ctx context.Context, writer *wsWriter, msg Clie
 		return s.writeState(ctx, writer)
 	case "create_session":
 		session, err := s.core.CreateSession(ctx, core.CreateSessionRequest{
-			AgentName: msg.AgentName,
-			Origin:    store.OriginWeb,
+			AgentName:      msg.AgentName,
+			Origin:         store.OriginWeb,
+			Model:          msg.Model,
+			Effort:         msg.Effort,
+			PermissionMode: msg.PermissionMode,
+			ProjectID:      msg.ProjectID,
 		})
 		if err != nil {
 			return err
@@ -158,7 +162,14 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 			_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, Error: "agent_name is required"})
 			return
 		}
-		session, err = s.core.CreateSession(ctx, core.CreateSessionRequest{AgentName: msg.AgentName, Origin: store.OriginWeb})
+		session, err = s.core.CreateSession(ctx, core.CreateSessionRequest{
+			AgentName:      msg.AgentName,
+			Origin:         store.OriginWeb,
+			Model:          msg.Model,
+			Effort:         msg.Effort,
+			PermissionMode: msg.PermissionMode,
+			ProjectID:      msg.ProjectID,
+		})
 	} else {
 		session, err = s.core.GetSession(ctx, msg.SessionID)
 	}

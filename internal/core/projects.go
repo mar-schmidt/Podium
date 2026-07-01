@@ -447,6 +447,7 @@ func (c *Core) StartTask(ctx context.Context, req StartTaskRequest) (store.Sessi
 		AgentName: task.AssignedAgent,
 		Origin:    store.OriginRoadmap,
 		TaskID:    task.ID,
+		ProjectID: task.ProjectID,
 	})
 	if err != nil {
 		return store.Session{}, err
@@ -607,17 +608,18 @@ type projectExecutionContext struct {
 }
 
 func (c *Core) sessionProjectExecutionContext(ctx context.Context, sess store.Session) (projectExecutionContext, error) {
-	if strings.TrimSpace(sess.TaskID) == "" {
+	projectID := strings.TrimSpace(sess.ProjectID)
+	if projectID == "" && strings.TrimSpace(sess.TaskID) != "" {
+		task, err := c.store.GetTask(ctx, sess.TaskID)
+		if err != nil {
+			return projectExecutionContext{}, err
+		}
+		projectID = strings.TrimSpace(task.ProjectID)
+	}
+	if projectID == "" {
 		return projectExecutionContext{}, nil
 	}
-	task, err := c.store.GetTask(ctx, sess.TaskID)
-	if err != nil {
-		return projectExecutionContext{}, err
-	}
-	if strings.TrimSpace(task.ProjectID) == "" {
-		return projectExecutionContext{}, nil
-	}
-	proj, err := c.ledger.Get(task.ProjectID)
+	proj, err := c.ledger.Get(projectID)
 	if err != nil {
 		return projectExecutionContext{}, nil
 	}
@@ -648,7 +650,7 @@ func (c *Core) sessionProjectExecutionContext(ctx context.Context, sess store.Se
 	if err != nil {
 		return projectExecutionContext{}, err
 	}
-	prompt := "Podium project context for this roadmap session:\n" +
+	prompt := "Podium project context for this session:\n" +
 		strings.TrimSpace(string(raw)) + "\n\n" +
 		"The connected GitHub repository has been downloaded as a local source snapshot at " + root + ". " +
 		"You may inspect files there for project facts. It is not a Git checkout: do not assume .git, branches, commits, pushes, or PR operations are available."

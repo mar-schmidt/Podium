@@ -15,6 +15,7 @@
     Agent,
     ClientMessage,
     Message,
+    PermissionMode,
     PermissionRequest,
     Project,
     ServerMessage,
@@ -63,6 +64,10 @@
   let agentFilter = $state("all");
   let projectFilter = $state("all");
   let projects = $state<Project[]>([]);
+  let draftModel = $state("");
+  let draftEffort = $state("");
+  let draftPermissionMode = $state<PermissionMode | "">("");
+  let draftProjectID = $state("");
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let sending = $state(false);
@@ -111,9 +116,19 @@
   const modelOptions = $derived(
     activeAgent?.Provider === "codex" ? ["gpt-5.1", "gpt-5.1-mini", "o4"] : ["sonnet", "opus", "haiku"],
   );
-  const curModel = $derived(activeSession?.Model || activeAgent?.Model || "—");
-  const curEffort = $derived(activeSession?.Effort || activeAgent?.Effort || "medium");
-  const curMode = $derived(activeSession?.PermissionMode || activeAgent?.PermissionMode || "approve");
+  const curModel = $derived(
+    activeSession ? activeSession.Model || activeAgent?.Model || "—" : draftModel || activeAgent?.Model || "—",
+  );
+  const curEffort = $derived(
+    activeSession ? activeSession.Effort || activeAgent?.Effort || "medium" : draftEffort || activeAgent?.Effort || "medium",
+  );
+  const curMode = $derived(
+    activeSession
+      ? activeSession.PermissionMode || activeAgent?.PermissionMode || "approve"
+      : draftPermissionMode || activeAgent?.PermissionMode || "approve",
+  );
+  const curProjectID = $derived(activeSession ? activeSession.ProjectID : draftProjectID);
+  const linkedProjectName = $derived(curProjectID ? projectName || projectLabel(curProjectID) : "");
   const showSlash = $derived(messageText.startsWith("/"));
 
   function sessionSub(s: Session): string {
@@ -213,6 +228,8 @@
         if (msg.session) {
           activeSession = msg.session;
           selectedAgent = msg.session.AgentName;
+          if (!msg.session.ProjectID) projectName = "";
+          resetDraftSettings();
           sessions = [msg.session, ...sessions.filter((s) => s.ID !== msg.session?.ID)];
         }
         break;
@@ -269,7 +286,7 @@
       activeSession = detail.session;
       selectedAgent = detail.session.AgentName;
       messages = detail.history ?? [];
-      projectName = detail.project_name ?? "";
+      projectName = detail.project_name ?? (detail.session.ProjectID ? projectLabel(detail.session.ProjectID) : "");
       pendingAssistant = "";
       pendingUserInput = null;
       if (isPhone) sessOpen = false;
@@ -319,14 +336,26 @@
       agent_name: activeSession ? undefined : selectedAgent,
       session_id: activeSession?.ID,
       message: text,
+      model: activeSession ? undefined : draftModel || undefined,
+      effort: activeSession ? undefined : draftEffort || undefined,
+      permission_mode: activeSession ? undefined : draftPermissionMode || undefined,
+      project_id: activeSession ? undefined : draftProjectID || undefined,
     });
     messageText = "";
   }
 
-  function newSession() {
+  function resetDraftSettings() {
+    draftModel = "";
+    draftEffort = "";
+    draftPermissionMode = "";
+    draftProjectID = "";
+  }
+
+  function newSession(resetDrafts = true) {
     activeSession = null;
     messages = [];
     projectName = "";
+    if (resetDrafts) resetDraftSettings();
     pendingAssistant = "";
     pendingUserInput = null;
     notice = null;
@@ -336,7 +365,7 @@
 
   function startSessionWith(agentName: string) {
     selectedAgent = agentName;
-    newSession();
+    newSession(false);
     newSessionOpen = false;
   }
 
@@ -347,6 +376,39 @@
       return;
     }
     sendTurn(command);
+  }
+
+  function setModel(model: string) {
+    if (activeSession) {
+      runCommand(`/model ${model}`);
+      return;
+    }
+    draftModel = model;
+    openDropdown = null;
+  }
+
+  function setEffort(effort: string) {
+    if (activeSession) {
+      runCommand(`/effort ${effort}`);
+      return;
+    }
+    draftEffort = effort;
+    openDropdown = null;
+  }
+
+  function setPermissionMode(mode: PermissionMode) {
+    if (activeSession) {
+      runCommand(`/permission ${mode}`);
+      return;
+    }
+    draftPermissionMode = mode;
+    openDropdown = null;
+  }
+
+  function setDraftProject(projectID: string) {
+    draftProjectID = projectID;
+    projectName = "";
+    openDropdown = null;
   }
 
   function decidePermission(allow: boolean) {
@@ -541,10 +603,10 @@
       {/if}
     </div>
 
-    {#if projectName}
+    {#if linkedProjectName}
       <div class="proj-strip">
         <span class="proj-dot-sm" style="background:#3F8F7E"></span>
-        <span class="mono proj-strip-text">part of <b>{projectName}</b></span>
+        <span class="mono proj-strip-text">part of <b>{linkedProjectName}</b></span>
       </div>
     {/if}
 
@@ -676,7 +738,7 @@
           {#if openDropdown === "model"}
             <div class="dd-menu up">
               {#each modelOptions as o}
-                <button class="dd-opt" class:sel={o === curModel} onclick={() => runCommand(`/model ${o}`)}>{o}</button>
+                <button class="dd-opt" class:sel={o === curModel} onclick={() => setModel(o)}>{o}</button>
               {/each}
             </div>
           {/if}
@@ -686,7 +748,7 @@
           {#if openDropdown === "effort"}
             <div class="dd-menu up">
               {#each EFFORTS as o}
-                <button class="dd-opt" class:sel={o === curEffort} onclick={() => runCommand(`/effort ${o}`)}>{o}</button>
+                <button class="dd-opt" class:sel={o === curEffort} onclick={() => setEffort(o)}>{o}</button>
               {/each}
             </div>
           {/if}
@@ -696,7 +758,20 @@
           {#if openDropdown === "perm"}
             <div class="dd-menu up">
               {#each ["approve", "yolo"] as o}
-                <button class="dd-opt" class:sel={o === curMode} onclick={() => runCommand(`/permission ${o}`)}>{o}</button>
+                <button class="dd-opt" class:sel={o === curMode} onclick={() => setPermissionMode(o as PermissionMode)}>{o}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        <div class="dd-wrap">
+          <button class="chip-btn mono" class:mutedChip={!!activeSession} onclick={() => { if (!activeSession) toggleDropdown("project"); }} title={activeSession ? "Project is fixed for this session" : "Project for this new session"}>
+            /project {curProjectID ? projectLabel(curProjectID) : "none"} <span style="opacity:.55">▾</span>
+          </button>
+          {#if openDropdown === "project" && !activeSession}
+            <div class="dd-menu up">
+              <button class="dd-opt" class:sel={!draftProjectID} onclick={() => setDraftProject("")}>no project</button>
+              {#each projects as p}
+                <button class="dd-opt" class:sel={draftProjectID === p.id} onclick={() => setDraftProject(p.id)}>{p.name}</button>
               {/each}
             </div>
           {/if}
@@ -724,12 +799,12 @@
         {activeSession?.Description || `Runs on ${activeAgent?.Provider ?? "—"} · ${curModel} · effort ${curEffort}.`}
       </div>
 
-      {#if projectName}
+      {#if linkedProjectName}
         <div class="label-mono" style="margin:24px 0 10px">linked project</div>
         <div class="ctx-proj">
           <div class="ctx-proj-row">
             <span class="proj-dot-sm" style="background:#3F8F7E"></span>
-            <span class="ctx-proj-name">{projectName}</span>
+            <span class="ctx-proj-name">{linkedProjectName}</span>
           </div>
         </div>
       {/if}
@@ -752,6 +827,21 @@
       <div style="padding:24px 26px 4px">
         <div class="modal-title">New session</div>
         <div class="modal-sub">Who do you want to work with? Pick a colleague and we'll open a fresh chat.</div>
+      </div>
+      <div class="ns-controls">
+        <div class="dd-wrap">
+          <button class="filter-chip ns-project-chip" onclick={() => toggleDropdown("nsProject")}>
+            {draftProjectID ? projectLabel(draftProjectID) : "no project"} <span style="opacity:.55">▾</span>
+          </button>
+          {#if openDropdown === "nsProject"}
+            <div class="dd-menu">
+              <button class="dd-opt" class:sel={!draftProjectID} onclick={() => setDraftProject("")}>no project</button>
+              {#each projects as p}
+                <button class="dd-opt" class:sel={draftProjectID === p.id} onclick={() => setDraftProject(p.id)}>{p.name}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
       </div>
       <div class="ns-list">
         {#each agents as a}
@@ -1538,6 +1628,16 @@
     gap: 9px;
   }
 
+  .ns-controls {
+    padding: 14px 26px 0;
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .ns-project-chip {
+    max-width: 240px;
+  }
+
   .ns-row {
     display: flex;
     gap: 14px;
@@ -1579,6 +1679,11 @@
     font: 600 16px "Hanken Grotesk";
     color: var(--teal-deep);
     flex: none;
+  }
+
+  .mutedChip {
+    cursor: default;
+    opacity: 0.72;
   }
 
   .mobile-panel-backdrop {

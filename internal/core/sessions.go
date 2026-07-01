@@ -23,6 +23,7 @@ type CreateSessionRequest struct {
 	ScheduleID     string
 	RunID          string
 	TaskID         string
+	ProjectID      string
 }
 
 // CreateSession creates a durable session and starts a fake/provider backing
@@ -31,6 +32,12 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 	agent, err := c.store.GetAgent(ctx, req.AgentName)
 	if err != nil {
 		return store.Session{}, err
+	}
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID != "" {
+		if _, err := c.ledger.Get(projectID); err != nil {
+			return store.Session{}, err
+		}
 	}
 	sess := store.Session{
 		AgentName:      agent.Name,
@@ -43,6 +50,7 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 		ScheduleID:     req.ScheduleID,
 		RunID:          req.RunID,
 		TaskID:         req.TaskID,
+		ProjectID:      projectID,
 	}
 	if req.PermissionMode != "" {
 		sess.PermissionMode = req.PermissionMode
@@ -83,32 +91,45 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 	return c.store.UpdateSessionProviderHandle(ctx, created.ID, handle.ID)
 }
 
-// ListSessions returns all durable sessions, with each roadmap session's
-// ProjectID derived from its originating task so clients can filter by project.
+// ListSessions returns all durable sessions, with a compatibility ProjectID
+// fallback for roadmap sessions created before sessions.project_id existed.
 func (c *Core) ListSessions(ctx context.Context) ([]store.Session, error) {
 	sessions, err := c.store.ListSessions(ctx)
 	if err != nil {
 		return nil, err
 	}
+	c.enrichLegacyProjectIDs(ctx, sessions)
+	return sessions, nil
+}
+
+func (c *Core) enrichLegacyProjectIDs(ctx context.Context, sessions []store.Session) {
 	tasks, err := c.store.ListTasks(ctx)
 	if err != nil {
-		return sessions, nil // sessions are still usable without project enrichment
+		return // sessions are still usable without project enrichment
 	}
 	projectByTask := make(map[string]string, len(tasks))
 	for _, t := range tasks {
 		projectByTask[t.ID] = t.ProjectID
 	}
 	for i := range sessions {
-		if sessions[i].TaskID != "" {
+		if sessions[i].ProjectID == "" && sessions[i].TaskID != "" {
 			sessions[i].ProjectID = projectByTask[sessions[i].TaskID]
 		}
 	}
-	return sessions, nil
 }
 
 // GetSession fetches a durable session.
 func (c *Core) GetSession(ctx context.Context, id string) (store.Session, error) {
-	return c.store.GetSession(ctx, id)
+	sess, err := c.store.GetSession(ctx, id)
+	if err != nil {
+		return store.Session{}, err
+	}
+	if sess.ProjectID == "" && sess.TaskID != "" {
+		if task, err := c.store.GetTask(ctx, sess.TaskID); err == nil {
+			sess.ProjectID = task.ProjectID
+		}
+	}
+	return sess, nil
 }
 
 // DeleteSession removes a durable session and its message history. Like agent

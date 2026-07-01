@@ -285,13 +285,25 @@ export interface UserInputDecision {
 
 export type ClientMessage =
   | { type: "list"; request_id?: string }
-  | { type: "create_session"; request_id: string; agent_name: string }
+  | {
+      type: "create_session";
+      request_id: string;
+      agent_name: string;
+      model?: string;
+      effort?: string;
+      permission_mode?: PermissionMode;
+      project_id?: string;
+    }
   | {
       type: "send_turn";
       request_id: string;
       agent_name?: string;
       session_id?: string;
       message: string;
+      model?: string;
+      effort?: string;
+      permission_mode?: PermissionMode;
+      project_id?: string;
     }
   | { type: "permission_decision"; request_id: string; decision: PermissionDecision }
   | { type: "user_input_decision"; request_id: string; input: UserInputDecision };

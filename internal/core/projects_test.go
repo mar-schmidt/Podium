@@ -36,6 +36,9 @@ func TestStartTaskCreatesRoadmapSessionWithProvenance(t *testing.T) {
 	if sess.Origin != store.OriginRoadmap || sess.TaskID != task.ID {
 		t.Fatalf("session provenance wrong: %+v", sess)
 	}
+	if sess.ProjectID != "mission-control" {
+		t.Fatalf("session project id = %q, want mission-control", sess.ProjectID)
+	}
 
 	moved, err := c.GetTask(ctx, task.ID)
 	if err != nil {
@@ -49,6 +52,38 @@ func TestStartTaskCreatesRoadmapSessionWithProvenance(t *testing.T) {
 	found, ok, err := c.TaskSession(ctx, task.ID)
 	if err != nil || !ok || found.ID != sess.ID {
 		t.Fatalf("task session lookup failed: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCreateSessionStoresProjectAndRejectsUnknownProject(t *testing.T) {
+	ctx := context.Background()
+	c, _, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "jared", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := c.CreateProject(ctx, projects.Project{ID: "mission-control", Name: "Mission Control"}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	sess, err := c.CreateSession(ctx, CreateSessionRequest{
+		AgentName: "jared",
+		Origin:    store.OriginWeb,
+		ProjectID: "mission-control",
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if sess.ProjectID != "mission-control" {
+		t.Fatalf("session project id = %q, want mission-control", sess.ProjectID)
+	}
+
+	if _, err := c.CreateSession(ctx, CreateSessionRequest{
+		AgentName: "jared",
+		Origin:    store.OriginWeb,
+		ProjectID: "missing-project",
+	}); err == nil {
+		t.Fatal("expected unknown project id to fail")
 	}
 }
 
@@ -97,6 +132,87 @@ func TestConnectedRepoContextIsSentToRoadmapSession(t *testing.T) {
 	}
 	if !strings.Contains(fake.Requests[1].Message, "local source snapshot") || !strings.Contains(fake.Requests[1].Message, "Continue with repo context") {
 		t.Fatalf("second request missing repo context:\n%s", fake.Requests[1].Message)
+	}
+}
+
+func TestConnectedRepoContextIsSentToManualProjectSession(t *testing.T) {
+	ctx := context.Background()
+	c, fake, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "jared", Provider: config.ProviderCodex}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	repo := projects.SnapshotRepo("mar-schmidt", "Podium", "https://github.com/mar-schmidt/Podium", "main", "main")
+	if _, err := c.CreateProject(ctx, projects.Project{ID: "mission-control", Name: "Mission Control", Repo: &repo}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	sess, err := c.CreateSession(ctx, CreateSessionRequest{
+		AgentName: "jared",
+		Origin:    store.OriginWeb,
+		ProjectID: "mission-control",
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := c.AppendTurn(ctx, sess.ID, "Inspect the linked project"); err != nil {
+		t.Fatalf("append turn: %v", err)
+	}
+	if len(fake.Requests) != 1 {
+		t.Fatalf("fake requests = %d, want 1", len(fake.Requests))
+	}
+	root := filepath.Join(c.paths.ProjectsDir, "mission-control")
+	req := fake.Requests[0]
+	if !strings.Contains(req.Message, "Podium project context for this session") || !strings.Contains(req.Message, root) {
+		t.Fatalf("request missing project context:\n%s", req.Message)
+	}
+	wantDirs := []string{c.paths.ProjectsDir, root}
+	if !reflect.DeepEqual(req.Settings.ExtraWorkspaceDirs, wantDirs) {
+		t.Fatalf("extra workspace dirs = %#v, want %#v", req.Settings.ExtraWorkspaceDirs, wantDirs)
+	}
+}
+
+func TestLegacyRoadmapSessionProjectIDFallback(t *testing.T) {
+	ctx := context.Background()
+	c, _, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "jared", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := c.CreateProject(ctx, projects.Project{ID: "mission-control", Name: "Mission Control"}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task, err := c.CreateTask(ctx, store.Task{ProjectID: "mission-control", Title: "Legacy task", AssignedAgent: "jared"})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	legacy, err := c.store.CreateSession(ctx, store.Session{
+		AgentName:      "jared",
+		Provider:       config.ProviderClaude,
+		PermissionMode: config.PermissionApprove,
+		Origin:         store.OriginRoadmap,
+		TaskID:         task.ID,
+	})
+	if err != nil {
+		t.Fatalf("create legacy session: %v", err)
+	}
+	if legacy.ProjectID != "" {
+		t.Fatalf("raw legacy project id = %q, want empty", legacy.ProjectID)
+	}
+	got, err := c.GetSession(ctx, legacy.ID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if got.ProjectID != "mission-control" {
+		t.Fatalf("fallback project id = %q, want mission-control", got.ProjectID)
+	}
+	list, err := c.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(list) == 0 || list[0].ProjectID != "mission-control" {
+		t.Fatalf("listed sessions missing fallback project id: %+v", list)
 	}
 }
 

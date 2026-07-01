@@ -11,6 +11,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
+	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/store"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
@@ -41,6 +42,9 @@ func TestWebSocketSendTurn(t *testing.T) {
 	if _, err := coreSvc.CreateAgent(ctx, core.CreateAgentRequest{Name: "webber", Provider: config.ProviderClaude}); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
+	if _, err := coreSvc.CreateProject(ctx, projects.Project{ID: "mission-control", Name: "Mission Control"}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
 
 	srv := New(Options{Bind: "127.0.0.1", Port: 0, Core: coreSvc})
 	ts := httptest.NewServer(srv.httpSrv.Handler)
@@ -54,10 +58,14 @@ func TestWebSocketSendTurn(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
 	if err := wsjson.Write(ctx, conn, ClientMessage{
-		Type:      "send_turn",
-		RequestID: "req-1",
-		AgentName: "webber",
-		Message:   "hello",
+		Type:           "send_turn",
+		RequestID:      "req-1",
+		AgentName:      "webber",
+		Message:        "hello",
+		Model:          "opus",
+		Effort:         "high",
+		ProjectID:      "mission-control",
+		PermissionMode: config.PermissionYolo,
 	}); err != nil {
 		t.Fatalf("write send_turn: %v", err)
 	}
@@ -74,7 +82,12 @@ func TestWebSocketSendTurn(t *testing.T) {
 				sawFinalState = true
 			}
 		case "session":
-			sawSession = msg.Session != nil && msg.Session.Origin == store.OriginWeb
+			sawSession = msg.Session != nil &&
+				msg.Session.Origin == store.OriginWeb &&
+				msg.Session.Model == "opus" &&
+				msg.Session.Effort == "high" &&
+				msg.Session.PermissionMode == config.PermissionYolo &&
+				msg.Session.ProjectID == "mission-control"
 		case "assistant":
 			sawAssistant = msg.Delta == "assistant from ws"
 		case "done":

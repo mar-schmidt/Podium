@@ -51,6 +51,11 @@ metadata and mark it as user-authored.
 Slash commands are session-scoped controls and are not appended to canonical chat
 history.
 
+New web sessions may be created with draft model, effort, permission mode, and
+project settings. If a project is selected before the first message, the session
+stores `project_id` and receives the same project context used by project-linked
+roadmap sessions.
+
 | Command | Effect |
 | --- | --- |
 | `/model <name>` | Set the model for subsequent turns. |

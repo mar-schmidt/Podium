@@ -122,8 +122,8 @@ add tasks with **+ New task**. Observe tasks with `podium tasks list`.
 - `POST /api/projects/<id>/repo/sync`
 - `DELETE /api/projects/<id>/repo`
 
-Roadmap sessions carry `origin = roadmap` and a `task_id`; the session detail
-endpoint (`GET /api/sessions/<id>`) includes the task and project name for the
-provenance banner. Project filtering in Chat is derived from
-`session.task_id -> task.project_id`; there is no separate session/project link
-for manual chat sessions in v1.
+Sessions can carry a durable `project_id`. Manual web sessions may choose a
+project before the first message, while roadmap sessions also carry
+`origin = roadmap` and a `task_id`. The session detail endpoint
+(`GET /api/sessions/<id>`) includes the task, project id, and project name for
+the provenance banner.

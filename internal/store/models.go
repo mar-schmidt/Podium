@@ -69,10 +69,7 @@ type Session struct {
 	ProviderHandle string
 	CreatedAt      string
 	UpdatedAt      string
-	// ProjectID is derived (not a stored column): for roadmap sessions it is the
-	// assigned project of the originating task. Populated by core.ListSessions so
-	// clients can filter sessions by project.
-	ProjectID string `json:"ProjectID,omitempty"`
+	ProjectID      string
 }
 
 // Message is one ordered entry in a session's canonical history.

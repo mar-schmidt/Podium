@@ -19,6 +19,7 @@ export interface UpdateStatus {
   asset_url: string;
   checksum_url: string;
   release_url: string;
+  release_notes: string;
   blocking_reason?: string;
 }
 

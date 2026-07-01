@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { getConfig, listProfiles, updateConfig } from "../lib/api";
   import type { GlobalConfig, Health, PermissionMode, ProfileInfo, Provider, UpdateStatus } from "../lib/types";
   import Logs from "./Logs.svelte";
@@ -11,6 +11,7 @@
     update,
     updateState,
     updateError,
+    releaseNotesFocusToken,
     onCheckUpdate,
     onRunUpdate,
   }: {
@@ -18,6 +19,7 @@
     update: UpdateStatus | null;
     updateState: UpdateState;
     updateError: string | null;
+    releaseNotesFocusToken: number;
     onCheckUpdate: () => void;
     onRunUpdate: () => void;
   } = $props();
@@ -44,8 +46,15 @@
 
   // Canonical JSON snapshot of the last-saved state, for dirty tracking.
   let baseline = $state("");
+  let releaseNotesEl = $state<HTMLElement | null>(null);
 
   onMount(load);
+
+  $effect(() => {
+    if (releaseNotesFocusToken > 0) {
+      void focusReleaseNotes();
+    }
+  });
 
   async function load() {
     loading = true;
@@ -160,6 +169,12 @@
     }
   }
 
+  async function focusReleaseNotes() {
+    await tick();
+    releaseNotesEl?.scrollIntoView({ behavior: "smooth", block: "start" });
+    releaseNotesEl?.focus({ preventScroll: true });
+  }
+
   // ---- Version & updates: presentation of App.svelte's update state ----
   const primaryLabel = $derived(model ? `${provider} · ${model}` : `${provider} · provider default`);
   const fbRouteLabel = $derived(
@@ -171,6 +186,7 @@
   );
   const canCheck = $derived(updateState === "idle" || updateState === "current" || updateState === "failed");
   const updateBadge = $derived(updateBadgeFor(updateState));
+  const releaseNotes = $derived(update?.release_notes ?? "");
   function updateBadgeFor(state: UpdateState): { label: string; tone: "neutral" | "green" | "amber" } {
     switch (state) {
       case "checking":
@@ -355,6 +371,24 @@
         <div class="ver-note"><span class="dot-amber">●</span>{updateError}</div>
       {/if}
       {#if updateState === "available" && update}
+        <div class="new-version">
+          <div>
+            <div class="route-tag">new version</div>
+            <div class="ver-num">{update.latest_version}</div>
+          </div>
+        </div>
+        <div
+          class="release-notes"
+          bind:this={releaseNotesEl}
+          tabindex="-1"
+          aria-label={`Release notes for ${update.latest_version}`}>
+          <div class="release-notes-title">Release notes</div>
+          {#if releaseNotes.trim()}
+            <pre>{releaseNotes}</pre>
+          {:else}
+            <div class="empty-note">No release notes were published for this release.</div>
+          {/if}
+        </div>
         <div class="upd-actions">
           <button class="btn-save" onclick={onRunUpdate}>Update to {update.latest_version}</button>
           {#if update.blocking_reason}
@@ -687,6 +721,44 @@
     font: 800 18px "Hanken Grotesk";
     color: var(--ink);
     margin-top: 2px;
+  }
+
+  .new-version {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: #fbf1dd;
+    border: 1px solid #ecd9ae;
+    border-radius: 14px;
+    padding: 15px 18px;
+    margin-top: 14px;
+  }
+
+  .release-notes {
+    margin-top: 12px;
+    border: 1px solid var(--line-3);
+    border-radius: 14px;
+    background: #fff;
+    padding: 15px 18px;
+  }
+
+  .release-notes:focus {
+    outline: 2px solid #bfe0d6;
+    outline-offset: 3px;
+  }
+
+  .release-notes-title {
+    font: 700 13.5px "Hanken Grotesk";
+    color: var(--ink);
+    margin-bottom: 9px;
+  }
+
+  .release-notes pre {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 500 12px/1.55 "JetBrains Mono", monospace;
+    color: var(--muted);
   }
 
   .btn-ghost {

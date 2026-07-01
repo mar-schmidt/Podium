@@ -73,6 +73,33 @@ jobs:
           cp scripts/install.ps1 dist/install.ps1
           (cd dist && sha256sum podium_* install.sh install.ps1 > SHA256SUMS)
 
+      - name: Generate release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          set -euo pipefail
+          notes_file="${RUNNER_TEMP}/release-notes.md"
+          previous_tag="$(git tag --merged "$GITHUB_SHA" --list 'v0.1.*' --sort=-version:refname | grep -v "^${VERSION}$" | head -n 1 || true)"
+          {
+            echo "# Podium ${VERSION}"
+            echo
+            echo "Target commit: \`${GITHUB_SHA}\` (${COMMIT})"
+            echo
+            if [ -n "$previous_tag" ]; then
+              echo "Previous release: \`${previous_tag}\`"
+              echo "Range: \`${previous_tag}..${GITHUB_SHA}\`"
+              range="${previous_tag}..${GITHUB_SHA}"
+            else
+              echo "Previous release: none"
+              echo "Range: initial release through \`${GITHUB_SHA}\`"
+              range="${GITHUB_SHA}"
+            fi
+            echo
+            echo "## Commits"
+            git log --reverse --format='- %s (`%h`)' "$range"
+          } > "$notes_file"
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,4 +112,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --latest \
             --title "$VERSION" \
-            --notes "Automated Podium release for ${GITHUB_SHA} (${COMMIT})."
+            --notes-file "${RUNNER_TEMP}/release-notes.md"

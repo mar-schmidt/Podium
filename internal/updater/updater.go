@@ -38,6 +38,7 @@ type Status struct {
 	AssetURL        string `json:"asset_url"`
 	ChecksumURL     string `json:"checksum_url"`
 	ReleaseURL      string `json:"release_url"`
+	ReleaseNotes    string `json:"release_notes"`
 	BlockingReason  string `json:"blocking_reason,omitempty"`
 }
 
@@ -70,6 +71,7 @@ type release struct {
 	TagName         string  `json:"tag_name"`
 	TargetCommitish string  `json:"target_commitish"`
 	HTMLURL         string  `json:"html_url"`
+	Body            string  `json:"body"`
 	Assets          []asset `json:"assets"`
 }
 
@@ -108,6 +110,7 @@ func Check(ctx context.Context, opts Options) (Status, error) {
 		AssetURL:        archiveAsset.BrowserDownloadURL,
 		ChecksumURL:     sumAsset.BrowserDownloadURL,
 		ReleaseURL:      rel.HTMLURL,
+		ReleaseNotes:    rel.Body,
 	}
 	status.UpdateAvailable = updateAvailable(opts.CurrentVersion, rel.TagName)
 	if IsUnreleasedBuild(opts.CurrentVersion) {

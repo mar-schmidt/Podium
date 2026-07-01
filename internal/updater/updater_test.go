@@ -60,6 +60,9 @@ func TestCheckSelectsVersionedAssetAndBlocksDirty(t *testing.T) {
 	if status.BlockingReason == "" {
 		t.Fatal("dirty build should have blocking reason")
 	}
+	if !strings.Contains(status.ReleaseNotes, "- Add release notes (`abc1234`)") {
+		t.Fatalf("release notes = %q", status.ReleaseNotes)
+	}
 }
 
 func TestVerifyChecksum(t *testing.T) {
@@ -131,7 +134,8 @@ func fakeReleaseServer(t *testing.T, tag string, files map[string][]byte) *httpt
 				assets = append(assets, fmt.Sprintf(`{"name":%q,"browser_download_url":"%s/assets/%s"}`, name, externalURL(r), name))
 			}
 			assets = append(assets, fmt.Sprintf(`{"name":"SHA256SUMS","browser_download_url":"%s/assets/SHA256SUMS"}`, externalURL(r)))
-			fmt.Fprintf(w, `{"tag_name":%q,"target_commitish":"abc123","html_url":"%s/releases/%s","assets":[%s]}`, tag, externalURL(r), tag, strings.Join(assets, ","))
+			body := fmt.Sprintf("# Podium %s\n\n- Add release notes (`abc1234`)", tag)
+			fmt.Fprintf(w, `{"tag_name":%q,"target_commitish":"abc123","html_url":"%s/releases/%s","body":%q,"assets":[%s]}`, tag, externalURL(r), tag, body, strings.Join(assets, ","))
 		case strings.HasPrefix(r.URL.Path, "/assets/"):
 			name := strings.TrimPrefix(r.URL.Path, "/assets/")
 			if name == "SHA256SUMS" {

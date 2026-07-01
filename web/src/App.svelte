@@ -63,6 +63,7 @@
   let daemonStatus = $state<"connecting" | "live" | "offline">("connecting");
   let agents = $state<Agent[]>([]);
   let chatTarget = $state<ChatTarget | null>(null);
+  let releaseNotesFocusToken = $state(0);
 
   // Hire modal.
   let hireOpen = $state(false);
@@ -160,6 +161,11 @@
   function openChat(target: ChatTarget) {
     chatTarget = target;
     route = "chat";
+  }
+
+  function openReleaseNotes() {
+    releaseNotesFocusToken += 1;
+    route = "settings";
   }
 
   function openHire() {
@@ -273,6 +279,9 @@
           {/if}
           <div class="update-actions">
             <button class="update-btn primary" disabled={updateState === "updating" || updateState === "restarting"} onclick={runUpdate}>Update</button>
+            {#if updateState === "available" && update}
+              <button class="update-btn" onclick={openReleaseNotes}>Release notes</button>
+            {/if}
           </div>
         </div>
       {/if}
@@ -300,6 +309,7 @@
         {update}
         {updateState}
         {updateError}
+        {releaseNotesFocusToken}
         onCheckUpdate={() => refreshUpdate()}
         onRunUpdate={runUpdate} />
     {/if}

@@ -73,7 +73,7 @@
 
   // Layout / UI state.
   let sessOpen = $state(true);
-  let ctxOpen = $state(true);
+  let ctxOpen = $state(false);
   let isPhone = $state(false);
   let openDropdown = $state<string | null>(null);
   let newSessionOpen = $state(false);

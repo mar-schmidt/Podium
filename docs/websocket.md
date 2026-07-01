@@ -34,6 +34,26 @@ Send a turn to a new or existing session.
 Slash commands use the same `send_turn` envelope and return `notice`, `session`,
 and `done` messages rather than provider deltas.
 
+Web turns are daemon-owned. Closing or reconnecting the socket does not cancel
+an active turn; the browser can reattach to the session:
+
+```json
+{"type":"attach_session","request_id":"...","session_id":"..."}
+```
+
+Explicit user cancellation is session-scoped:
+
+```json
+{"type":"stop_turn","request_id":"...","session_id":"..."}
+```
+
+Session settings can be changed without writing a slash command into chat
+history:
+
+```json
+{"type":"update_session_settings","request_id":"...","session_id":"...","permission_mode":"yolo"}
+```
+
 ```json
 {
   "type": "permission_decision",
@@ -53,13 +73,15 @@ Answer an inline permission request. Denies use:
 | Type | Payload |
 | --- | --- |
 | `hello` | Connection acknowledgement. |
-| `state` | `agents`, `sessions`. |
+| `state` | `agents`, `sessions`, `active_turns`. |
 | `session` | Active/created session. |
 | `history` | Ordered stored messages. |
 | `message` | One stored user or assistant message. |
 | `delta` | Incremental assistant text. |
 | `assistant` | Final assistant text fallback. |
 | `permission_request` | Tool approval request. |
+| `user_input_request` | Provider/user clarification request. |
+| `turn_state` | Current active-turn snapshot for a session. |
 | `notice` | Non-history UI notice, usually from slash commands. |
 | `done` | Turn complete. |
 | `error` | Error string. |

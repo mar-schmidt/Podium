@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mar-schmidt/Podium/internal/adapter"
@@ -29,6 +30,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	writer := &wsWriter{conn: conn}
+	defer s.turns.detach(writer)
 	_ = writer.write(ctx, ServerMessage{Type: "hello"})
 	_ = s.writeState(ctx, writer)
 
@@ -119,6 +121,34 @@ func (s *Server) handleWSMessage(ctx context.Context, writer *wsWriter, msg Clie
 	case "send_turn":
 		go s.runWSTurn(ctx, writer, msg)
 		return nil
+	case "attach_session":
+		if msg.SessionID == "" {
+			return errors.New("session_id is required")
+		}
+		if state, ok := s.turns.attach(msg.SessionID, writer); ok {
+			return writer.write(ctx, ServerMessage{Type: "turn_state", RequestID: msg.RequestID, SessionID: msg.SessionID, TurnState: &state})
+		}
+		return nil
+	case "stop_turn":
+		if msg.SessionID == "" {
+			return errors.New("session_id is required")
+		}
+		if !s.turns.stop(msg.SessionID) {
+			return errors.New("active turn not found")
+		}
+		return nil
+	case "update_session_settings":
+		if msg.SessionID == "" {
+			return errors.New("session_id is required")
+		}
+		session, err := s.core.UpdateSessionSettings(context.Background(), msg.SessionID, msg.Model, msg.Effort, msg.PermissionMode)
+		if err != nil {
+			return err
+		}
+		if err := writer.write(ctx, ServerMessage{Type: "session", RequestID: msg.RequestID, SessionID: session.ID, Session: &session}); err != nil {
+			return err
+		}
+		return s.writeState(ctx, writer)
 	case "permission_decision":
 		if msg.Decision == nil {
 			return errors.New("permission decision is required")
@@ -151,10 +181,11 @@ func (s *Server) writeState(ctx context.Context, writer *wsWriter) error {
 	if err != nil {
 		return err
 	}
-	return writer.write(ctx, ServerMessage{Type: "state", Agents: agents, Sessions: sessions})
+	return writer.write(ctx, ServerMessage{Type: "state", Agents: agents, Sessions: sessions, ActiveTurns: s.turns.summaries()})
 }
 
 func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMessage) {
+	daemonCtx := context.Background()
 	var session store.Session
 	var err error
 	if msg.SessionID == "" {
@@ -162,7 +193,7 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 			_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, Error: "agent_name is required"})
 			return
 		}
-		session, err = s.core.CreateSession(ctx, core.CreateSessionRequest{
+		session, err = s.core.CreateSession(daemonCtx, core.CreateSessionRequest{
 			AgentName:      msg.AgentName,
 			Origin:         store.OriginWeb,
 			Model:          msg.Model,
@@ -171,16 +202,14 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 			ProjectID:      msg.ProjectID,
 		})
 	} else {
-		session, err = s.core.GetSession(ctx, msg.SessionID)
+		session, err = s.core.GetSession(daemonCtx, msg.SessionID)
 	}
 	if err != nil {
 		_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, Error: err.Error()})
 		return
 	}
-	if err := writer.write(ctx, ServerMessage{Type: "session", RequestID: msg.RequestID, Session: &session}); err != nil {
-		return
-	}
-	slash, err := s.core.HandleSlashCommand(ctx, session.ID, msg.Message)
+	_ = writer.write(ctx, ServerMessage{Type: "session", RequestID: msg.RequestID, Session: &session})
+	slash, err := s.core.HandleSlashCommand(daemonCtx, session.ID, msg.Message)
 	if err != nil {
 		_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, Error: err.Error()})
 		return
@@ -194,38 +223,49 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 	}
 
 	turnID := uuid.NewString()
+	turnCtx, cancel := context.WithCancel(context.Background())
+	state, err := s.turns.start(session.ID, turnID, msg.RequestID, writer, cancel)
+	if err != nil {
+		cancel()
+		_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, SessionID: session.ID, Error: err.Error()})
+		return
+	}
+	_ = writer.write(ctx, ServerMessage{Type: "turn_state", RequestID: msg.RequestID, SessionID: session.ID, TurnState: &state})
+	defer s.turns.finish(session.ID)
+
 	requests, unsubscribePermissions := s.broker.subscribe(turnID)
 	inputs, unsubscribeInputs := s.input.subscribe(turnID)
 	defer unsubscribePermissions()
 	defer unsubscribeInputs()
+	defer cancel()
 
-	events, err := s.core.StreamTurn(ctx, session.ID, msg.Message, core.TurnOptions{
+	events, err := s.core.StreamTurn(turnCtx, session.ID, msg.Message, core.TurnOptions{
 		PermissionTurnID: turnID,
 		PermissionRelay:  s.broker,
 		UserInputRelay:   s.input,
 	})
 	if err != nil {
-		_ = writer.write(ctx, ServerMessage{Type: "error", RequestID: msg.RequestID, Error: err.Error()})
+		s.turns.fail(session.ID, err.Error())
 		return
 	}
 
 	for events != nil || requests != nil || inputs != nil {
 		select {
-		case <-ctx.Done():
+		case <-turnCtx.Done():
 			return
 		case request, ok := <-requests:
 			if !ok {
 				requests = nil
 				continue
 			}
-			_ = writer.write(ctx, ServerMessage{Type: "permission_request", RequestID: msg.RequestID, Request: &request})
+			s.turns.recordPermission(session.ID, &request)
 		case input, ok := <-inputs:
 			if !ok {
 				inputs = nil
 				continue
 			}
-			s.markRoadmapQuestionPending(ctx, session.ID, input.ID)
-			_ = writer.write(ctx, ServerMessage{Type: "user_input_request", RequestID: msg.RequestID, Input: &input})
+			s.markRoadmapQuestionPending(turnCtx, session.ID, input.ID)
+			s.turns.recordUserInput(session.ID, &input)
 		case event, ok := <-events:
 			if !ok {
 				events = nil
@@ -233,13 +273,35 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 				inputs = nil
 				continue
 			}
-			if err := s.writeTurnEvent(ctx, writer, msg.RequestID, session.ID, event); err != nil {
-				return
-			}
+			s.recordWSTurnEvent(turnCtx, session.ID, event)
 		}
 	}
-	_ = writer.write(ctx, ServerMessage{Type: "done", RequestID: msg.RequestID})
-	_ = s.writeState(ctx, writer)
+	s.turns.finish(session.ID)
+	stateCtx, stateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stateCancel()
+	_ = s.writeState(stateCtx, writer)
+}
+
+func (s *Server) recordWSTurnEvent(ctx context.Context, sessionID string, event core.TurnEvent) {
+	switch event.Kind {
+	case "message_stored":
+		s.turns.recordMessage(sessionID, event.Message)
+	case adapter.EventAssistantDelta:
+		s.turns.recordDelta(sessionID, event.Content)
+	case adapter.EventAssistantMessage:
+		s.turns.recordAssistant(sessionID, event.Content)
+	case adapter.EventPermissionRequest:
+		s.turns.recordPermission(sessionID, event.PermissionRequest)
+	case adapter.EventUserInputRequest:
+		if event.UserInputRequest != nil {
+			s.markRoadmapQuestionPending(ctx, sessionID, event.UserInputRequest.ID)
+		}
+		s.turns.recordUserInput(sessionID, event.UserInputRequest)
+	case adapter.EventTurnDone:
+		s.turns.finish(sessionID)
+	case "error":
+		s.turns.fail(sessionID, event.Content)
+	}
 }
 
 func (s *Server) writeTurnEvent(ctx context.Context, writer *wsWriter, requestID, sessionID string, event core.TurnEvent) error {

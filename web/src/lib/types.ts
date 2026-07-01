@@ -283,8 +283,35 @@ export interface UserInputDecision {
   answers: Record<string, string[]>;
 }
 
+export interface ActiveTurnSummary {
+  session_id: string;
+  turn_id: string;
+  status: "running" | "done" | "error" | "stopped";
+  pending?: "permission" | "question" | "assistant" | "";
+}
+
+export interface TurnState {
+  session_id: string;
+  turn_id: string;
+  status: "running" | "done" | "error" | "stopped";
+  pending_assistant?: string;
+  pending_permission?: PermissionRequest;
+  pending_user_input?: UserInputRequest;
+  error?: string;
+}
+
 export type ClientMessage =
   | { type: "list"; request_id?: string }
+  | { type: "attach_session"; request_id?: string; session_id: string }
+  | { type: "stop_turn"; request_id?: string; session_id: string }
+  | {
+      type: "update_session_settings";
+      request_id: string;
+      session_id: string;
+      model?: string;
+      effort?: string;
+      permission_mode?: PermissionMode;
+    }
   | {
       type: "create_session";
       request_id: string;
@@ -319,12 +346,15 @@ export interface ServerMessage {
     | "assistant"
     | "permission_request"
     | "user_input_request"
+    | "turn_state"
     | "notice"
     | "done"
     | "error";
   request_id?: string;
+  session_id?: string;
   agents?: Agent[];
   sessions?: Session[];
+  active_turns?: ActiveTurnSummary[];
   session?: Session;
   history?: Message[];
   message?: Message;
@@ -332,6 +362,7 @@ export interface ServerMessage {
   notice?: string;
   request?: PermissionRequest;
   input?: UserInputRequest;
+  turn_state?: TurnState;
   error?: string;
 }
 

@@ -34,6 +34,7 @@ type Server struct {
 	github    *podiumgithub.Service
 	broker    *permissionBroker
 	input     *userInputBroker
+	turns     *activeTurnHub
 	paths     config.Paths
 }
 
@@ -61,6 +62,7 @@ func New(opts Options) *Server {
 		github:    podiumgithub.New(podiumgithub.Options{Config: opts.GitHub, Home: opts.Paths.Home}),
 		broker:    newPermissionBroker(),
 		input:     newUserInputBroker(),
+		turns:     newActiveTurnHub(),
 		paths:     opts.Paths,
 	}
 	mux := http.NewServeMux()

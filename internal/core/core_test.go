@@ -229,6 +229,34 @@ func TestSlashCommandsUpdateSessionSettingsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionSettingsDirectly(t *testing.T) {
+	ctx := context.Background()
+	c, cleanup := newTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "operator", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "operator", Origin: store.OriginWeb})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	updated, err := c.UpdateSessionSettings(ctx, session.ID, "", "", config.PermissionYolo)
+	if err != nil {
+		t.Fatalf("update permission: %v", err)
+	}
+	if updated.ID != session.ID {
+		t.Fatalf("settings update changed session id: got %q want %q", updated.ID, session.ID)
+	}
+	if updated.PermissionMode != config.PermissionYolo {
+		t.Fatalf("permission was not updated: %+v", updated)
+	}
+	if updated.Model != session.Model || updated.Effort != session.Effort {
+		t.Fatalf("empty direct settings should preserve model/effort: before=%+v after=%+v", session, updated)
+	}
+}
+
 func TestProfileSlashSwitchesTargetAndClearsHandle(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()

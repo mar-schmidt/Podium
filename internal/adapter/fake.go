@@ -16,6 +16,7 @@ type Fake struct {
 	Responses        []string
 	Requests         []TurnRequest
 	RateLimitedTurns int
+	ResponseDelay    time.Duration
 	// PermissionTool, when set, makes each turn request approval for this tool
 	// name through the turn's PermissionRelay before responding. It models the
 	// unattended preapproved policy (§7.7) so tests can assert allow/deny.
@@ -86,6 +87,13 @@ func (f *Fake) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, err
 				response = fmt.Sprintf("denied %s: %s", f.PermissionTool, decision.Message)
 			}
 		}
+		if f.ResponseDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(f.ResponseDelay):
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -121,7 +129,7 @@ func (f *Fake) requestPermission(ctx context.Context, req TurnRequest) Permissio
 	decision := PermissionDecision{Behavior: "deny", Message: "no relay"}
 	if req.Relay != nil {
 		got, err := req.Relay.RequestPermission(ctx, PermissionRequest{
-			ID:       "fake-perm",
+			ID:       "fake-perm-" + req.Settings.PermissionTurnID,
 			TurnID:   req.Settings.PermissionTurnID,
 			ToolName: f.PermissionTool,
 			Input:    json.RawMessage(`{}`),

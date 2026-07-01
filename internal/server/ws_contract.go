@@ -25,18 +25,21 @@ type ClientMessage struct {
 
 // ServerMessage is the daemon-to-browser WebSocket contract.
 type ServerMessage struct {
-	Type      string                     `json:"type"`
-	RequestID string                     `json:"request_id,omitempty"`
-	Agents    []store.Agent              `json:"agents,omitempty"`
-	Sessions  []store.Session            `json:"sessions,omitempty"`
-	Session   *store.Session             `json:"session,omitempty"`
-	History   []store.Message            `json:"history,omitempty"`
-	Message   *store.Message             `json:"message,omitempty"`
-	Delta     string                     `json:"delta,omitempty"`
-	Notice    string                     `json:"notice,omitempty"`
-	Request   *adapter.PermissionRequest `json:"request,omitempty"`
-	Input     *adapter.UserInputRequest  `json:"input,omitempty"`
-	Error     string                     `json:"error,omitempty"`
+	Type        string                     `json:"type"`
+	RequestID   string                     `json:"request_id,omitempty"`
+	SessionID   string                     `json:"session_id,omitempty"`
+	Agents      []store.Agent              `json:"agents,omitempty"`
+	Sessions    []store.Session            `json:"sessions,omitempty"`
+	ActiveTurns []ActiveTurnSummary        `json:"active_turns,omitempty"`
+	Session     *store.Session             `json:"session,omitempty"`
+	History     []store.Message            `json:"history,omitempty"`
+	Message     *store.Message             `json:"message,omitempty"`
+	Delta       string                     `json:"delta,omitempty"`
+	Notice      string                     `json:"notice,omitempty"`
+	Request     *adapter.PermissionRequest `json:"request,omitempty"`
+	Input       *adapter.UserInputRequest  `json:"input,omitempty"`
+	TurnState   *TurnState                 `json:"turn_state,omitempty"`
+	Error       string                     `json:"error,omitempty"`
 }
 
 func decodeClientMessage(data []byte) (ClientMessage, error) {

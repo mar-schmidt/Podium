@@ -142,6 +142,30 @@ func (c *Core) DeleteSession(ctx context.Context, id string) error {
 	return c.store.DeleteSession(ctx, id)
 }
 
+// UpdateSessionSettings changes mutable per-session turn settings without
+// appending a slash command to chat history. Empty fields keep their current
+// values.
+func (c *Core) UpdateSessionSettings(ctx context.Context, id, model, effort string, permissionMode config.PermissionMode) (store.Session, error) {
+	sess, err := c.store.GetSession(ctx, id)
+	if err != nil {
+		return store.Session{}, err
+	}
+	if model == "" {
+		model = sess.Model
+	}
+	if effort == "" {
+		effort = sess.Effort
+	} else if !validEffort(effort) {
+		return store.Session{}, fmt.Errorf("invalid effort %q", effort)
+	}
+	if permissionMode == "" {
+		permissionMode = sess.PermissionMode
+	} else if permissionMode != config.PermissionApprove && permissionMode != config.PermissionYolo {
+		return store.Session{}, fmt.Errorf("invalid permission mode %q", permissionMode)
+	}
+	return c.store.UpdateSessionSettings(ctx, id, model, effort, permissionMode)
+}
+
 // TurnOptions configures one live adapter turn.
 type TurnOptions struct {
 	PermissionTurnID string

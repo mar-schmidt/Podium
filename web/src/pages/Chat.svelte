@@ -13,6 +13,7 @@
   } from "../lib/theme";
   import type {
     Agent,
+    ActiveTurnSummary,
     ClientMessage,
     Message,
     PermissionMode,
@@ -21,6 +22,7 @@
     ServerMessage,
     Session,
     SessionOrigin,
+    TurnState,
     UserInputQuestion,
     UserInputRequest,
   } from "../lib/types";
@@ -45,6 +47,7 @@
 
   let status = $state<"connecting" | "live" | "offline">("connecting");
   let sessions = $state<Session[]>([]);
+  let activeTurns = $state<Record<string, ActiveTurnSummary>>({});
   let activeSession = $state<Session | null>(null);
   let projectName = $state<string>("");
 
@@ -76,6 +79,7 @@
   let countdown: number | undefined;
   let pendingSeed: string | null = null;
   let msgsEl: HTMLDivElement | null = null;
+  const LAST_SESSION_KEY = "podium:last-chat-session";
 
   // Layout / UI state.
   let sessOpen = $state(true);
@@ -131,6 +135,7 @@
   const curProjectID = $derived(activeSession ? activeSession.ProjectID : draftProjectID);
   const linkedProjectName = $derived(curProjectID ? projectName || projectLabel(curProjectID) : "");
   const showSlash = $derived(messageText.startsWith("/"));
+  const activeTurn = $derived(activeSession ? activeTurns[activeSession.ID] : undefined);
 
   function sessionSub(s: Session): string {
     return `${s.AgentName} · ${s.Provider}${s.Model ? " " + s.Model : ""}`;
@@ -149,6 +154,7 @@
     mq.addEventListener("change", syncPhone);
     connect();
     listProjects().then((p) => (projects = p)).catch(() => {});
+    restoreLastSession();
     poll = window.setInterval(() => send({ type: "list" }), 4000);
     countdown = window.setInterval(updatePermissionRemaining, 1000);
     return () => {
@@ -195,6 +201,7 @@
     ws.onopen = () => {
       setStatus("live");
       send({ type: "list" });
+      attachActiveSession();
       flushSeed();
     };
     ws.onclose = () => setStatus("offline");
@@ -219,27 +226,35 @@
     switch (msg.type) {
       case "state":
         sessions = msg.sessions ?? [];
+        activeTurns = activeTurnMap(msg.active_turns ?? []);
         if (!selectedAgent && agents.length > 0) selectedAgent = agents[0].Name;
         if (activeSession) {
           const replacement = sessions.find((s) => s.ID === activeSession?.ID);
           if (replacement) activeSession = replacement;
+          sending = !!activeTurns[activeSession.ID];
         }
         break;
       case "session":
         if (msg.session) {
           activeSession = msg.session;
           selectedAgent = msg.session.AgentName;
+          rememberSession(msg.session.ID);
           if (!msg.session.ProjectID) projectName = "";
           resetDraftSettings();
           sessions = [msg.session, ...sessions.filter((s) => s.ID !== msg.session?.ID)];
         }
         break;
+      case "turn_state":
+        applyTurnState(msg.turn_state);
+        break;
       case "history":
         messages = msg.history ?? [];
         pendingAssistant = "";
+        pendingPermission = null;
         pendingUserInput = null;
         break;
       case "message":
+        if (!messageForActiveSession(msg)) break;
         if (msg.message && !messages.some((e) => sameMessage(e, msg.message))) {
           messages = [...messages, msg.message];
           if (msg.message.Role === "assistant") {
@@ -249,16 +264,20 @@
         }
         break;
       case "delta":
+        if (!messageForActiveSession(msg)) break;
         pendingAssistant += msg.delta ?? "";
         break;
       case "assistant":
+        if (!messageForActiveSession(msg)) break;
         if (!pendingAssistant) pendingAssistant = msg.delta ?? "";
         break;
       case "permission_request":
+        if (!messageForActiveSession(msg)) break;
         pendingPermission = msg.request ?? null;
         updatePermissionRemaining();
         break;
       case "user_input_request":
+        if (!messageForActiveSession(msg)) break;
         pendingUserInput = msg.input ?? null;
         userInputAnswers = initialUserInputAnswers(pendingUserInput);
         break;
@@ -267,16 +286,78 @@
         sending = false;
         break;
       case "done":
-        pendingPermission = null;
-        if (pendingUserInput?.provider !== "claude") pendingUserInput = null;
-        sending = false;
+        if (msg.session_id) removeActiveTurn(msg.session_id);
+        if (messageForActiveSession(msg)) {
+          pendingPermission = null;
+          if (pendingUserInput?.provider !== "claude") pendingUserInput = null;
+          sending = false;
+        }
         window.setTimeout(() => send({ type: "list" }), 1200);
         break;
       case "error":
-        error = msg.error ?? "Unknown server error";
-        sending = false;
+        if (msg.session_id) removeActiveTurn(msg.session_id);
+        if (messageForActiveSession(msg)) {
+          error = msg.error ?? "Unknown server error";
+          sending = false;
+        }
         break;
     }
+  }
+
+  function activeTurnMap(turns: ActiveTurnSummary[]): Record<string, ActiveTurnSummary> {
+    const next: Record<string, ActiveTurnSummary> = {};
+    for (const turn of turns) next[turn.session_id] = turn;
+    return next;
+  }
+
+  function rememberSession(id: string) {
+    localStorage.setItem(LAST_SESSION_KEY, id);
+  }
+
+  function restoreLastSession() {
+    const id = localStorage.getItem(LAST_SESSION_KEY);
+    if (!id) return;
+    void loadHistory({ ID: id } as Session);
+  }
+
+  function attachActiveSession() {
+    if (activeSession?.ID && ws?.readyState === WebSocket.OPEN) {
+      send({ type: "attach_session", request_id: crypto.randomUUID(), session_id: activeSession.ID });
+    }
+  }
+
+  function messageForActiveSession(msg: ServerMessage): boolean {
+    return !msg.session_id || msg.session_id === activeSession?.ID;
+  }
+
+  function removeActiveTurn(sessionID: string) {
+    const { [sessionID]: _removed, ...rest } = activeTurns;
+    activeTurns = rest;
+  }
+
+  function applyTurnState(state: TurnState | undefined) {
+    if (!state?.session_id) return;
+    if (state.status === "running") {
+      activeTurns = {
+        ...activeTurns,
+        [state.session_id]: {
+          session_id: state.session_id,
+          turn_id: state.turn_id,
+          status: state.status,
+          pending: state.pending_permission ? "permission" : state.pending_user_input ? "question" : state.pending_assistant ? "assistant" : "",
+        },
+      };
+    } else {
+      removeActiveTurn(state.session_id);
+    }
+    if (state.session_id !== activeSession?.ID) return;
+    sending = state.status === "running";
+    pendingAssistant = state.pending_assistant ?? "";
+    pendingPermission = state.pending_permission ?? null;
+    pendingUserInput = state.pending_user_input ?? null;
+    if (pendingUserInput) userInputAnswers = initialUserInputAnswers(pendingUserInput);
+    if (state.error) error = state.error;
+    updatePermissionRemaining();
   }
 
   function sameMessage(a: Message, b: Message | undefined) {
@@ -297,10 +378,14 @@
       const detail = await getSession(session.ID);
       activeSession = detail.session;
       selectedAgent = detail.session.AgentName;
+      rememberSession(detail.session.ID);
       messages = detail.history ?? [];
       projectName = detail.project_name ?? (detail.session.ProjectID ? projectLabel(detail.session.ProjectID) : "");
       pendingAssistant = "";
+      pendingPermission = null;
       pendingUserInput = null;
+      sending = !!activeTurns[detail.session.ID];
+      attachActiveSession();
       if (isPhone) sessOpen = false;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -320,7 +405,10 @@
         messages = [];
         projectName = "";
         pendingAssistant = "";
+        pendingPermission = null;
         pendingUserInput = null;
+        sending = false;
+        localStorage.removeItem(LAST_SESSION_KEY);
       }
       pendingDelete = null;
       send({ type: "list" });
@@ -341,6 +429,7 @@
     notice = null;
     sending = true;
     pendingAssistant = "";
+    pendingPermission = null;
     pendingUserInput = null;
     send({
       type: "send_turn",
@@ -367,8 +456,10 @@
     activeSession = null;
     messages = [];
     projectName = "";
+    localStorage.removeItem(LAST_SESSION_KEY);
     if (resetDrafts) resetDraftSettings();
     pendingAssistant = "";
+    pendingPermission = null;
     pendingUserInput = null;
     notice = null;
     error = null;
@@ -381,18 +472,9 @@
     newSessionOpen = false;
   }
 
-  function runCommand(command: string) {
-    openDropdown = null;
-    if (!activeSession) {
-      messageText = command;
-      return;
-    }
-    sendTurn(command);
-  }
-
   function setModel(model: string) {
     if (activeSession) {
-      runCommand(`/model ${model}`);
+      updateSessionSettings({ model });
       return;
     }
     draftModel = model;
@@ -401,7 +483,7 @@
 
   function setEffort(effort: string) {
     if (activeSession) {
-      runCommand(`/effort ${effort}`);
+      updateSessionSettings({ effort });
       return;
     }
     draftEffort = effort;
@@ -410,7 +492,7 @@
 
   function setPermissionMode(mode: PermissionMode) {
     if (activeSession) {
-      runCommand(`/permission ${mode}`);
+      updateSessionSettings({ permission_mode: mode });
       return;
     }
     draftPermissionMode = mode;
@@ -421,6 +503,22 @@
     draftProjectID = projectID;
     projectName = "";
     openDropdown = null;
+  }
+
+  function updateSessionSettings(patch: { model?: string; effort?: string; permission_mode?: PermissionMode }) {
+    openDropdown = null;
+    if (!activeSession) return;
+    send({
+      type: "update_session_settings",
+      request_id: crypto.randomUUID(),
+      session_id: activeSession.ID,
+      ...patch,
+    });
+  }
+
+  function stopActiveTurn() {
+    if (!activeSession) return;
+    send({ type: "stop_turn", request_id: crypto.randomUUID(), session_id: activeSession.ID });
   }
 
   function decidePermission(allow: boolean) {
@@ -584,6 +682,11 @@
                 <span class="sess-row-title">{s.Name || s.AgentName}</span>
                 <span class="sess-row-sub mono">{sessionSub(s)}</span>
               </span>
+              {#if activeTurns[s.ID]}
+                <span class="run-pill mono" class:needs={activeTurns[s.ID].pending === "permission" || activeTurns[s.ID].pending === "question"}>
+                  {activeTurns[s.ID].pending === "permission" ? "approve" : activeTurns[s.ID].pending === "question" ? "question" : "running"}
+                </span>
+              {/if}
               <span style={originStyle(s.Origin)}>{originLabel(s.Origin)}</span>
             </button>
             <button class="sess-x" title="Delete session" aria-label="Delete session" onclick={() => (pendingDelete = s)}>
@@ -742,7 +845,11 @@
           placeholder={`Message ${activeAgent?.Name ?? "agent"}…   / for commands`}
           onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendTurn(); } }}
         />
-        <button class="composer-send" disabled={sending || status !== "live"} onclick={() => sendTurn()}>↑</button>
+        {#if activeTurn}
+          <button class="composer-stop" title="Stop active turn" onclick={stopActiveTurn}>■</button>
+        {:else}
+          <button class="composer-send" disabled={sending || status !== "live"} onclick={() => sendTurn()}>↑</button>
+        {/if}
       </div>
       <div class="composer-meta">
         <div class="dd-wrap">
@@ -1081,6 +1188,24 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .run-pill {
+    flex: none;
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid #cfe3d8;
+    background: #eaf5f0;
+    color: var(--teal-deep);
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .run-pill.needs {
+    border-color: #f0dca9;
+    background: #fbf1dd;
+    color: #9a6e1e;
   }
 
   .conv {
@@ -1525,6 +1650,20 @@
     align-items: center;
     justify-content: center;
     box-shadow: 0 6px 14px -6px rgba(63, 143, 126, 0.7);
+  }
+
+  .composer-stop {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #e7c3b5;
+    border-radius: 11px;
+    background: #fbeeea;
+    color: #a23e22;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .composer-meta {

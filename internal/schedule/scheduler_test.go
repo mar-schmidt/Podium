@@ -27,7 +27,7 @@ func newTestScheduler(t *testing.T) (*Scheduler, *core.Core, config.Paths, func(
 	}
 	fake := adapter.NewFake()
 	fake.Responses = []string{"scheduled work done"}
-	coreSvc, err := core.New(core.Options{Paths: paths, Store: db, Adapter: fake})
+	coreSvc, err := core.New(core.Options{Paths: paths, Store: db, Adapter: fake, DisableBackgroundWork: true})
 	if err != nil {
 		t.Fatalf("new core: %v", err)
 	}

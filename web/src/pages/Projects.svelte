@@ -40,6 +40,16 @@
   // Which agent's engine drafts descriptions.
   let writerAgent = $state("");
 
+  $effect(() => {
+    if (!agents.length) {
+      writerAgent = "";
+      return;
+    }
+    if (!writerAgent || !agents.some((a) => a.Name === writerAgent)) {
+      writerAgent = agents[0].Name;
+    }
+  });
+
   // New-project modal.
   let creating = $state(false);
   let npName = $state("");
@@ -412,14 +422,6 @@
       <p>Name your projects, give each a colour, and write a short description. Colours show up everywhere the project appears.</p>
     </div>
     <span class="spacer"></span>
-    {#if agents.length > 1}
-      <label class="writer-pick mono">
-        ✦ writer
-        <select bind:value={writerAgent}>
-          {#each agents as a}<option value={a.Name}>{a.Name}</option>{/each}
-        </select>
-      </label>
-    {/if}
     <button class="head-cta secondary" onclick={openGitHubCreate}>+ From GitHub</button>
     <button class="head-cta" onclick={() => (creating = true)}>+ New project</button>
   </header>
@@ -449,10 +451,19 @@
 
         <div class="pc-desc-head">
           <span class="label-mono" style="flex:1">description</span>
-          <button class="ai-btn" disabled={busyDescribe === p.id} onclick={() => describe(p)}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" /></svg>
-            {busyDescribe === p.id ? "Writing…" : "Help me write"}
-          </button>
+          <div class="ai-combo">
+            <button class="ai-btn" disabled={busyDescribe === p.id} onclick={() => describe(p)}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" /></svg>
+              {busyDescribe === p.id ? "Writing…" : writerAgent ? "Help me write using" : "Help me write"}
+            </button>
+            {#if agents.length > 1}
+              <select class="ai-writer-select" bind:value={writerAgent} disabled={busyDescribe === p.id} aria-label="Choose writer agent">
+                {#each agents as a}<option value={a.Name}>{a.Name}</option>{/each}
+              </select>
+            {:else if writerAgent}
+              <span class="ai-writer-name">{writerAgent}</span>
+            {/if}
+          </div>
         </div>
         <textarea
           class="field-area"
@@ -659,29 +670,6 @@
 {/if}
 
 <style>
-  .writer-pick {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font: 500 11.5px "JetBrains Mono", monospace;
-    color: #6b53a8;
-    background: #f4eff8;
-    border: 1px solid #e2d7e9;
-    border-radius: 999px;
-    padding: 5px 6px 5px 12px;
-  }
-
-  .writer-pick select {
-    border: none;
-    background: #fff;
-    border-radius: 999px;
-    padding: 4px 8px;
-    font: 500 11.5px "JetBrains Mono", monospace;
-    color: #6b53a8;
-    outline: none;
-    cursor: pointer;
-  }
-
   .head-cta.secondary {
     background: #fff;
     color: var(--teal-deep);
@@ -752,14 +740,63 @@
   .ai-btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 5px;
-    border: 1px solid #e2d7e9;
-    background: #f4eff8;
+    border: none;
+    background: transparent;
     color: #6b53a8;
-    border-radius: 9px;
-    padding: 5px 10px;
+    border-radius: 0;
+    padding: 5px 8px 5px 10px;
     font: 600 11.5px "Hanken Grotesk";
     cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .ai-btn:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+
+  .ai-combo {
+    display: inline-flex;
+    align-items: stretch;
+    max-width: 100%;
+    border: 1px solid #e2d7e9;
+    background: #f4eff8;
+    border-radius: 9px;
+    overflow: hidden;
+    flex: none;
+  }
+
+  .ai-writer-select,
+  .ai-writer-name {
+    border: none;
+    border-left: 1px solid #e2d7e9;
+    background: #fff;
+    color: #6b53a8;
+    font: 600 11.5px "Hanken Grotesk";
+  }
+
+  .ai-writer-select {
+    min-width: 0;
+    max-width: 128px;
+    padding: 0 24px 0 8px;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .ai-writer-select:disabled {
+    cursor: wait;
+  }
+
+  .ai-writer-name {
+    display: inline-flex;
+    align-items: center;
+    max-width: 128px;
+    padding: 0 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .pc-save-row {
@@ -1095,16 +1132,6 @@
   }
 
   @media (max-width: 768px) {
-    .writer-pick {
-      align-self: stretch;
-      justify-content: space-between;
-    }
-
-    .writer-pick select {
-      min-width: 0;
-      max-width: 58vw;
-    }
-
     .proj-card {
       padding: 16px;
     }
@@ -1133,13 +1160,23 @@
       flex-direction: column;
     }
 
-    .ai-btn,
+    .ai-combo,
     .pc-view,
     .pc-save,
     .pc-cancel,
     .mini-action {
       justify-content: center;
       width: 100%;
+    }
+
+    .ai-btn {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ai-writer-select,
+    .ai-writer-name {
+      max-width: 45%;
     }
 
     .repo-actions {

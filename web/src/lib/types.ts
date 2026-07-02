@@ -167,6 +167,7 @@ export interface GitHubRepo {
   full_name: string;
   html_url: string;
   default_branch: string;
+  description: string;
   private: boolean;
 }
 

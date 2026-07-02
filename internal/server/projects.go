@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mar-schmidt/Podium/internal/core"
 	podiumgithub "github.com/mar-schmidt/Podium/internal/github"
@@ -63,6 +65,7 @@ type projectRepoRequest struct {
 	HTMLURL       string `json:"html_url"`
 	DefaultBranch string `json:"default_branch"`
 	Ref           string `json:"ref"`
+	Description   string `json:"description"`
 	Force         bool   `json:"force"`
 }
 
@@ -81,6 +84,11 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 	id, action, _ := strings.Cut(rest, "/")
 	if id == "" {
 		http.Error(w, "project id is required", http.StatusBadRequest)
+		return
+	}
+
+	if id == "from-github" && action == "" {
+		s.handleProjectFromGitHub(w, r)
 		return
 	}
 
@@ -104,6 +112,20 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]string{"description": text}, nil)
+		return
+	}
+
+	if action == "analyze" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req describeRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		project, err := s.core.AnalyzeProjectRepo(ctx, id, req.Agent)
+		writeJSON(w, project, err)
 		return
 	}
 
@@ -134,6 +156,61 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleProjectFromGitHub(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.github == nil {
+		http.Error(w, "github unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req projectRepoRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	owner, name := repoOwnerName(req)
+	if owner == "" || name == "" {
+		http.Error(w, "repo owner and name are required", http.StatusBadRequest)
+		return
+	}
+
+	project, err := s.projectForGitHubCreate(r.Context(), name, req.Description, req.Force)
+	if err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	repo := projects.SnapshotRepo(owner, name, req.HTMLURL, req.DefaultBranch, req.Ref)
+	result, err := s.github.SyncProject(r.Context(), podiumgithub.SyncRequest{Project: project, Repo: repo, Force: req.Force})
+	if writeGitHubProjectError(w, err) {
+		return
+	}
+	synced := result.Repo
+	updated, err := s.core.UpdateProject(r.Context(), project.ID, projects.ProjectPatch{Repo: &synced})
+	writeJSON(w, updated, err)
+}
+
+func (s *Server) projectForGitHubCreate(ctx context.Context, name, description string, force bool) (projects.Project, error) {
+	if force {
+		list, err := s.core.ListProjects(ctx)
+		if err != nil {
+			return projects.Project{}, err
+		}
+		for i := len(list) - 1; i >= 0; i-- {
+			if list[i].Name == name && list[i].Repo == nil {
+				return list[i], nil
+			}
+		}
+	}
+	id := s.core.UniqueProjectID(name)
+	return s.core.CreateProject(ctx, projects.Project{
+		ID:          id,
+		Name:        name,
+		Description: strings.TrimSpace(description),
+	})
 }
 
 func (s *Server) handleProjectRepo(w http.ResponseWriter, r *http.Request, id string) {

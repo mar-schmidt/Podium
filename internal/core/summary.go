@@ -104,19 +104,38 @@ func (c *Core) generateSummaryWithModel(ctx context.Context, sess store.Session,
 // short helper completions (e.g. drafting a project description) that are not
 // tied to a durable session.
 func (c *Core) oneShotCompletion(ctx context.Context, agent store.Agent, prompt string) string {
+	return c.oneShotCompletionWithOptions(ctx, agent, prompt, oneShotOptions{})
+}
+
+type oneShotOptions struct {
+	ExtraWorkspaceDirs []string
+	Unattended         bool
+	AllowedTools       []string
+}
+
+func (c *Core) oneShotCompletionWithOptions(ctx context.Context, agent store.Agent, prompt string, opts oneShotOptions) string {
+	var relay adapter.PermissionRelay
+	if opts.Unattended {
+		relay = NewAllowListRelay(opts.AllowedTools)
+	}
 	events, err := c.adapter.SendTurn(ctx, adapter.TurnRequest{
 		SessionID: "oneshot-" + agent.Name,
 		Handle:    adapter.Handle{Provider: agent.Provider},
 		Message:   prompt,
 		Settings: adapter.TurnSettings{
-			AgentName:      agent.Name,
-			Profile:        agent.Profile,
-			ProfileDir:     c.profileDir(agent.Provider, agent.Profile),
-			Model:          agent.Model,
-			Effort:         "low",
-			PermissionMode: agent.PermissionMode,
-			WorkspaceDir:   c.AgentPaths(agent.Name).Workspace,
+			AgentName:          agent.Name,
+			Profile:            agent.Profile,
+			ProfileDir:         c.profileDir(agent.Provider, agent.Profile),
+			Model:              agent.Model,
+			Effort:             "low",
+			PermissionMode:     agent.PermissionMode,
+			WorkspaceDir:       c.AgentPaths(agent.Name).Workspace,
+			ExtraWorkspaceDirs: opts.ExtraWorkspaceDirs,
+			PermissionTurnID:   "oneshot-" + agent.Name,
+			Unattended:         opts.Unattended,
+			AllowedTools:       opts.AllowedTools,
 		},
+		Relay: relay,
 	})
 	if err != nil {
 		return ""

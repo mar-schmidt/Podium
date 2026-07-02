@@ -161,6 +161,7 @@ type Repo struct {
 	FullName      string `json:"full_name"`
 	HTMLURL       string `json:"html_url"`
 	DefaultBranch string `json:"default_branch"`
+	Description   string `json:"description"`
 	Private       bool   `json:"private"`
 }
 
@@ -186,6 +187,7 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 				FullName      string `json:"full_name"`
 				HTMLURL       string `json:"html_url"`
 				DefaultBranch string `json:"default_branch"`
+				Description   string `json:"description"`
 				Private       bool   `json:"private"`
 				Owner         struct {
 					Login string `json:"login"`
@@ -204,6 +206,7 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 				FullName:      r.FullName,
 				HTMLURL:       r.HTMLURL,
 				DefaultBranch: r.DefaultBranch,
+				Description:   r.Description,
 				Private:       r.Private,
 			})
 		}

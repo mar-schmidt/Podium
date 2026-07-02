@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    analyzeProject,
     connectProjectRepo,
     createProject,
+    createProjectFromGitHub,
     describeProject,
     disconnectProjectRepo,
     githubDevicePoll,
@@ -47,6 +49,8 @@
   let npConnectGitHub = $state(false);
 
   // GitHub connection modal.
+  let ghMode = $state<"connect" | "create">("connect");
+  let ghModalOpen = $state(false);
   let ghOpen = $state<Project | null>(null);
   let ghStatus = $state<GitHubStatus | null>(null);
   let ghRepos = $state<GitHubRepo[]>([]);
@@ -56,13 +60,16 @@
   let ghReplacePending = $state(false);
   let ghInstallOpened = $state(false);
   let ghJustConnected = $state(false);
+  let ghAnalyzing = $state(false);
+  let ghAnalyzeWarning = $state("");
+  let ghCreated = $state<Project | null>(null);
   let ghAuthWindow: Window | null = null;
   let ghPollTimer: number | undefined;
 
   onMount(() => {
     void load();
     const refreshAfterGitHub = () => {
-      if (ghOpen && ghStatus?.authed && ghInstallOpened && !ghBusy) {
+      if (ghModalOpen && ghStatus?.authed && ghInstallOpened && !ghBusy) {
         void refreshGitHub();
       }
     };
@@ -165,15 +172,46 @@
   }
 
   async function openGitHub(p: Project) {
+    ghMode = "connect";
+    ghModalOpen = true;
     ghOpen = p;
     ghSelected = p.repo?.full_name ?? "";
     ghDevice = null;
     ghReplacePending = false;
     ghInstallOpened = false;
     ghJustConnected = false;
+    ghAnalyzing = false;
+    ghAnalyzeWarning = "";
+    ghCreated = null;
     clearGitHubPolling();
     error = null;
     await refreshGitHub();
+  }
+
+  async function openGitHubCreate() {
+    ghMode = "create";
+    ghModalOpen = true;
+    ghOpen = null;
+    ghSelected = "";
+    ghDevice = null;
+    ghReplacePending = false;
+    ghInstallOpened = false;
+    ghJustConnected = false;
+    ghAnalyzing = false;
+    ghAnalyzeWarning = "";
+    ghCreated = null;
+    clearGitHubPolling();
+    error = null;
+    await refreshGitHub();
+  }
+
+  function closeGitHubModal() {
+    ghModalOpen = false;
+    ghOpen = null;
+    ghDevice = null;
+    ghReplacePending = false;
+    ghAnalyzing = false;
+    clearGitHubPolling();
   }
 
   async function refreshGitHub() {
@@ -294,6 +332,52 @@
     }
   }
 
+  async function createFromSelectedRepo(force = false) {
+    const repo = selectedRepo();
+    if (!repo) return;
+    ghBusy = "connect";
+    error = null;
+    ghAnalyzeWarning = "";
+    try {
+      const created = await createProjectFromGitHub({
+        owner: repo.owner,
+        name: repo.name,
+        full_name: repo.full_name,
+        html_url: repo.html_url,
+        default_branch: repo.default_branch,
+        ref: repo.default_branch,
+        description: repo.description,
+        force,
+      });
+      ghCreated = created;
+      ghReplacePending = false;
+      ghJustConnected = true;
+      ghBusy = "";
+      await load();
+      if (agents.length === 0) {
+        ghAnalyzeWarning = "Project created, but automatic analysis needs an agent. Edit details on the project card.";
+        return;
+      }
+      ghAnalyzing = true;
+      try {
+        ghCreated = await analyzeProject(created.id);
+      } catch {
+        ghAnalyzeWarning = "Project created, but automatic analysis failed. Edit details on the project card.";
+      } finally {
+        ghAnalyzing = false;
+        await load();
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message === "CONFIRM_REPLACE") {
+        ghReplacePending = true;
+      } else {
+        error = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      ghBusy = "";
+    }
+  }
+
   async function syncRepo(p: Project, force = false) {
     ghBusy = "sync:" + p.id;
     error = null;
@@ -336,6 +420,7 @@
         </select>
       </label>
     {/if}
+    <button class="head-cta secondary" onclick={openGitHubCreate}>+ From GitHub</button>
     <button class="head-cta" onclick={() => (creating = true)}>+ New project</button>
   </header>
 
@@ -453,12 +538,18 @@
   </div>
 {/if}
 
-{#if ghOpen}
-  <div class="modal-backdrop" role="presentation" onclick={() => (ghOpen = null)}>
-    <div class="modal-card np-modal" role="dialog" aria-modal="true" aria-label="Connect GitHub" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+{#if ghModalOpen}
+  <div class="modal-backdrop" role="presentation" onclick={closeGitHubModal}>
+    <div class="modal-card np-modal" role="dialog" aria-modal="true" aria-label={ghMode === "create" ? "New project from GitHub" : "Connect GitHub"} tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <div class="modal-head">
-        <div class="modal-title">Connect GitHub</div>
-        <div class="modal-sub">Project source will be downloaded into <span class="mono">~/.podium/projects/{ghOpen.path}/repo/</span>.</div>
+        <div class="modal-title">{ghMode === "create" ? "New project from GitHub" : "Connect GitHub"}</div>
+        <div class="modal-sub">
+          {#if ghMode === "create"}
+            Pick a repository. Podium will create the project, sync the snapshot, then fill in the details.
+          {:else if ghOpen}
+            Project source will be downloaded into <span class="mono">~/.podium/projects/{ghOpen.path}/repo/</span>.
+          {/if}
+        </div>
       </div>
       <div class="modal-body">
         <div class="connect-steps">
@@ -470,9 +561,9 @@
             <span class="step-dot">{ghRepos.length > 0 ? "✓" : "2"}</span>
             <span>Choose which repositories Podium may read</span>
           </div>
-          <div class="step-row" class:done={!!ghOpen.repo}>
-            <span class="step-dot">{ghOpen.repo ? "✓" : "3"}</span>
-            <span>Connect one repository to this project</span>
+          <div class="step-row" class:done={ghMode === "create" ? !!ghCreated : !!ghOpen?.repo}>
+            <span class="step-dot">{(ghMode === "create" ? !!ghCreated : !!ghOpen?.repo) ? "✓" : "3"}</span>
+            <span>{ghMode === "create" ? "Create a project from one repository" : "Connect one repository to this project"}</span>
           </div>
         </div>
 
@@ -489,7 +580,39 @@
             <button class="modal-cta" disabled={ghBusy === "device"} onclick={startGitHubDevice}>{ghBusy === "device" ? "Opening…" : "Authorize GitHub"}</button>
           {/if}
         {:else}
-          {#if ghJustConnected && ghOpen.repo}
+          {#if ghMode === "create" && ghCreated}
+            {#if ghAnalyzing}
+              <div class="analysis-panel">
+                <div class="analysis-spinner" aria-hidden="true"></div>
+                <div>
+                  <div class="analysis-title">Analyzing repository…</div>
+                  <p class="repo-help">Reading README files and top-level manifests to fill in name, description, stack, and notes.</p>
+                </div>
+              </div>
+            {:else}
+              <div class="success-panel">
+                <div class="confetti" aria-hidden="true">
+                  {#each Array.from({ length: 34 }) as _, i}
+                    <span style={`--i:${i};--dx:${((i % 11) - 5) * 20}px;--dy:${-(92 + (i % 7) * 19)}px;--rot:${160 + i * 37}deg`}></span>
+                  {/each}
+                </div>
+                <div class="success-mark">✓</div>
+                <div class="success-title">{ghCreated.name}</div>
+                {#if ghCreated.description}
+                  <p class="repo-help">{ghCreated.description}</p>
+                {/if}
+                {#if ghCreated.stack && ghCreated.stack.length}
+                  <div class="created-stack">
+                    {#each ghCreated.stack as tech}<span class="pc-tech mono">{tech}</span>{/each}
+                  </div>
+                {/if}
+                {#if ghAnalyzeWarning}
+                  <div class="soft-notice">{ghAnalyzeWarning}</div>
+                {/if}
+                <button class="modal-cta" onclick={closeGitHubModal}>Done</button>
+              </div>
+            {/if}
+          {:else if ghMode === "connect" && ghJustConnected && ghOpen?.repo}
             <div class="success-panel">
               <div class="confetti" aria-hidden="true">
                 {#each Array.from({ length: 34 }) as _, i}
@@ -499,9 +622,9 @@
               <div class="success-mark">✓</div>
               <div class="success-title">Repository connected</div>
               <p class="repo-help">
-                {ghOpen.repo.full_name} is synced into <span class="mono">~/.podium/projects/{ghOpen.path}/repo/</span>.
+                {ghOpen?.repo?.full_name} is synced into <span class="mono">~/.podium/projects/{ghOpen?.path}/repo/</span>.
               </p>
-              <button class="modal-cta" onclick={() => (ghOpen = null)}>Done</button>
+              <button class="modal-cta" onclick={closeGitHubModal}>Done</button>
             </div>
           {:else if ghRepos.length === 0}
             <div class="label-mono" style="margin-bottom:8px">choose repositories</div>
@@ -520,9 +643,13 @@
             </div>
             {#if ghReplacePending}
               <div class="error-banner" style="margin-top:12px">This project repo folder already has files. Podium will back them up before syncing the snapshot.</div>
-              <button class="modal-cta" disabled={ghBusy === "connect"} onclick={() => connectSelectedRepo(true)}>{ghBusy === "connect" ? "Connecting…" : "Back up and connect"}</button>
+              <button class="modal-cta" disabled={ghBusy === "connect"} onclick={() => (ghMode === "create" ? createFromSelectedRepo(true) : connectSelectedRepo(true))}>
+                {ghBusy === "connect" ? (ghMode === "create" ? "Creating…" : "Connecting…") : ghMode === "create" ? "Back up and create" : "Back up and connect"}
+              </button>
             {:else}
-              <button class="modal-cta" disabled={!ghSelected || ghBusy === "connect"} onclick={() => connectSelectedRepo(false)}>{ghBusy === "connect" ? "Connecting…" : "Connect repo"}</button>
+              <button class="modal-cta" disabled={!ghSelected || ghBusy === "connect"} onclick={() => (ghMode === "create" ? createFromSelectedRepo(false) : connectSelectedRepo(false))}>
+                {ghBusy === "connect" ? (ghMode === "create" ? "Creating…" : "Connecting…") : ghMode === "create" ? "Create project from repo" : "Connect repo"}
+              </button>
             {/if}
           {/if}
         {/if}
@@ -553,6 +680,13 @@
     color: #6b53a8;
     outline: none;
     cursor: pointer;
+  }
+
+  .head-cta.secondary {
+    background: #fff;
+    color: var(--teal-deep);
+    border: 1px solid var(--field-line);
+    box-shadow: none;
   }
 
   .proj-grid {
@@ -796,6 +930,57 @@
     cursor: pointer;
     text-decoration: underline;
     text-underline-offset: 3px;
+  }
+
+  .analysis-panel {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 4px;
+    padding: 15px;
+    border: 1px solid #d9ebe5;
+    border-radius: 10px;
+    background: #f6fbf8;
+  }
+
+  .analysis-spinner {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 3px solid #d9ebe5;
+    border-top-color: var(--teal);
+    animation: analysis-spin 900ms linear infinite;
+    flex: none;
+  }
+
+  .analysis-title {
+    font: 800 15px "Hanken Grotesk";
+    color: var(--teal-deep);
+  }
+
+  @keyframes analysis-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .created-stack {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin: 12px 0 4px;
+  }
+
+  .soft-notice {
+    margin: 13px 0 2px;
+    padding: 10px 12px;
+    border: 1px solid #eee4d8;
+    border-radius: 10px;
+    background: #fffaf4;
+    color: #7d7166;
+    font: 650 12.5px "Hanken Grotesk";
+    text-align: left;
   }
 
   .link-btn:disabled {

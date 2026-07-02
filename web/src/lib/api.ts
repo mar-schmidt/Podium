@@ -324,6 +324,7 @@ export interface ConnectProjectRepoRequest {
   html_url: string;
   default_branch: string;
   ref?: string;
+  description?: string;
   force?: boolean;
 }
 
@@ -337,6 +338,28 @@ export async function connectProjectRepo(id: string, req: ConnectProjectRepoRequ
     throw new Error("CONFIRM_REPLACE");
   }
   return asJSON(res);
+}
+
+export async function createProjectFromGitHub(req: ConnectProjectRepoRequest): Promise<Project> {
+  const res = await fetch("/api/projects/from-github", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (res.status === 409) {
+    throw new Error("CONFIRM_REPLACE");
+  }
+  return asJSON(res);
+}
+
+export async function analyzeProject(id: string, agent?: string): Promise<Project> {
+  return asJSON(
+    await fetch(`/api/projects/${encodeURIComponent(id)}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent }),
+    }),
+  );
 }
 
 export async function syncProjectRepo(id: string, force = false): Promise<Project> {

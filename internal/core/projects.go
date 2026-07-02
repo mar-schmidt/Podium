@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/mar-schmidt/Podium/internal/store"
 	"gopkg.in/yaml.v3"
 )
+
+var projectIDSlugRE = regexp.MustCompile(`[^a-z0-9]+`)
 
 // ListProjects returns the shared project ledger (§5.3).
 func (c *Core) ListProjects(ctx context.Context) ([]projects.Project, error) {
@@ -40,6 +43,34 @@ func (c *Core) CreateProject(ctx context.Context, p projects.Project) (projects.
 		return projects.Project{}, err
 	}
 	return c.ledger.Get(created.ID)
+}
+
+// UniqueProjectID returns a safe, URL-friendly project id derived from name,
+// suffixing on collisions in the shared ledger.
+func (c *Core) UniqueProjectID(name string) string {
+	id := strings.ToLower(strings.TrimSpace(name))
+	id = projectIDSlugRE.ReplaceAllString(id, "-")
+	id = strings.Trim(id, "-")
+	if id == "" {
+		id = "project"
+	}
+	existing, err := c.ledger.List()
+	if err != nil {
+		return id
+	}
+	taken := map[string]bool{}
+	for _, p := range existing {
+		taken[p.ID] = true
+	}
+	if !taken[id] {
+		return id
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", id, i)
+		if !taken[candidate] {
+			return candidate
+		}
+	}
 }
 
 // UpdateProject applies a partial patch (name/description/colour/etc) to a

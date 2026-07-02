@@ -30,7 +30,7 @@ func newPermissionMCPCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8787", "podiumd API address")
 	cmd.Flags().StringVar(&turnID, "turn", "", "permission relay turn ID")
-	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Minute, "permission request timeout")
+	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "permission request timeout")
 	return cmd
 }
 

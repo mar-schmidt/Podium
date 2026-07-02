@@ -106,15 +106,16 @@ func TestCodexStreamsTurnAndRelaysApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	relay := &recordingRelay{behavior: "allow", requests: make(chan PermissionRequest, 1)}
+	relay := &recordingRelay{behavior: "allow", requests: make(chan PermissionRequest, 1), timeouts: make(chan time.Duration, 1)}
 	events, err := codex.SendTurn(ctx, TurnRequest{
 		SessionID: "session-1",
 		Handle:    handle,
 		Message:   "run a command",
 		Settings: TurnSettings{
-			PermissionMode:   config.PermissionApprove,
-			WorkspaceDir:     workspace,
-			PermissionTurnID: "podium-turn-1",
+			PermissionMode:    config.PermissionApprove,
+			WorkspaceDir:      workspace,
+			PermissionTurnID:  "podium-turn-1",
+			PermissionTimeout: 5 * time.Minute,
 		},
 		Relay: relay,
 	})
@@ -132,6 +133,9 @@ func TestCodexStreamsTurnAndRelaysApproval(t *testing.T) {
 	}
 	if req.Description != "Run echo ok" {
 		t.Fatalf("bad permission request description %q", req.Description)
+	}
+	if timeout := <-relay.timeouts; timeout != 5*time.Minute {
+		t.Fatalf("permission timeout = %v, want 5m", timeout)
 	}
 }
 
@@ -283,6 +287,7 @@ func TestCodexHelperProcess(t *testing.T) {
 type recordingRelay struct {
 	behavior string
 	requests chan PermissionRequest
+	timeouts chan time.Duration
 }
 
 func (r *recordingRelay) RequestPermission(ctx context.Context, req PermissionRequest, timeout time.Duration) (PermissionDecision, error) {
@@ -290,6 +295,12 @@ func (r *recordingRelay) RequestPermission(ctx context.Context, req PermissionRe
 	case r.requests <- req:
 	case <-ctx.Done():
 		return PermissionDecision{Behavior: "deny"}, ctx.Err()
+	}
+	if r.timeouts != nil {
+		select {
+		case r.timeouts <- timeout:
+		default:
+		}
 	}
 	return PermissionDecision{Behavior: r.behavior}, nil
 }

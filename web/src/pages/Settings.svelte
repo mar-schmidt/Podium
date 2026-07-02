@@ -37,6 +37,7 @@
 
   const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
   const PERMISSIONS: PermissionMode[] = ["approve", "yolo"];
+  const TIMEOUT_PRESETS = ["30s", "1m", "3m", "5m", "10m"];
   function modelsFor(p: Provider): string[] {
     return p === "codex" ? ["gpt-5.1", "gpt-5.1-mini", "o4"] : ["sonnet", "opus", "haiku"];
   }
@@ -60,6 +61,7 @@
   let model = $state(""); // "" = provider default
   let effort = $state("medium");
   let permission = $state<PermissionMode>("approve");
+  let permissionTimeout = $state("3m");
   let fbTarget = $state<"none" | Provider>("none");
   let fbProfile = $state<string | null>(null);
 
@@ -187,6 +189,7 @@
     model = cfg.model;
     effort = cfg.effort || "medium";
     permission = cfg.permission_mode;
+    permissionTimeout = cfg.permission_timeout || "3m";
     const fb = cfg.fallback ?? [];
     if (fb.length === 0) {
       fbTarget = "none";
@@ -222,10 +225,11 @@
   }
 
   function canonical(): string {
-    return JSON.stringify({ provider, profile, model, effort, permission, fallback: buildFallback() });
+    return JSON.stringify({ provider, profile, model, effort, permission, permission_timeout: permissionTimeout, fallback: buildFallback() });
   }
 
   const dirty = $derived(canonical() !== baseline);
+  const timeoutInvalid = $derived(!validDuration(permissionTimeout));
 
   function setProvider(p: Provider) {
     if (p === provider) return;
@@ -249,6 +253,10 @@
     permission = m;
     saved = false;
   }
+  function setPermissionTimeout(value: string) {
+    permissionTimeout = value;
+    saved = false;
+  }
   function setFbTarget(t: "none" | Provider) {
     fbTarget = t;
     saved = false;
@@ -265,6 +273,12 @@
   }
 
   async function save() {
+    if (timeoutInvalid) {
+      error = "approval wait must be a positive duration like 30s, 3m, or 1h";
+      saved = false;
+      return;
+    }
+    const timeout = permissionTimeout.trim();
     saving = true;
     error = null;
     try {
@@ -274,6 +288,7 @@
         model,
         effort,
         permission_mode: permission,
+        permission_timeout: timeout,
         fallback: buildFallback(),
       });
       applyConfig(cfg);
@@ -284,6 +299,14 @@
     } finally {
       saving = false;
     }
+  }
+
+  function validDuration(raw: string): boolean {
+    const value = raw.trim();
+    if (!value) return false;
+    const parts = value.match(/\d+(?:\.\d+)?(?:ns|us|ms|s|m|h)/g);
+    if (!parts || parts.join("") !== value) return false;
+    return parts.some((part) => Number.parseFloat(part) > 0);
   }
 
   async function focusReleaseNotes() {
@@ -481,6 +504,28 @@
               {/each}
             </div>
           </div>
+          <div class="row top">
+            <span class="row-key">approval wait</span>
+            <div class="chips-col">
+              <div class="timeout-control">
+                <div class="chips">
+                  {#each TIMEOUT_PRESETS as value}
+                    <button class="chip" class:on={permissionTimeout === value} onclick={() => setPermissionTimeout(value)}>{value}</button>
+                  {/each}
+                </div>
+                <input
+                  class="timeout-input mono"
+                  class:invalid={timeoutInvalid}
+                  bind:value={permissionTimeout}
+                  placeholder="custom"
+                  aria-label="Approval prompt wait time" />
+              </div>
+              <div class="hint">How long approval prompts wait before auto-denying. Use values like 45s, 3m, or 1h.</div>
+              {#if timeoutInvalid}
+                <div class="field-error">Enter a positive duration like 30s, 3m, or 1h.</div>
+              {/if}
+            </div>
+          </div>
         </div>
       {/if}
     </section>
@@ -546,7 +591,7 @@
 
     <!-- ===== SAVE ===== -->
     <div class="save-row">
-      <button class="btn-save" disabled={saving || loading} onclick={save}>{saving ? "Saving…" : "Save defaults"}</button>
+      <button class="btn-save" disabled={saving || loading || timeoutInvalid} onclick={save}>{saving ? "Saving…" : "Save defaults"}</button>
       {#if saved && !dirty}
         <span class="save-ok"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Saved to config.yaml</span>
       {:else}
@@ -854,6 +899,38 @@
   .hint {
     font: 400 11.5px/1.45 "Hanken Grotesk";
     color: var(--muted-2);
+  }
+
+  .timeout-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .timeout-input {
+    width: 104px;
+    border: 1px solid var(--field-line);
+    border-radius: 11px;
+    padding: 8px 10px;
+    background: #fff;
+    color: var(--ink);
+    outline: none;
+  }
+
+  .timeout-input:focus {
+    border-color: #9ecdc0;
+    box-shadow: 0 0 0 3px rgba(63, 143, 126, 0.12);
+  }
+
+  .timeout-input.invalid {
+    border-color: #d99a78;
+    box-shadow: 0 0 0 3px rgba(217, 154, 120, 0.13);
+  }
+
+  .field-error {
+    font: 600 12px "Hanken Grotesk";
+    color: #9a4e2f;
   }
 
   /* profile chips: select the default profile + manage inline */

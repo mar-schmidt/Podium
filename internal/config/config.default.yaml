@@ -16,7 +16,7 @@ global:
   model: ""                   # default model name (empty = provider/CLI default)
   effort: medium              # default reasoning effort: low | medium | high | xhigh | max
   permission_mode: approve    # approve (relay each side-effect to you) | yolo (auto-approve, whole-machine)
-  permission_timeout: 2m       # approve-mode prompt timeout before auto-deny (Go duration, e.g. 30s, 2m)
+  permission_timeout: 3m       # approve-mode prompt timeout before auto-deny (Go duration, e.g. 30s, 3m)
   # Optional global fallback chain used when an agent declares none of its own.
   # Each entry is a profile name, a bare provider ("claude"/"codex", no profile),
   # or "default" (the agent's own provider with the CLI's global login).

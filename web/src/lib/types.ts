@@ -65,6 +65,7 @@ export interface GlobalConfigPatch {
   model?: string;
   effort?: string;
   permission_mode?: PermissionMode;
+  permission_timeout?: string;
   fallback?: string[];
 }
 export type SessionOrigin = "web" | "cli" | "onboarding" | "schedule" | "roadmap";

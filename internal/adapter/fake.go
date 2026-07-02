@@ -128,12 +128,16 @@ func (f *Fake) Teardown(ctx context.Context, handle Handle) error {
 func (f *Fake) requestPermission(ctx context.Context, req TurnRequest) PermissionDecision {
 	decision := PermissionDecision{Behavior: "deny", Message: "no relay"}
 	if req.Relay != nil {
+		timeout := req.Settings.PermissionTimeout
+		if timeout <= 0 {
+			timeout = defaultPermissionTimeout
+		}
 		got, err := req.Relay.RequestPermission(ctx, PermissionRequest{
 			ID:       "fake-perm-" + req.Settings.PermissionTurnID,
 			TurnID:   req.Settings.PermissionTurnID,
 			ToolName: f.PermissionTool,
 			Input:    json.RawMessage(`{}`),
-		}, time.Minute)
+		}, timeout)
 		if err == nil && got.Behavior != "" {
 			decision = got
 		}

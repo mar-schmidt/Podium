@@ -68,6 +68,7 @@ type TurnSettings struct {
 	WorkspaceDir       string
 	ExtraWorkspaceDirs []string
 	PermissionTurnID   string
+	PermissionTimeout  time.Duration
 	// Unattended marks a run with no human at the keyboard (a scheduled run).
 	// In approve mode this selects the "preapproved" policy (§7.7): permission
 	// requests are resolved without a human — via AllowedTools natively on

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
@@ -557,6 +558,65 @@ func TestDescribeProjectPromptTreatsProjectAsGeneralWork(t *testing.T) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
+}
+
+func TestStreamTurnUsesCurrentGlobalPermissionTimeout(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	paths := config.NewPaths(home)
+	if _, err := config.Scaffold(paths); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if err := os.WriteFile(paths.BaseAgents, []byte("base layer\n"), 0o644); err != nil {
+		t.Fatalf("write base agents: %v", err)
+	}
+	db, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	fake := adapter.NewFake()
+	fake.PermissionTool = "Bash"
+	c, err := New(Options{Paths: paths, Store: db, Adapter: fake})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	c.SetGlobal(config.Global{
+		Provider:          config.ProviderClaude,
+		Effort:            "medium",
+		PermissionMode:    config.PermissionApprove,
+		PermissionTimeout: "5m",
+	})
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "operator", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	sess, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "operator", Origin: store.OriginCLI})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	relay := &timeoutRecordingRelay{timeouts: make(chan time.Duration, 1)}
+	events, err := c.StreamTurn(ctx, sess.ID, "run a tool", TurnOptions{PermissionRelay: relay})
+	if err != nil {
+		t.Fatalf("stream turn: %v", err)
+	}
+	for range events {
+	}
+	if timeout := <-relay.timeouts; timeout != 5*time.Minute {
+		t.Fatalf("permission timeout = %v, want 5m", timeout)
+	}
+}
+
+type timeoutRecordingRelay struct {
+	timeouts chan time.Duration
+}
+
+func (r *timeoutRecordingRelay) RequestPermission(ctx context.Context, req adapter.PermissionRequest, timeout time.Duration) (adapter.PermissionDecision, error) {
+	select {
+	case r.timeouts <- timeout:
+	case <-ctx.Done():
+		return adapter.PermissionDecision{Behavior: "deny"}, ctx.Err()
+	}
+	return adapter.PermissionDecision{Behavior: "allow"}, nil
 }
 
 func newTestCore(t *testing.T) (*Core, func()) {

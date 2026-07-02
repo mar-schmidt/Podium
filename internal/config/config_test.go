@@ -24,6 +24,9 @@ func TestLoadDefaultConfigIsValid(t *testing.T) {
 	if cfg.Global.PermissionMode != PermissionApprove {
 		t.Errorf("default permission mode = %q, want approve", cfg.Global.PermissionMode)
 	}
+	if cfg.Global.PermissionTimeout != DefaultPermissionTimeout {
+		t.Errorf("default permission timeout = %q, want %s", cfg.Global.PermissionTimeout, DefaultPermissionTimeout)
+	}
 	if cfg.Logging.RetentionDays != 7 {
 		t.Errorf("default log retention = %d, want 7", cfg.Logging.RetentionDays)
 	}
@@ -37,7 +40,7 @@ func TestLoadDefaultConfigIsValid(t *testing.T) {
 
 func TestValidateRejectsUnknownProfileReference(t *testing.T) {
 	c := &Config{
-		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove},
+		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: DefaultPermissionTimeout},
 		Agents: []Agent{{Name: "a", Profile: "ghost"}},
 		Server: Server{Bind: "127.0.0.1", Port: 8787},
 	}
@@ -48,7 +51,7 @@ func TestValidateRejectsUnknownProfileReference(t *testing.T) {
 
 func TestValidateRejectsProfileProviderMismatch(t *testing.T) {
 	c := &Config{
-		Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+		Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: DefaultPermissionTimeout},
 		Profiles: []Profile{{Name: "codex-main", Provider: ProviderCodex, HomeDir: "/tmp/codex"}},
 		Agents:   []Agent{{Name: "a", Provider: ProviderClaude, Profile: "codex-main"}},
 		Server:   Server{Bind: "127.0.0.1", Port: 8787},
@@ -60,7 +63,7 @@ func TestValidateRejectsProfileProviderMismatch(t *testing.T) {
 
 func TestValidateChecksFallbackEntries(t *testing.T) {
 	c := &Config{
-		Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m", Fallback: []string{"default", "ghost"}},
+		Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: DefaultPermissionTimeout, Fallback: []string{"default", "ghost"}},
 		Profiles: []Profile{{Name: "work", Provider: ProviderClaude, ConfigDir: "/tmp/claude"}},
 		Agents:   []Agent{{Name: "a"}},
 		Server:   Server{Bind: "127.0.0.1", Port: 8787},
@@ -74,7 +77,7 @@ func TestValidateAcceptsBareProviderFallback(t *testing.T) {
 	// A fallback entry may be a bare provider token (provider with no profile),
 	// not only "default" or a named profile.
 	c := &Config{
-		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: DefaultPermissionTimeout},
 		Agents: []Agent{{Name: "a", Provider: ProviderClaude, Fallback: []string{"codex", "claude"}}},
 		Server: Server{Bind: "127.0.0.1", Port: 8787},
 	}
@@ -88,7 +91,7 @@ func TestValidateRejectsReservedProfileName(t *testing.T) {
 	// unambiguous.
 	for _, name := range []string{"claude", "codex"} {
 		c := &Config{
-			Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+			Global:   Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: DefaultPermissionTimeout},
 			Profiles: []Profile{{Name: name, Provider: ProviderClaude, ConfigDir: "/tmp/claude"}},
 			Server:   Server{Bind: "127.0.0.1", Port: 8787},
 		}
@@ -100,7 +103,7 @@ func TestValidateRejectsReservedProfileName(t *testing.T) {
 
 func TestValidateRejectsDuplicateAgentNames(t *testing.T) {
 	c := &Config{
-		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove},
+		Global: Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: DefaultPermissionTimeout},
 		Agents: []Agent{{Name: "dup"}, {Name: "dup"}},
 		Server: Server{Bind: "127.0.0.1", Port: 8787},
 	}
@@ -111,7 +114,7 @@ func TestValidateRejectsDuplicateAgentNames(t *testing.T) {
 
 func TestValidateChecksLoggingConfig(t *testing.T) {
 	c := &Config{
-		Global:  Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "2m"},
+		Global:  Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: DefaultPermissionTimeout},
 		Server:  Server{Bind: "127.0.0.1", Port: 8787},
 		Logging: Logging{RetentionDays: -1, Level: "info"},
 	}

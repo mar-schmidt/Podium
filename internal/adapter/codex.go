@@ -177,12 +177,19 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 
 	key := codexTurnKey{threadID: threadID, turnID: turnID}
 	c.turnLog(req).Info("provider turn started", "event", "provider", "stage", "turn_start", "thread", threadID, "turn", turnID, podiumlog.DurationMS("duration_ms", time.Since(started)))
+	timeout := req.Settings.PermissionTimeout
+	if timeout <= 0 {
+		timeout = c.permissionTimeout
+	}
+	if timeout <= 0 {
+		timeout = defaultPermissionTimeout
+	}
 	turnEvents := client.registerTurn(key, codexActiveTurn{
 		ctx:          ctx,
 		podiumTurnID: firstNonEmptyString(req.Settings.PermissionTurnID, req.SessionID),
 		relay:        req.Relay,
 		input:        req.Input,
-		timeout:      c.permissionTimeout,
+		timeout:      timeout,
 	})
 
 	out := make(chan Event, 64)

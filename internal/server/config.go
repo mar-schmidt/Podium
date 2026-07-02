@@ -39,12 +39,13 @@ func globalToDTO(g config.Global) globalConfigDTO {
 // globalConfigPatch is the PATCH body. Every field is a pointer so omitted
 // fields keep their current value; a present-but-empty fallback clears it.
 type globalConfigPatch struct {
-	Provider       *config.Provider       `json:"provider,omitempty"`
-	Profile        *string                `json:"profile,omitempty"`
-	Model          *string                `json:"model,omitempty"`
-	Effort         *string                `json:"effort,omitempty"`
-	PermissionMode *config.PermissionMode `json:"permission_mode,omitempty"`
-	Fallback       *[]string              `json:"fallback,omitempty"`
+	Provider          *config.Provider       `json:"provider,omitempty"`
+	Profile           *string                `json:"profile,omitempty"`
+	Model             *string                `json:"model,omitempty"`
+	Effort            *string                `json:"effort,omitempty"`
+	PermissionMode    *config.PermissionMode `json:"permission_mode,omitempty"`
+	PermissionTimeout *string                `json:"permission_timeout,omitempty"`
+	Fallback          *[]string              `json:"fallback,omitempty"`
 }
 
 // handleConfig serves the daemon-wide defaults the Settings page edits.
@@ -98,6 +99,9 @@ func (s *Server) patchConfig(w http.ResponseWriter, r *http.Request) {
 	if patch.PermissionMode != nil {
 		g.PermissionMode = *patch.PermissionMode
 	}
+	if patch.PermissionTimeout != nil {
+		g.PermissionTimeout = *patch.PermissionTimeout
+	}
 	if patch.Fallback != nil {
 		g.Fallback = *patch.Fallback
 	}
@@ -122,6 +126,7 @@ func (s *Server) patchConfig(w http.ResponseWriter, r *http.Request) {
 		"provider", string(g.Provider),
 		"profile", g.Profile,
 		"permission", string(g.PermissionMode),
+		"permission_timeout", g.PermissionTimeout,
 		"fallback_count", len(g.Fallback),
 	)
 	writeJSON(w, globalToDTO(s.core.GetGlobal()), nil)
@@ -129,11 +134,12 @@ func (s *Server) patchConfig(w http.ResponseWriter, r *http.Request) {
 
 func globalLogFields(g config.Global) map[string]string {
 	return map[string]string{
-		"provider":       string(g.Provider),
-		"profile":        g.Profile,
-		"model":          g.Model,
-		"effort":         g.Effort,
-		"permission":     string(g.PermissionMode),
-		"fallback_count": fmt.Sprintf("%d", len(g.Fallback)),
+		"provider":           string(g.Provider),
+		"profile":            g.Profile,
+		"model":              g.Model,
+		"effort":             g.Effort,
+		"permission":         string(g.PermissionMode),
+		"permission_timeout": g.PermissionTimeout,
+		"fallback_count":     fmt.Sprintf("%d", len(g.Fallback)),
 	}
 }

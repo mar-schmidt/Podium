@@ -71,6 +71,9 @@ func New(opts Options) (*Core, error) {
 	if global.PermissionMode == "" {
 		global.PermissionMode = config.PermissionApprove
 	}
+	if global.PermissionTimeout == "" {
+		global.PermissionTimeout = config.DefaultPermissionTimeout
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()

@@ -425,6 +425,7 @@ func (c *Core) turnRequest(sess store.Session, history []store.Message, userMess
 			WorkspaceDir:       c.AgentPaths(sess.AgentName).Workspace,
 			ExtraWorkspaceDirs: extraWorkspaceDirs,
 			PermissionTurnID:   firstNonEmpty(opts.PermissionTurnID, fmt.Sprintf("%s-%d", sess.ID, time.Now().UnixNano())),
+			PermissionTimeout:  c.permissionTimeout(),
 			Unattended:         opts.Unattended,
 			AllowedTools:       opts.AllowedTools,
 			MCPServers:         mcpServers,
@@ -433,6 +434,18 @@ func (c *Core) turnRequest(sess store.Session, history []store.Message, userMess
 		Relay: opts.PermissionRelay,
 		Input: opts.UserInputRelay,
 	}
+}
+
+func (c *Core) permissionTimeout() time.Duration {
+	raw := c.GetGlobal().PermissionTimeout
+	if raw == "" {
+		raw = config.DefaultPermissionTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		d, _ = time.ParseDuration(config.DefaultPermissionTimeout)
+	}
+	return d
 }
 
 func (c *Core) sessionMCPServers(ctx context.Context, sess store.Session) ([]podiummcp.Server, []podiummcp.Server, error) {

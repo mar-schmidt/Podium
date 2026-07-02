@@ -19,7 +19,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
-const defaultHTTPPermissionTimeout = 2 * time.Minute
+const defaultHTTPPermissionTimeout = 3 * time.Minute
 
 type agentCreateRequest struct {
 	Name           string                `json:"name"`

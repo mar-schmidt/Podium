@@ -21,7 +21,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
-const defaultPermissionTimeout = 2 * time.Minute
+const defaultPermissionTimeout = 3 * time.Minute
 const claudeStderrTailLimit = 16 * 1024
 
 // ClaudeOptions configures the Claude Code adapter.
@@ -307,13 +307,20 @@ func (c *Claude) writeMCPConfig(req TurnRequest) (string, error) {
 	}
 	var permission map[string]any
 	if req.Settings.PermissionMode != config.PermissionYolo && !req.Settings.Unattended {
+		timeout := req.Settings.PermissionTimeout
+		if timeout <= 0 {
+			timeout = c.permissionTimeout
+		}
+		if timeout <= 0 {
+			timeout = defaultPermissionTimeout
+		}
 		permission = map[string]any{
 			"command": c.mcpCommand,
 			"args": []string{
 				"permission-mcp",
 				"--addr", c.daemonAddr,
 				"--turn", turnID,
-				"--timeout", c.permissionTimeout.String(),
+				"--timeout", timeout.String(),
 			},
 		}
 	}

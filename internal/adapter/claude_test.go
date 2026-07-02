@@ -24,11 +24,12 @@ func TestClaudeArgsApproveWritesPermissionMCPConfig(t *testing.T) {
 	args, cleanup, err := c.args(TurnRequest{
 		SessionID: "session-1",
 		Settings: TurnSettings{
-			Model:            "sonnet",
-			Effort:           "medium",
-			PermissionMode:   config.PermissionApprove,
-			WorkspaceDir:     workspace,
-			PermissionTurnID: "turn-1",
+			Model:             "sonnet",
+			Effort:            "medium",
+			PermissionMode:    config.PermissionApprove,
+			WorkspaceDir:      workspace,
+			PermissionTurnID:  "turn-1",
+			PermissionTimeout: 5 * time.Minute,
 		},
 	})
 	defer cleanup()
@@ -58,7 +59,7 @@ func TestClaudeArgsApproveWritesPermissionMCPConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read mcp config: %v", err)
 	}
-	if !strings.Contains(string(raw), "permission-mcp") || !strings.Contains(string(raw), "turn-1") {
+	if !strings.Contains(string(raw), "permission-mcp") || !strings.Contains(string(raw), "turn-1") || !strings.Contains(string(raw), "5m0s") {
 		t.Fatalf("unexpected mcp config:\n%s", raw)
 	}
 }

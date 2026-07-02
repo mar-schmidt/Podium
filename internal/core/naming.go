@@ -58,13 +58,14 @@ func (c *Core) generateNameWithModel(ctx context.Context, sess store.Session, hi
 			"Use six words or fewer for name and 140 characters or fewer for description.\n\n" +
 			transcript(history),
 		Settings: adapter.TurnSettings{
-			AgentName:      sess.AgentName,
-			Profile:        sess.Profile,
-			ProfileDir:     c.profileDir(sess.Provider, sess.Profile),
-			Model:          sess.Model,
-			Effort:         "low",
-			PermissionMode: sess.PermissionMode,
-			WorkspaceDir:   c.AgentPaths(sess.AgentName).Workspace,
+			AgentName:         sess.AgentName,
+			Profile:           sess.Profile,
+			ProfileDir:        c.profileDir(sess.Provider, sess.Profile),
+			Model:             sess.Model,
+			Effort:            "low",
+			PermissionMode:    sess.PermissionMode,
+			WorkspaceDir:      c.AgentPaths(sess.AgentName).Workspace,
+			PermissionTimeout: c.permissionTimeout(),
 		},
 	})
 	if err != nil {

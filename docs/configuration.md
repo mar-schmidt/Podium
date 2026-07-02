@@ -18,7 +18,7 @@ Defaults applied across all agents unless overridden per agent.
 | `model` | string | Default model name (empty = provider default). |
 | `effort` | `low`\|`medium`\|`high`\|`xhigh`\|`max` | Default reasoning effort. |
 | `permission_mode` | `approve` \| `yolo` | `approve` relays each side effect to you (safe default); `yolo` auto-approves with whole-machine access. |
-| `permission_timeout` | duration | Approve-mode prompt timeout before auto-deny, e.g. `30s` or `2m`. |
+| `permission_timeout` | duration | Approve-mode prompt timeout before auto-deny, e.g. `30s` or `3m`. |
 | `fallback` | list of profile names or `default` | Optional default fallback chain used when an agent declares none. |
 
 ## `github`

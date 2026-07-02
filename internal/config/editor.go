@@ -34,9 +34,9 @@ func RemoveProfile(path, name string) error {
 
 // SetGlobal upserts the daemon-wide defaults under the top-level `global:`
 // mapping in config.yaml. It edits the YAML syntax tree so user comments and
-// unrelated settings (including global.permission_timeout) survive. Only the
-// fields Podium's Settings page owns are touched: provider, model, effort,
-// permission_mode, and fallback. Empty model/effort keys are removed so the
+// unrelated settings survive. Only the fields Podium's Settings page owns are
+// touched: provider, profile, model, effort, permission_mode,
+// permission_timeout, and fallback. Empty model/effort keys are removed so the
 // file falls back to applyDefaults; an empty fallback drops the key entirely.
 func SetGlobal(path string, g Global) error {
 	return editFile(path, func(root *yaml.Node) (bool, error) {
@@ -67,6 +67,7 @@ func setGlobal(root *yaml.Node, g Global) bool {
 	changed = setScalarChild(global, "model", g.Model) || changed
 	changed = setScalarChild(global, "effort", g.Effort) || changed
 	changed = setScalarChild(global, "permission_mode", string(g.PermissionMode)) || changed
+	changed = setScalarChild(global, "permission_timeout", g.PermissionTimeout) || changed
 	changed = setSequenceChild(global, "fallback", g.Fallback) || changed
 	return changed
 }

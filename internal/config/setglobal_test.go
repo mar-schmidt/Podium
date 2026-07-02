@@ -27,18 +27,19 @@ server:
 	}
 
 	g := Global{
-		Provider:       ProviderCodex,
-		Model:          "gpt-5.1",
-		Effort:         "high",
-		PermissionMode: PermissionYolo,
-		Fallback:       []string{"claude"},
+		Provider:          ProviderCodex,
+		Model:             "gpt-5.1",
+		Effort:            "high",
+		PermissionMode:    PermissionYolo,
+		PermissionTimeout: "5m",
+		Fallback:          []string{"claude"},
 	}
 	if err := SetGlobal(path, g); err != nil {
 		t.Fatalf("set global: %v", err)
 	}
 
 	text := mustRead(t, path)
-	for _, want := range []string{"keep root comment", "keep global comment", "permission_timeout: 2m", "name: atlas"} {
+	for _, want := range []string{"keep root comment", "keep global comment", "permission_timeout: 5m", "name: atlas"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q to survive edit:\n%s", want, text)
 		}
@@ -54,8 +55,8 @@ server:
 	if cfg.Global.PermissionMode != PermissionYolo {
 		t.Fatalf("permission_mode = %q, want yolo", cfg.Global.PermissionMode)
 	}
-	if cfg.Global.PermissionTimeout != "2m" {
-		t.Fatalf("permission_timeout not preserved: %q", cfg.Global.PermissionTimeout)
+	if cfg.Global.PermissionTimeout != "5m" {
+		t.Fatalf("permission_timeout not updated: %q", cfg.Global.PermissionTimeout)
 	}
 	if len(cfg.Global.Fallback) != 1 || cfg.Global.Fallback[0] != "claude" {
 		t.Fatalf("fallback = %+v, want [claude]", cfg.Global.Fallback)
@@ -68,7 +69,7 @@ func TestSetGlobalCreatesGlobalSectionWhenAbsent(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	g := Global{Provider: ProviderClaude, PermissionMode: PermissionApprove}
+	g := Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "3m"}
 	if err := SetGlobal(path, g); err != nil {
 		t.Fatalf("set global: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestSetGlobalDropsEmptyFallbackAndModel(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	g := Global{Provider: ProviderClaude, PermissionMode: PermissionApprove}
+	g := Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "3m"}
 	if err := SetGlobal(path, g); err != nil {
 		t.Fatalf("set global: %v", err)
 	}
@@ -107,17 +108,20 @@ func TestValidateGlobal(t *testing.T) {
 		g       Global
 		wantErr bool
 	}{
-		{"ok minimal", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove}, false},
-		{"ok bare provider fallback", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, Fallback: []string{"codex"}}, false},
-		{"ok named profile fallback", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, Fallback: []string{"personal"}}, false},
-		{"ok default token", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, Fallback: []string{"default"}}, false},
-		{"bad provider", Global{Provider: Provider("gpt"), PermissionMode: PermissionApprove}, true},
-		{"bad permission", Global{Provider: ProviderClaude, PermissionMode: PermissionMode("preapprove")}, true},
+		{"ok minimal", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "3m"}, false},
+		{"ok bare provider fallback", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "3m", Fallback: []string{"codex"}}, false},
+		{"ok named profile fallback", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "3m", Fallback: []string{"personal"}}, false},
+		{"ok default token", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "3m", Fallback: []string{"default"}}, false},
+		{"bad provider", Global{Provider: Provider("gpt"), PermissionMode: PermissionApprove, PermissionTimeout: "3m"}, true},
+		{"bad permission", Global{Provider: ProviderClaude, PermissionMode: PermissionMode("preapprove"), PermissionTimeout: "3m"}, true},
+		{"missing timeout", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove}, true},
 		{"bad timeout", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "soon"}, true},
-		{"unknown fallback profile", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, Fallback: []string{"ghost"}}, true},
-		{"ok default profile matches provider", Global{Provider: ProviderClaude, Profile: "personal", PermissionMode: PermissionApprove}, false},
-		{"unknown default profile", Global{Provider: ProviderClaude, Profile: "ghost", PermissionMode: PermissionApprove}, true},
-		{"default profile wrong provider", Global{Provider: ProviderClaude, Profile: "codex-main", PermissionMode: PermissionApprove}, true},
+		{"zero timeout", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "0s"}, true},
+		{"negative timeout", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "-1s"}, true},
+		{"unknown fallback profile", Global{Provider: ProviderClaude, PermissionMode: PermissionApprove, PermissionTimeout: "3m", Fallback: []string{"ghost"}}, true},
+		{"ok default profile matches provider", Global{Provider: ProviderClaude, Profile: "personal", PermissionMode: PermissionApprove, PermissionTimeout: "3m"}, false},
+		{"unknown default profile", Global{Provider: ProviderClaude, Profile: "ghost", PermissionMode: PermissionApprove, PermissionTimeout: "3m"}, true},
+		{"default profile wrong provider", Global{Provider: ProviderClaude, Profile: "codex-main", PermissionMode: PermissionApprove, PermissionTimeout: "3m"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -30,8 +30,9 @@ const (
 )
 
 const (
-	DefaultGitHubAppSlug  = "podium-llm-orchestrator"
-	DefaultGitHubClientID = "Iv23liIKvhvRj9FdIaPD"
+	DefaultGitHubAppSlug     = "podium-llm-orchestrator"
+	DefaultGitHubClientID    = "Iv23liIKvhvRj9FdIaPD"
+	DefaultPermissionTimeout = "3m"
 )
 
 // Config is the parsed config.yaml. It does not define schedules (self-describing
@@ -143,7 +144,7 @@ func (c *Config) applyDefaults() {
 		c.Global.PermissionMode = PermissionApprove
 	}
 	if c.Global.PermissionTimeout == "" {
-		c.Global.PermissionTimeout = "2m"
+		c.Global.PermissionTimeout = DefaultPermissionTimeout
 	}
 	if c.GitHub.AppSlug == "" {
 		c.GitHub.AppSlug = DefaultGitHubAppSlug
@@ -212,7 +213,7 @@ func (c *Config) Validate() error {
 	if err := validatePermission(c.Global.PermissionMode); err != nil {
 		return fmt.Errorf("global.permission_mode: %w", err)
 	}
-	if _, err := time.ParseDuration(c.Global.PermissionTimeout); err != nil {
+	if err := validatePermissionTimeout(c.Global.PermissionTimeout); err != nil {
 		return fmt.Errorf("global.permission_timeout: %w", err)
 	}
 
@@ -356,10 +357,8 @@ func ValidateGlobal(g Global, profileNames map[string]Provider) error {
 	if err := validatePermission(g.PermissionMode); err != nil {
 		return fmt.Errorf("permission_mode: %w", err)
 	}
-	if g.PermissionTimeout != "" {
-		if _, err := time.ParseDuration(g.PermissionTimeout); err != nil {
-			return fmt.Errorf("permission_timeout: %w", err)
-		}
+	if err := validatePermissionTimeout(g.PermissionTimeout); err != nil {
+		return fmt.Errorf("permission_timeout: %w", err)
 	}
 	if g.Profile != "" {
 		prov, ok := profileNames[g.Profile]
@@ -425,6 +424,17 @@ func validatePermission(m PermissionMode) error {
 	default:
 		return fmt.Errorf("unknown permission_mode %q (want approve|yolo)", m)
 	}
+}
+
+func validatePermissionTimeout(raw string) error {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return err
+	}
+	if d <= 0 {
+		return fmt.Errorf("must be greater than 0")
+	}
+	return nil
 }
 
 func validateFallbackEntry(entry string, profileNames map[string]Provider) error {

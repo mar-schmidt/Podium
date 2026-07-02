@@ -483,3 +483,68 @@ func TestRoadmapQuestionDoesNotMoveTaskAlreadyInReview(t *testing.T) {
 		t.Fatal("task already in review should not be marked as moved")
 	}
 }
+
+func TestRoadmapGenericReviewHelpersIgnoreNonRoadmapSessions(t *testing.T) {
+	ctx := context.Background()
+	c, _, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "jared", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	sess, err := c.CreateSession(ctx, CreateSessionRequest{AgentName: "jared", Origin: store.OriginWeb})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	moved, err := c.MoveRoadmapSessionTaskToReview(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("move non-roadmap session: %v", err)
+	}
+	if moved {
+		t.Fatal("non-roadmap session should not move a task")
+	}
+	if err := c.RestoreRoadmapSessionTaskToInProgress(ctx, sess.ID); err != nil {
+		t.Fatalf("restore non-roadmap session: %v", err)
+	}
+}
+
+func TestRoadmapGenericReviewHelpersPreserveManualStatus(t *testing.T) {
+	ctx := context.Background()
+	c, _, cleanup := newScheduledTestCore(t)
+	defer cleanup()
+
+	if _, err := c.CreateAgent(ctx, CreateAgentRequest{Name: "jared", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := c.CreateTask(ctx, store.Task{Title: "Manual move", AssignedAgent: "jared"})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	sess, err := c.StartTask(ctx, StartTaskRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+	task.Status = store.TaskDone
+	if _, err := c.UpdateTask(ctx, task); err != nil {
+		t.Fatalf("set done: %v", err)
+	}
+
+	moved, err := c.MoveRoadmapSessionTaskToReview(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("move done task: %v", err)
+	}
+	if moved {
+		t.Fatal("done task should not be marked as moved")
+	}
+	if err := c.RestoreRoadmapSessionTaskToInProgress(ctx, sess.ID); err != nil {
+		t.Fatalf("restore done task: %v", err)
+	}
+	got, err := c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.Status != store.TaskDone {
+		t.Fatalf("manual status should be preserved, got %q", got.Status)
+	}
+}

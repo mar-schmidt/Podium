@@ -93,3 +93,16 @@ func TestUserInputBrokerMetadata(t *testing.T) {
 		t.Fatalf("metadata should be removed after pop: %+v", empty)
 	}
 }
+
+func TestPermissionBrokerMetadata(t *testing.T) {
+	b := newPermissionBroker()
+	b.attach("perm-1", "session-1", true)
+	b.attach("perm-1", "session-1", false)
+	meta := b.popMeta("perm-1")
+	if meta.sessionID != "session-1" || !meta.restoreRoadmap {
+		t.Fatalf("bad metadata: %+v", meta)
+	}
+	if empty := b.popMeta("perm-1"); empty.sessionID != "" || empty.restoreRoadmap {
+		t.Fatalf("metadata should be removed after pop: %+v", empty)
+	}
+}

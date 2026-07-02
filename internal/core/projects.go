@@ -393,10 +393,10 @@ func archiveTaskFilename(task store.Task) string {
 	return sanitizeArchiveName(stamp) + "_" + sanitizeArchiveName(task.ID) + ".json"
 }
 
-// MoveRoadmapSessionTaskForQuestion moves an in-progress roadmap task to review
-// while a human answer is needed. It returns true only when this call changed
-// the task, so callers can restore that exact transition after the answer.
-func (c *Core) MoveRoadmapSessionTaskForQuestion(ctx context.Context, sessionID string) (bool, error) {
+// MoveRoadmapSessionTaskToReview moves an in-progress roadmap task to review.
+// It returns true only when this call changed the task, so callers can restore
+// that exact transition when a temporary user-blocking request is answered.
+func (c *Core) MoveRoadmapSessionTaskToReview(ctx context.Context, sessionID string) (bool, error) {
 	sess, err := c.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -418,9 +418,9 @@ func (c *Core) MoveRoadmapSessionTaskForQuestion(ctx context.Context, sessionID 
 	return true, nil
 }
 
-// RestoreRoadmapSessionTaskAfterQuestion moves a task back to in_progress after
-// a question that previously moved it to review has been answered.
-func (c *Core) RestoreRoadmapSessionTaskAfterQuestion(ctx context.Context, sessionID string) error {
+// RestoreRoadmapSessionTaskToInProgress moves a review roadmap task back to
+// in_progress after a temporary user-blocking request has been answered.
+func (c *Core) RestoreRoadmapSessionTaskToInProgress(ctx context.Context, sessionID string) error {
 	sess, err := c.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return err
@@ -438,6 +438,19 @@ func (c *Core) RestoreRoadmapSessionTaskAfterQuestion(ctx context.Context, sessi
 	task.Status = store.TaskInProgress
 	_, err = c.UpdateTask(ctx, task)
 	return err
+}
+
+// MoveRoadmapSessionTaskForQuestion moves an in-progress roadmap task to review
+// while a human answer is needed. It returns true only when this call changed
+// the task, so callers can restore that exact transition after the answer.
+func (c *Core) MoveRoadmapSessionTaskForQuestion(ctx context.Context, sessionID string) (bool, error) {
+	return c.MoveRoadmapSessionTaskToReview(ctx, sessionID)
+}
+
+// RestoreRoadmapSessionTaskAfterQuestion moves a task back to in_progress after
+// a question that previously moved it to review has been answered.
+func (c *Core) RestoreRoadmapSessionTaskAfterQuestion(ctx context.Context, sessionID string) error {
+	return c.RestoreRoadmapSessionTaskToInProgress(ctx, sessionID)
 }
 
 // TaskSession returns the most recent roadmap session started from a task, if

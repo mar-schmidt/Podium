@@ -153,7 +153,9 @@ func (s *Server) handleWSMessage(ctx context.Context, writer *wsWriter, msg Clie
 		if msg.Decision == nil {
 			return errors.New("permission decision is required")
 		}
-		if !s.broker.decide(msg.RequestID, *msg.Decision) {
+		decided := s.broker.decide(msg.RequestID, *msg.Decision)
+		restored := s.markRoadmapPermissionResolved(ctx, msg.RequestID)
+		if !decided && !restored {
 			return errors.New("permission request not found")
 		}
 		return nil
@@ -249,6 +251,7 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 		return
 	}
 
+	var sawDone, sawError bool
 	for events != nil || requests != nil || inputs != nil {
 		select {
 		case <-turnCtx.Done():
@@ -258,6 +261,7 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 				requests = nil
 				continue
 			}
+			s.markRoadmapPermissionPending(turnCtx, session.ID, request.ID)
 			s.turns.recordPermission(session.ID, &request)
 		case input, ok := <-inputs:
 			if !ok {
@@ -273,8 +277,13 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 				inputs = nil
 				continue
 			}
-			s.recordWSTurnEvent(turnCtx, session.ID, event)
+			done, failed := s.recordWSTurnEvent(turnCtx, session.ID, event)
+			sawDone = sawDone || done
+			sawError = sawError || failed
 		}
+	}
+	if !sawDone && !sawError && turnCtx.Err() == nil {
+		s.markRoadmapSessionFinished(turnCtx, session.ID)
 	}
 	s.turns.finish(session.ID)
 	stateCtx, stateCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -282,7 +291,7 @@ func (s *Server) runWSTurn(ctx context.Context, writer *wsWriter, msg ClientMess
 	_ = s.writeState(stateCtx, writer)
 }
 
-func (s *Server) recordWSTurnEvent(ctx context.Context, sessionID string, event core.TurnEvent) {
+func (s *Server) recordWSTurnEvent(ctx context.Context, sessionID string, event core.TurnEvent) (bool, bool) {
 	switch event.Kind {
 	case "message_stored":
 		s.turns.recordMessage(sessionID, event.Message)
@@ -291,6 +300,9 @@ func (s *Server) recordWSTurnEvent(ctx context.Context, sessionID string, event 
 	case adapter.EventAssistantMessage:
 		s.turns.recordAssistant(sessionID, event.Content)
 	case adapter.EventPermissionRequest:
+		if event.PermissionRequest != nil {
+			s.markRoadmapPermissionPending(ctx, sessionID, event.PermissionRequest.ID)
+		}
 		s.turns.recordPermission(sessionID, event.PermissionRequest)
 	case adapter.EventUserInputRequest:
 		if event.UserInputRequest != nil {
@@ -298,10 +310,14 @@ func (s *Server) recordWSTurnEvent(ctx context.Context, sessionID string, event 
 		}
 		s.turns.recordUserInput(sessionID, event.UserInputRequest)
 	case adapter.EventTurnDone:
+		s.markRoadmapSessionFinished(ctx, sessionID)
 		s.turns.finish(sessionID)
+		return true, false
 	case "error":
 		s.turns.fail(sessionID, event.Content)
+		return false, true
 	}
+	return false, false
 }
 
 func (s *Server) writeTurnEvent(ctx context.Context, writer *wsWriter, requestID, sessionID string, event core.TurnEvent) error {
@@ -313,6 +329,9 @@ func (s *Server) writeTurnEvent(ctx context.Context, writer *wsWriter, requestID
 	case adapter.EventAssistantMessage:
 		return writer.write(ctx, ServerMessage{Type: "assistant", RequestID: requestID, Delta: event.Content})
 	case adapter.EventPermissionRequest:
+		if event.PermissionRequest != nil {
+			s.markRoadmapPermissionPending(ctx, sessionID, event.PermissionRequest.ID)
+		}
 		return writer.write(ctx, ServerMessage{Type: "permission_request", RequestID: requestID, Request: event.PermissionRequest})
 	case adapter.EventUserInputRequest:
 		if event.UserInputRequest != nil {
@@ -320,6 +339,7 @@ func (s *Server) writeTurnEvent(ctx context.Context, writer *wsWriter, requestID
 		}
 		return writer.write(ctx, ServerMessage{Type: "user_input_request", RequestID: requestID, Input: event.UserInputRequest})
 	case adapter.EventTurnDone:
+		s.markRoadmapSessionFinished(ctx, sessionID)
 		return writer.write(ctx, ServerMessage{Type: "done", RequestID: requestID})
 	case "error":
 		return writer.write(ctx, ServerMessage{Type: "error", RequestID: requestID, Error: event.Content})

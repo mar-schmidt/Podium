@@ -663,6 +663,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var sawDone, sawError bool
 	for events != nil || requests != nil || inputs != nil {
 		select {
 		case <-ctx.Done():
@@ -672,6 +673,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				requests = nil
 				continue
 			}
+			s.markRoadmapPermissionPending(ctx, session.ID, request.ID)
 			writeStreamEvent(enc, flusher, streamEvent{Type: "permission_request", Request: &request})
 		case input, ok := <-inputs:
 			if !ok {
@@ -700,6 +702,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			case adapter.EventAssistantMessage:
 				writeStreamEvent(enc, flusher, streamEvent{Type: "assistant", Delta: event.Content})
 			case adapter.EventPermissionRequest:
+				if event.PermissionRequest != nil {
+					s.markRoadmapPermissionPending(ctx, session.ID, event.PermissionRequest.ID)
+				}
 				writeStreamEvent(enc, flusher, streamEvent{Type: "permission_request", Request: event.PermissionRequest})
 			case adapter.EventUserInputRequest:
 				if event.UserInputRequest != nil {
@@ -707,11 +712,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				}
 				writeStreamEvent(enc, flusher, streamEvent{Type: "user_input_request", Input: event.UserInputRequest})
 			case adapter.EventTurnDone:
+				sawDone = true
+				s.markRoadmapSessionFinished(ctx, session.ID)
 				writeStreamEvent(enc, flusher, streamEvent{Type: "done"})
 			case "error":
+				sawError = true
 				writeStreamEvent(enc, flusher, streamEvent{Type: "error", Error: event.Content})
 			}
 		}
+	}
+	if !sawDone && !sawError && ctx.Err() == nil {
+		s.markRoadmapSessionFinished(ctx, session.ID)
 	}
 	writeStreamEvent(enc, flusher, streamEvent{Type: "done"})
 }
@@ -755,7 +766,9 @@ func (s *Server) handlePermissionDecision(w http.ResponseWriter, r *http.Request
 		http.Error(w, "behavior must be allow or deny", http.StatusBadRequest)
 		return
 	}
-	if !s.broker.decide(id, decision) {
+	decided := s.broker.decide(id, decision)
+	restored := s.markRoadmapPermissionResolved(r.Context(), id)
+	if !decided && !restored {
 		http.Error(w, "permission request not found", http.StatusNotFound)
 		return
 	}

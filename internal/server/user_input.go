@@ -101,6 +101,9 @@ func (b *userInputBroker) decide(id string, decision adapter.UserInputDecision) 
 func (b *userInputBroker) attach(id, sessionID string, restoreRoadmap bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if existing := b.meta[id]; existing.restoreRoadmap && !restoreRoadmap {
+		return
+	}
 	b.meta[id] = userInputMeta{sessionID: sessionID, restoreRoadmap: restoreRoadmap}
 }
 

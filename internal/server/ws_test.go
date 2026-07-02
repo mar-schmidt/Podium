@@ -166,6 +166,79 @@ func TestWebSocketActiveTurnSurvivesReconnectWithPermission(t *testing.T) {
 	}
 }
 
+func TestWebSocketRoadmapPermissionMovesReviewRestoresAndFinishesReview(t *testing.T) {
+	ctx := context.Background()
+	coreSvc, fake, wsURL, cleanup := newWSTestHarness(t)
+	defer cleanup()
+	fake.PermissionTool = "Bash"
+	fake.ResponseDelay = 500 * time.Millisecond
+	fake.Responses = []string{"approved roadmap work"}
+
+	if _, err := coreSvc.CreateAgent(ctx, core.CreateAgentRequest{Name: "webber", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := coreSvc.CreateTask(ctx, store.Task{Title: "Needs approval", AssignedAgent: "webber"})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	sess, err := coreSvc.StartTask(ctx, core.StartTaskRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	conn := dialWSTest(t, wsURL)
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err := wsjson.Write(ctx, conn, ClientMessage{Type: "send_turn", RequestID: "req-1", SessionID: sess.ID, Message: "continue"}); err != nil {
+		t.Fatalf("write send_turn: %v", err)
+	}
+	perm := readWSTestUntil(t, conn, "roadmap permission request", func(msg ServerMessage) bool {
+		return msg.Type == "permission_request" && msg.Request != nil && msg.SessionID == sess.ID
+	})
+	waitTaskStatus(t, coreSvc, task.ID, store.TaskReview)
+
+	if err := wsjson.Write(ctx, conn, ClientMessage{
+		Type:      "permission_decision",
+		RequestID: perm.Request.ID,
+		Decision:  &adapter.PermissionDecision{Behavior: "allow"},
+	}); err != nil {
+		t.Fatalf("write decision: %v", err)
+	}
+	waitTaskStatus(t, coreSvc, task.ID, store.TaskInProgress)
+	readWSTestUntil(t, conn, "roadmap done", func(msg ServerMessage) bool {
+		return msg.Type == "done" && msg.SessionID == sess.ID
+	})
+	waitTaskStatus(t, coreSvc, task.ID, store.TaskReview)
+}
+
+func TestWebSocketRoadmapCompletionMovesTaskReview(t *testing.T) {
+	ctx := context.Background()
+	coreSvc, fake, wsURL, cleanup := newWSTestHarness(t)
+	defer cleanup()
+	fake.Responses = []string{"completed roadmap work"}
+
+	if _, err := coreSvc.CreateAgent(ctx, core.CreateAgentRequest{Name: "webber", Provider: config.ProviderClaude}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := coreSvc.CreateTask(ctx, store.Task{Title: "Finish me", AssignedAgent: "webber"})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	sess, err := coreSvc.StartTask(ctx, core.StartTaskRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	conn := dialWSTest(t, wsURL)
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err := wsjson.Write(ctx, conn, ClientMessage{Type: "send_turn", RequestID: "req-1", SessionID: sess.ID, Message: "continue"}); err != nil {
+		t.Fatalf("write send_turn: %v", err)
+	}
+	readWSTestUntil(t, conn, "roadmap done", func(msg ServerMessage) bool {
+		return msg.Type == "done" && msg.SessionID == sess.ID
+	})
+	waitTaskStatus(t, coreSvc, task.ID, store.TaskReview)
+}
+
 func TestWebSocketTracksMultipleActiveSessionsIndependently(t *testing.T) {
 	ctx := context.Background()
 	coreSvc, fake, wsURL, cleanup := newWSTestHarness(t)
@@ -382,4 +455,23 @@ func readWSTestUntil(t *testing.T, conn *websocket.Conn, desc string, pred func(
 			return msg
 		}
 	}
+}
+
+func waitTaskStatus(t *testing.T, coreSvc *core.Core, taskID string, want store.TaskStatus) {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(2 * time.Second)
+	var got store.Task
+	var err error
+	for time.Now().Before(deadline) {
+		got, err = coreSvc.GetTask(ctx, taskID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if got.Status == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("task status = %q, want %q", got.Status, want)
 }

@@ -15,12 +15,19 @@ type permissionBroker struct {
 	mu      sync.Mutex
 	turns   map[string]chan adapter.PermissionRequest
 	pending map[string]chan adapter.PermissionDecision
+	meta    map[string]permissionMeta
+}
+
+type permissionMeta struct {
+	sessionID      string
+	restoreRoadmap bool
 }
 
 func newPermissionBroker() *permissionBroker {
 	return &permissionBroker{
 		turns:   map[string]chan adapter.PermissionRequest{},
 		pending: map[string]chan adapter.PermissionDecision{},
+		meta:    map[string]permissionMeta{},
 	}
 }
 
@@ -87,4 +94,21 @@ func (b *permissionBroker) decide(id string, decision adapter.PermissionDecision
 	default:
 		return false
 	}
+}
+
+func (b *permissionBroker) attach(id, sessionID string, restoreRoadmap bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if existing := b.meta[id]; existing.restoreRoadmap && !restoreRoadmap {
+		return
+	}
+	b.meta[id] = permissionMeta{sessionID: sessionID, restoreRoadmap: restoreRoadmap}
+}
+
+func (b *permissionBroker) popMeta(id string) permissionMeta {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	meta := b.meta[id]
+	delete(b.meta, id)
+	return meta
 }

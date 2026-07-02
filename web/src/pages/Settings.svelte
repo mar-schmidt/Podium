@@ -2,10 +2,12 @@
   import { onMount, tick } from "svelte";
   import { createProfile, deleteProfile, getConfig, listProfiles, updateConfig, updateProfile } from "../lib/api";
   import ProviderLogo from "../lib/ProviderLogo.svelte";
+  import type { PushState } from "../lib/live.svelte";
   import type { GlobalConfig, Health, PermissionMode, ProfileInfo, Provider, UpdateStatus } from "../lib/types";
   import Logs from "./Logs.svelte";
 
   type UpdateState = "idle" | "checking" | "available" | "current" | "updating" | "restarting" | "failed";
+  type SettingsTab = "global" | "updates" | "notifications" | "logs";
 
   let {
     health,
@@ -13,16 +15,24 @@
     updateState,
     updateError,
     releaseNotesFocusToken,
+    settingsFocusTab,
+    settingsFocusToken,
+    pushState,
     onCheckUpdate,
     onRunUpdate,
+    onEnablePush,
   }: {
     health: Health | null;
     update: UpdateStatus | null;
     updateState: UpdateState;
     updateError: string | null;
     releaseNotesFocusToken: number;
+    settingsFocusTab: SettingsTab;
+    settingsFocusToken: number;
+    pushState: PushState;
     onCheckUpdate: () => void;
     onRunUpdate: () => void;
+    onEnablePush: () => void;
   } = $props();
 
   const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -56,11 +66,19 @@
   // Canonical JSON snapshot of the last-saved state, for dirty tracking.
   let baseline = $state("");
   let releaseNotesEl = $state<HTMLElement | null>(null);
+  let tab = $state<SettingsTab>("global");
 
   onMount(load);
 
   $effect(() => {
+    if (settingsFocusToken > 0) {
+      tab = settingsFocusTab;
+    }
+  });
+
+  $effect(() => {
     if (releaseNotesFocusToken > 0) {
+      tab = "updates";
       void focusReleaseNotes();
     }
   });
@@ -286,6 +304,8 @@
   const canCheck = $derived(updateState === "idle" || updateState === "current" || updateState === "failed");
   const updateBadge = $derived(updateBadgeFor(updateState));
   const releaseNotes = $derived(update?.release_notes ?? "");
+  const pushBadge = $derived(pushBadgeFor(pushState));
+  const pushStatusCopy = $derived(pushCopyFor(pushState));
   function updateBadgeFor(state: UpdateState): { label: string; tone: "neutral" | "green" | "amber" } {
     switch (state) {
       case "checking":
@@ -301,6 +321,34 @@
         return { label: "check failed", tone: "amber" };
       default:
         return { label: "not checked", tone: "neutral" };
+    }
+  }
+  function pushBadgeFor(state: PushState): { label: string; tone: "neutral" | "green" | "amber" } {
+    switch (state) {
+      case "enabled":
+        return { label: "on", tone: "green" };
+      case "enabling":
+        return { label: "enabling…", tone: "amber" };
+      case "denied":
+        return { label: "blocked", tone: "amber" };
+      case "unsupported":
+        return { label: "unavailable", tone: "neutral" };
+      default:
+        return { label: "not enabled", tone: "neutral" };
+    }
+  }
+  function pushCopyFor(state: PushState): { title: string; body: string } {
+    switch (state) {
+      case "enabled":
+        return { title: "Notifications are on", body: "Podium will keep this browser registered while notification permission remains approved." };
+      case "enabling":
+        return { title: "Enabling notifications", body: "Waiting for the browser and daemon to finish registration." };
+      case "denied":
+        return { title: "Notifications are blocked", body: "Your browser has blocked notification permission for Podium. Change the site permission in the browser to use them." };
+      case "unsupported":
+        return { title: "Notifications are unavailable", body: "This browser or daemon is missing Web Push support." };
+      default:
+        return { title: "Notifications are not enabled", body: "Enable notifications to get alerted when an agent needs your approval or answer." };
     }
   }
 </script>
@@ -319,6 +367,14 @@
       <div class="error-banner" style="margin-bottom:16px">{error}</div>
     {/if}
 
+    <div class="tabs">
+      <button class:active={tab === "global"} onclick={() => (tab = "global")}>Global config</button>
+      <button class:active={tab === "updates"} onclick={() => (tab = "updates")}>Version &amp; Updates</button>
+      <button class:active={tab === "notifications"} onclick={() => (tab = "notifications")}>Notifications</button>
+      <button class:active={tab === "logs"} onclick={() => (tab = "logs")}>Logs</button>
+    </div>
+
+    {#if tab === "global"}
     <!-- ===== DEFAULT CONFIGURATION ===== -->
     <section class="card">
       <div class="card-head">
@@ -498,6 +554,7 @@
       {/if}
     </div>
 
+    {:else if tab === "updates"}
     <!-- ===== VERSION & UPDATES ===== -->
     <section class="card">
       <div class="card-head">
@@ -562,6 +619,35 @@
       {/if}
     </section>
 
+    {:else if tab === "notifications"}
+    <!-- ===== NOTIFICATIONS ===== -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-icon teal">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </div>
+        <div class="grow">
+          <div class="card-title">Notifications</div>
+          <div class="card-sub">Alerts when an agent needs your approval or answer.</div>
+        </div>
+        <span class="badge {pushBadge.tone}">{pushBadge.label}</span>
+      </div>
+
+      <div class="notification-panel">
+        <div class="grow">
+          <div class="route-tag">status</div>
+          <div class="notification-title">{pushStatusCopy.title}</div>
+          <div class="notification-copy">{pushStatusCopy.body}</div>
+        </div>
+        {#if pushState === "idle"}
+          <button class="btn-save" onclick={onEnablePush}>Enable notifications</button>
+        {:else if pushState === "enabling"}
+          <span class="spinner-note amber"><span class="spinner amber"></span>Registering…</span>
+        {/if}
+      </div>
+    </section>
+
+    {:else}
     <!-- ===== LOGS ===== -->
     <section class="card">
       <div class="card-head">
@@ -577,6 +663,7 @@
         <Logs embedded />
       </div>
     </section>
+    {/if}
   </div>
 </div>
 
@@ -601,6 +688,33 @@
     font: 400 13.5px/1.5 "Hanken Grotesk";
     color: var(--muted-2);
     max-width: 560px;
+  }
+
+  .tabs {
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    margin: 0 0 18px;
+    border-radius: 13px;
+    background: #efe7dc;
+    border: 1px solid #e6dbcc;
+    flex-wrap: wrap;
+  }
+
+  .tabs button {
+    border: 0;
+    background: transparent;
+    color: #8a7f73;
+    cursor: pointer;
+    border-radius: 9px;
+    padding: 7px 12px;
+    font: 700 12.5px "Hanken Grotesk";
+  }
+
+  .tabs button.active {
+    background: #fffdfb;
+    color: #2b2520;
+    box-shadow: 0 1px 3px rgba(43, 37, 32, 0.12);
   }
 
   .card {
@@ -1118,6 +1232,30 @@
     text-decoration: underline;
   }
 
+  .notification-panel {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    background: var(--surface-3);
+    border: 1px solid var(--line-3);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-top: 20px;
+  }
+
+  .notification-title {
+    font: 800 17px "Hanken Grotesk";
+    color: var(--ink);
+    margin-top: 4px;
+  }
+
+  .notification-copy {
+    font: 400 12.5px/1.5 "Hanken Grotesk";
+    color: var(--muted-2);
+    margin-top: 4px;
+    max-width: 470px;
+  }
+
   .logs-wrap {
     margin-top: 18px;
   }
@@ -1133,6 +1271,15 @@
     .row-key {
       width: auto;
       padding-top: 0;
+    }
+
+    .tabs {
+      display: flex;
+    }
+
+    .notification-panel {
+      flex-direction: column;
+      align-items: stretch;
     }
   }
 </style>

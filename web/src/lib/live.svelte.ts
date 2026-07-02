@@ -12,6 +12,7 @@ import { getVapidKey, subscribePush } from "./api";
 import type { ActiveTurnSummary, ClientMessage, ServerMessage, Session } from "./types";
 
 export type ConnStatus = "connecting" | "live" | "offline";
+export type PushState = "idle" | "enabling" | "enabled" | "denied" | "unsupported";
 
 export interface Toast {
   id: string;
@@ -224,11 +225,26 @@ class LiveStore {
 
   // ---- Web Push ---------------------------------------------------------
 
+  // refreshPushStatus checks the browser/daemon push state without prompting.
+  // If permission is already granted, keep the browser subscribed and registered
+  // with the daemon so approved notifications stay effectively on.
+  async refreshPushStatus(): Promise<PushState> {
+    if (!this.pushSupported()) return "unsupported";
+    if (Notification.permission === "denied") return "denied";
+
+    const { public_key } = await getVapidKey();
+    if (!public_key) return "unsupported";
+    if (Notification.permission !== "granted") return "idle";
+
+    await this.ensurePushSubscription(public_key);
+    return "enabled";
+  }
+
   // enablePush registers the service worker, requests OS notification
   // permission, and subscribes this browser with the daemon. Must be invoked
   // from a user gesture (browsers gate the permission prompt on one).
-  async enablePush(): Promise<"enabled" | "denied" | "unsupported"> {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return "unsupported";
+  async enablePush(): Promise<PushState> {
+    if (!this.pushSupported()) return "unsupported";
     // Confirm the daemon actually has push configured before prompting the user.
     const { public_key } = await getVapidKey();
     if (!public_key) return "unsupported";
@@ -236,6 +252,15 @@ class LiveStore {
     const permission = await Notification.requestPermission();
     if (permission !== "granted") return "denied";
 
+    await this.ensurePushSubscription(public_key);
+    return "enabled";
+  }
+
+  private pushSupported(): boolean {
+    return "Notification" in window && "serviceWorker" in navigator && "PushManager" in window;
+  }
+
+  private async ensurePushSubscription(publicKey: string): Promise<void> {
     const reg = await navigator.serviceWorker.register("/sw.js");
     const ready = await navigator.serviceWorker.ready.catch(() => reg);
 
@@ -244,10 +269,9 @@ class LiveStore {
       existing ??
       (await ready.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(public_key) as BufferSource,
+        applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
       }));
     await subscribePush(sub.toJSON());
-    return "enabled";
   }
 
   private listenForServiceWorker() {

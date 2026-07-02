@@ -11,8 +11,10 @@
   import Projects from "./pages/Projects.svelte";
   import Skills from "./pages/Skills.svelte";
   import Settings from "./pages/Settings.svelte";
+  import type { PushState } from "./lib/live.svelte";
 
   type Route = "chat" | "roadmap" | "projects" | "agents" | "schedules" | "skills" | "settings";
+  type SettingsTab = "global" | "updates" | "notifications" | "logs";
 
   interface ChatTarget {
     sessionId?: string;
@@ -48,7 +50,7 @@
     },
     {
       key: "skills",
-      label: "Skills",
+      label: "Skills & MCP",
       icon: '<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
     },
   ];
@@ -66,6 +68,8 @@
   let agents = $state<Agent[]>([]);
   let chatTarget = $state<ChatTarget | null>(null);
   let releaseNotesFocusToken = $state(0);
+  let settingsFocusTab = $state<SettingsTab>("global");
+  let settingsFocusToken = $state(0);
 
   // Hire modal.
   let hireOpen = $state(false);
@@ -81,7 +85,7 @@
   let profileSaving = $state(false);
 
   // Notification opt-in state for the Web Push toggle.
-  let pushState = $state<"idle" | "enabling" | "enabled" | "denied" | "unsupported">("idle");
+  let pushState = $state<PushState>("idle");
 
   onMount(async () => {
     // Open the app-wide socket once, above any page, so attention signalling
@@ -89,10 +93,19 @@
     // push taps to open the relevant chat session.
     live.connect();
     live.setNavigator((sessionId) => openChat({ sessionId }));
+    await refreshPushStatus();
     await refreshHealth();
     await refreshAgents();
     await refreshUpdate();
   });
+
+  async function refreshPushStatus() {
+    try {
+      pushState = await live.refreshPushStatus();
+    } catch {
+      pushState = "unsupported";
+    }
+  }
 
   async function enablePush() {
     pushState = "enabling";
@@ -197,9 +210,28 @@
     route = "chat";
   }
 
+  function openSettings(tab: SettingsTab = "global") {
+    settingsFocusTab = tab;
+    settingsFocusToken += 1;
+    route = "settings";
+  }
+
   function openReleaseNotes() {
     releaseNotesFocusToken += 1;
-    route = "settings";
+    openSettings("updates");
+  }
+
+  function pushReminderLabel(): string {
+    switch (pushState) {
+      case "enabling":
+        return "Notifications enabling…";
+      case "denied":
+        return "Notifications blocked";
+      case "unsupported":
+        return "Push unavailable";
+      default:
+        return "Set up notifications";
+    }
   }
 
   function openHire() {
@@ -327,7 +359,7 @@
     </nav>
 
     <div class="nav-foot">
-      <button class="nav-link settings-link" class:active={route === "settings"} onclick={() => (route = "settings")}>
+      <button class="nav-link settings-link" class:active={route === "settings"} onclick={() => openSettings()}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html SETTINGS_ICON}</svg>
         Settings
       </button>
@@ -361,27 +393,18 @@
           </div>
         </div>
       {/if}
-      <button
-        class="push-toggle"
-        class:on={pushState === "enabled"}
-        disabled={pushState === "enabling" || pushState === "enabled" || pushState === "unsupported"}
-        title="Get desktop notifications when an agent needs you"
-        onclick={enablePush}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" />
-        </svg>
-        {#if pushState === "enabled"}
-          Notifications on
-        {:else if pushState === "enabling"}
-          Enabling…
-        {:else if pushState === "denied"}
-          Notifications blocked
-        {:else if pushState === "unsupported"}
-          Push unavailable
-        {:else}
-          Enable notifications
-        {/if}
-      </button>
+      {#if pushState !== "enabled"}
+        <button
+          class="push-reminder"
+          class:warn={pushState === "denied" || pushState === "unsupported"}
+          title="Open notification settings"
+          onclick={() => openSettings("notifications")}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" />
+          </svg>
+          <span>{pushReminderLabel()}</span>
+        </button>
+      {/if}
       <button class="hire-btn" onclick={openHire}><span class="hire-plus">+</span> Hire agent</button>
     </div>
   </aside>
@@ -407,8 +430,12 @@
         {updateState}
         {updateError}
         {releaseNotesFocusToken}
+        {settingsFocusTab}
+        {settingsFocusToken}
+        {pushState}
         onCheckUpdate={() => refreshUpdate()}
-        onRunUpdate={runUpdate} />
+        onRunUpdate={runUpdate}
+        onEnablePush={enablePush} />
     {/if}
   </div>
 
@@ -593,7 +620,7 @@
     box-shadow: 0 0 0 2px rgba(214, 69, 40, 0.2);
   }
 
-  .push-toggle {
+  .push-reminder {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -607,19 +634,14 @@
     color: var(--muted);
   }
 
-  .push-toggle:hover:not(:disabled) {
+  .push-reminder:hover {
     background: #f6efe6;
   }
 
-  .push-toggle.on {
-    border-color: #bfe0d6;
-    background: #e3f1ec;
-    color: var(--teal-deep);
-  }
-
-  .push-toggle:disabled {
-    cursor: default;
-    opacity: 0.85;
+  .push-reminder.warn {
+    border-color: #ecd9ae;
+    background: #fbf1dd;
+    color: #9a6e1e;
   }
 
   /* Global toast stack, top-right, above modals (z 40). */

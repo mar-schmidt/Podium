@@ -74,6 +74,7 @@
   let pendingPermission = $state<PermissionRequest | null>(null);
   let approvalHistoryBySession = $state<Record<string, ApprovalRecord[]>>({});
   let approvalDockOpen = $state(false);
+  let expandedApprovalText = $state<Record<string, boolean>>({});
   let denyingPermissionID = $state<string | null>(null);
   let denyText = $state("");
   let pendingUserInput = $state<UserInputRequest | null>(null);
@@ -694,6 +695,14 @@
     denyText = "";
   }
 
+  function approvalTextExpanded(requestID: string): boolean {
+    return !!expandedApprovalText[requestID];
+  }
+
+  function toggleApprovalText(requestID: string) {
+    expandedApprovalText = { ...expandedApprovalText, [requestID]: !expandedApprovalText[requestID] };
+  }
+
   function approvePermission() {
     // Guard against acting on an expired request (its broker entry is gone, so
     // the decision would be rejected as "not found").
@@ -1193,7 +1202,19 @@
                 </span>
                 <div class="approval-history-main">
                   <div class="approval-history-title">{permissionTitle(record.request)}</div>
-                  <div class="approval-history-cmd mono">{permissionCmd(record.request.input)}</div>
+                  <div class="approval-command-box" class:expanded={approvalTextExpanded(record.request.id)}>
+                    <pre class="approval-command mono">{permissionCmd(record.request.input)}</pre>
+                    <button
+                      type="button"
+                      class="approval-command-toggle"
+                      aria-expanded={approvalTextExpanded(record.request.id)}
+                      aria-label={approvalTextExpanded(record.request.id) ? "Collapse approval text" : "Expand approval text"}
+                      title={approvalTextExpanded(record.request.id) ? "Collapse approval text" : "Expand approval text"}
+                      onclick={() => toggleApprovalText(record.request.id)}
+                    >
+                      {approvalTextExpanded(record.request.id) ? "Collapse" : "Expand"}
+                    </button>
+                  </div>
                   {#if record.status === "denied" && record.note}
                     <div class="approval-history-note">"{record.note}"</div>
                   {/if}
@@ -1205,16 +1226,29 @@
         {/if}
 
         {#if pendingPermission && currentApproval && approvalTone}
+          {@const livePermission = pendingPermission}
           <div class="approval-live">
             <div class="approval-live-row">
               <span class="approval-risk-pill mono" style={`--risk-text:${approvalTone.text};--risk-bg:${approvalTone.bg};--risk-border:${approvalTone.border};--risk-dot:${approvalTone.dot}`}>
                 <span></span>{currentApproval.risk}
               </span>
               <div class="approval-live-main">
-                <div class="approval-live-title">{permissionTitle(pendingPermission)}</div>
-                <div class="approval-live-cmd mono">{permissionCmd(pendingPermission.input)}</div>
+                <div class="approval-live-title">{permissionTitle(livePermission)}</div>
+                <div class="approval-command-box live" class:expanded={approvalTextExpanded(livePermission.id)}>
+                  <pre class="approval-command mono">{permissionCmd(livePermission.input)}</pre>
+                  <button
+                    type="button"
+                    class="approval-command-toggle"
+                    aria-expanded={approvalTextExpanded(livePermission.id)}
+                    aria-label={approvalTextExpanded(livePermission.id) ? "Collapse approval text" : "Expand approval text"}
+                    title={approvalTextExpanded(livePermission.id) ? "Collapse approval text" : "Expand approval text"}
+                    onclick={() => toggleApprovalText(livePermission.id)}
+                  >
+                    {approvalTextExpanded(livePermission.id) ? "Collapse" : "Expand"}
+                  </button>
+                </div>
               </div>
-              {#if denyingPermissionID !== pendingPermission.id}
+              {#if denyingPermissionID !== livePermission.id}
                 <div class="approval-live-actions">
                   <button class="approval-deny" onclick={startDenyPermission}>Deny</button>
                   <button class="approval-approve" onclick={approvePermission}>Approve</button>
@@ -1222,7 +1256,7 @@
               {/if}
             </div>
 
-            {#if denyingPermissionID === pendingPermission.id}
+            {#if denyingPermissionID === livePermission.id}
               <div class="approval-deny-form">
                 <div class="approval-deny-label mono">Tell {activeAgent?.Name ?? "the agent"} why - they'll try another way</div>
                 <input
@@ -1883,15 +1917,60 @@
     overflow-wrap: anywhere;
   }
 
-  .approval-history-cmd,
-  .approval-live-cmd {
+  .approval-command-box {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
     margin-top: 2px;
+  }
+
+  .approval-command {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
     color: #5a524a;
     font-size: 11.5px;
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    overflow-wrap: anywhere;
+  }
+
+  .approval-command-box.expanded .approval-command {
+    max-height: min(280px, 38vh);
+    overflow: auto;
+    white-space: pre-wrap;
+    padding: 8px 10px;
+    border: 1px solid #eadfd1;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.62);
+    line-height: 1.45;
+  }
+
+  .approval-command-box.live.expanded .approval-command {
+    border-color: var(--approval-border);
+    background: rgba(255, 255, 255, 0.74);
+  }
+
+  .approval-command-toggle {
+    align-self: start;
+    flex: none;
+    border: 1px solid #e6d9cc;
+    border-radius: 8px;
+    padding: 3px 8px;
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--muted);
+    cursor: pointer;
+    font: 700 10.5px "Hanken Grotesk";
+  }
+
+  .approval-command-toggle:hover {
+    border-color: #d7c7b6;
+    color: var(--ink);
   }
 
   .approval-history-note {

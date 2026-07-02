@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -204,7 +205,7 @@ func TestCodexResumesThreadAfterAppServerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	codex.client("").reset()
+	codex.client("", "", "").reset()
 
 	events, err := codex.SendTurn(ctx, TurnRequest{
 		SessionID: "session-1",
@@ -223,9 +224,57 @@ func TestCodexResumesThreadAfterAppServerRestart(t *testing.T) {
 	}
 }
 
+func TestCodexAppServerLaunchUsesRootProfile(t *testing.T) {
+	t.Setenv("PODIUM_CODEX_FAKE_MODE", "normal")
+	argvFile := filepath.Join(t.TempDir(), "argv.txt")
+	t.Setenv("PODIUM_CODEX_ARGV_FILE", argvFile)
+	codex := newTestCodex(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	workspace := t.TempDir()
+	profileDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("workspace instructions\n"), 0o644); err != nil {
+		t.Fatalf("write agents: %v", err)
+	}
+	if _, err := codex.Start(ctx, StartRequest{
+		SessionID:      "session-profile",
+		AgentName:      "atlas",
+		Provider:       config.ProviderCodex,
+		ProfileDir:     profileDir,
+		PermissionMode: config.PermissionApprove,
+		WorkspaceDir:   workspace,
+		MCPServers: []podiummcp.Server{{
+			Name:      "filesystem",
+			Transport: podiummcp.TransportStdio,
+			Command:   "npx",
+			Args:      []string{"-y", "@modelcontextprotocol/server-filesystem"},
+		}},
+		MCPAllServers: []podiummcp.Server{{
+			Name:      "filesystem",
+			Transport: podiummcp.TransportStdio,
+			Command:   "npx",
+		}},
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	got, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("read argv: %v", err)
+	}
+	text := string(got)
+	for _, want := range []string{"--profile", "podium-atlas", "app-server", "--listen", "stdio://"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("argv missing %q: %s", want, text)
+		}
+	}
+}
+
 func TestCodexHelperProcess(t *testing.T) {
 	if os.Getenv("PODIUM_CODEX_HELPER") != "1" {
 		return
+	}
+	if path := os.Getenv("PODIUM_CODEX_ARGV_FILE"); path != "" {
+		_ = os.WriteFile(path, []byte(strings.Join(os.Args, "\n")), 0o600)
 	}
 	runFakeCodexAppServer()
 	os.Exit(0)

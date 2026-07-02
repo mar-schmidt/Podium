@@ -19,6 +19,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/config"
 	podiumexec "github.com/mar-schmidt/Podium/internal/exec"
 	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
+	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -31,8 +32,9 @@ type CodexOptions struct {
 	Logger            *slog.Logger
 }
 
-// Codex drives a long-lived `codex app-server --listen stdio://` process. A
-// separate app-server is maintained for each CODEX_HOME profile.
+// Codex drives a long-lived `codex --profile <podium-agent> app-server
+// --listen stdio://` process. A separate app-server is maintained for each
+// CODEX_HOME plus generated MCP profile hash.
 type Codex struct {
 	bin               string
 	permissionTimeout time.Duration
@@ -65,7 +67,11 @@ func (c *Codex) Start(ctx context.Context, req StartRequest) (Handle, error) {
 	if req.WorkspaceDir == "" {
 		return Handle{}, errors.New("codex workspace dir is required")
 	}
-	client := c.client(req.ProfileDir)
+	profileName, profileHash, err := c.ensureMCPProfile(req.ProfileDir, req.AgentName, req.MCPServers, req.MCPAllServers)
+	if err != nil {
+		return Handle{}, err
+	}
+	client := c.client(req.ProfileDir, profileName, profileHash)
 	result, err := client.call(ctx, "thread/start", codexThreadStartParams(req))
 	if err != nil {
 		c.providerLog(req.SessionID, req.AgentName, req.Profile).Warn("provider rpc failed", "stage", "thread_start", "method", "thread/start", "error", podiumlog.Redact(err.Error()))
@@ -103,7 +109,11 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 	if req.Settings.WorkspaceDir == "" {
 		return nil, errors.New("codex workspace dir is required")
 	}
-	client := c.client(req.Settings.ProfileDir)
+	profileName, profileHash, err := c.ensureMCPProfile(req.Settings.ProfileDir, req.Settings.AgentName, req.Settings.MCPServers, req.Settings.MCPAllServers)
+	if err != nil {
+		return nil, err
+	}
+	client := c.client(req.Settings.ProfileDir, profileName, profileHash)
 	threadID := req.Handle.ID
 	firstEvents := []Event{}
 	startedFresh := threadID == ""
@@ -119,6 +129,8 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 			PermissionMode:     req.Settings.PermissionMode,
 			WorkspaceDir:       req.Settings.WorkspaceDir,
 			ExtraWorkspaceDirs: req.Settings.ExtraWorkspaceDirs,
+			MCPServers:         req.Settings.MCPServers,
+			MCPAllServers:      req.Settings.MCPAllServers,
 		})
 		if err != nil {
 			c.turnLog(req).Warn("provider thread start failed", "stage", "thread_start", "method", "thread/start", "error", podiumlog.Redact(err.Error()))
@@ -190,24 +202,42 @@ func (c *Codex) Teardown(ctx context.Context, handle Handle) error {
 	return ctx.Err()
 }
 
-func (c *Codex) client(profileDir string) *codexClient {
+func (c *Codex) client(profileDir, profileName, profileHash string) *codexClient {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.clients == nil {
 		c.clients = map[string]*codexClient{}
 	}
-	client := c.clients[profileDir]
+	key := profileDir + "|" + profileName + "|" + profileHash
+	client := c.clients[key]
 	if client == nil {
-		client = newCodexClient(c.bin, profileDir, c.log)
-		c.clients[profileDir] = client
+		client = newCodexClient(c.bin, profileDir, profileName, profileHash, c.log)
+		c.clients[key] = client
 	}
 	return client
 }
 
+func (c *Codex) ensureMCPProfile(profileDir, agentName string, assigned, all []podiummcp.Server) (string, string, error) {
+	if len(assigned) == 0 && len(all) == 0 {
+		return "", "", nil
+	}
+	content, unavailable := podiummcp.CodexProfile(assigned, all)
+	if len(unavailable) > 0 {
+		return "", "", fmt.Errorf("mcp server(s) unavailable on codex: %s", strings.Join(unavailable, ", "))
+	}
+	name, _, err := podiummcp.WriteCodexProfile(profileDir, agentName, content)
+	if err != nil {
+		return "", "", fmt.Errorf("write codex mcp profile: %w", err)
+	}
+	return name, podiummcp.ProfileHash(content), nil
+}
+
 type codexClient struct {
-	bin        string
-	profileDir string
-	log        *slog.Logger
+	bin         string
+	profileDir  string
+	profileName string
+	profileHash string
+	log         *slog.Logger
 
 	initMu sync.Mutex
 	mu     sync.Mutex
@@ -274,16 +304,23 @@ type codexStreamEvent struct {
 	err    error
 }
 
-func newCodexClient(bin, profileDir string, log *slog.Logger) *codexClient {
+func newCodexClient(bin, profileDir, profileName, profileHash string, log *slog.Logger) *codexClient {
 	return &codexClient{
-		bin:        bin,
-		profileDir: profileDir,
-		log:        loggerOrDefault(log).With("provider", string(config.ProviderCodex), "profile_dir_set", profileDir != ""),
-		pending:    map[string]chan codexCallResponse{},
-		loaded:     map[string]bool{},
-		watchers:   map[codexTurnKey]chan codexStreamEvent{},
-		buffered:   map[codexTurnKey][]codexStreamEvent{},
-		active:     map[codexTurnKey]codexActiveTurn{},
+		bin:         bin,
+		profileDir:  profileDir,
+		profileName: profileName,
+		profileHash: profileHash,
+		log: loggerOrDefault(log).With(
+			"provider", string(config.ProviderCodex),
+			"profile_dir_set", profileDir != "",
+			"mcp_profile", profileName,
+			"mcp_profile_hash", profileHash,
+		),
+		pending:  map[string]chan codexCallResponse{},
+		loaded:   map[string]bool{},
+		watchers: map[codexTurnKey]chan codexStreamEvent{},
+		buffered: map[codexTurnKey][]codexStreamEvent{},
+		active:   map[codexTurnKey]codexActiveTurn{},
 	}
 }
 
@@ -357,7 +394,11 @@ func (c *codexClient) ensureProcess(ctx context.Context) error {
 }
 
 func (c *codexClient) startLocked() error {
-	cmd := podiumexec.Command(context.Background(), c.bin, "app-server", "--listen", "stdio://")
+	args := []string{"app-server", "--listen", "stdio://"}
+	if c.profileName != "" {
+		args = append([]string{"--profile", c.profileName}, args...)
+	}
+	cmd := podiumexec.Command(context.Background(), c.bin, args...)
 	cmd.Env = codexEnv(c.profileDir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

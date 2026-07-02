@@ -44,7 +44,8 @@ type Agent struct {
 	Effort         string
 	PermissionMode config.PermissionMode
 	Fallback       []string
-	MCPConfig      string `json:"-"`
+	MCPServers     []string `json:"-"`
+	MCPConfig      string   `json:"-"`
 	CreatedAt      string
 	UpdatedAt      string
 }

@@ -80,6 +80,7 @@ export interface Agent {
   // Ordered fallback chain. Each entry is a profile name, a bare provider
   // ("claude"/"codex", no profile), or "default" (the agent's own provider).
   Fallback: string[];
+  MCPServers?: string[];
 }
 
 // ProfileInfo mirrors the GET /api/profiles response: configured auth profiles
@@ -175,6 +176,37 @@ export interface GitHubRepo {
 // editable SOUL.md body.
 export interface AgentDetail extends Agent {
   Soul: string;
+}
+
+export type MCPSource = "podium" | "claude" | "codex";
+export type MCPTransport = "http" | "stdio";
+
+export interface MCPEnvStatus {
+  name: string;
+  set: boolean;
+}
+
+export interface MCPServer {
+  name: string;
+  transport: MCPTransport;
+  url?: string;
+  command?: string;
+  args?: string[];
+  env_vars?: string[];
+  sources?: MCPSource[];
+  env_status?: MCPEnvStatus[];
+}
+
+export interface MCPAgent {
+  name: string;
+  provider: Provider;
+  mcp_servers: string[];
+}
+
+export interface MCPSnapshot {
+  servers: MCPServer[];
+  agents: MCPAgent[];
+  assignments: Record<string, string[]>;
 }
 
 // Task mirrors store.Task (Go-exported field names, no json tags).

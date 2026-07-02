@@ -89,6 +89,7 @@ type Agent struct {
 	Effort         string         `yaml:"effort,omitempty"`
 	PermissionMode PermissionMode `yaml:"permission_mode,omitempty"`
 	Fallback       []string       `yaml:"fallback,omitempty"`
+	MCPServers     []string       `yaml:"mcp_servers,omitempty"`
 	MCPConfig      string         `yaml:"mcp_config,omitempty"`
 }
 
@@ -283,6 +284,17 @@ func (c *Config) Validate() error {
 			if err := validateFallbackEntry(entry, profileNames); err != nil {
 				return fmt.Errorf("agents[%d] (%s).fallback[%d]: %w", i, a.Name, j, err)
 			}
+		}
+		seenMCP := map[string]bool{}
+		for j, server := range a.MCPServers {
+			server = strings.TrimSpace(server)
+			if server == "" {
+				return fmt.Errorf("agents[%d] (%s).mcp_servers[%d]: server name is required", i, a.Name, j)
+			}
+			if seenMCP[server] {
+				return fmt.Errorf("agents[%d] (%s).mcp_servers[%d]: duplicate server %q", i, a.Name, j, server)
+			}
+			seenMCP[server] = true
 		}
 	}
 

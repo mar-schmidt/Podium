@@ -65,7 +65,7 @@ agents: []
   #   permission_mode: approve    # per-agent override of the global default
   #   fallback: [work, personal, codex]   # ordered; rate-limit -> next target
   #                                       # entries: profile name | claude | codex | default
-  #   # mcp_config: ./config/jared-mcp.json     # opt-in per-agent MCP, additive
+  #   mcp_servers: [github, filesystem]   # opt-in per-agent MCP server assignments
 
 # ---------------------------------------------------------------------------
 # server: the local web UI / API bind address. Keep it on loopback unless you

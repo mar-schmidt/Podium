@@ -28,6 +28,7 @@ type agentCreateRequest struct {
 	Effort         string                `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
 	Fallback       []string              `json:"fallback,omitempty"`
+	MCPServers     []string              `json:"mcp_servers,omitempty"`
 }
 
 type sessionCreateRequest struct {
@@ -88,6 +89,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			Effort:         req.Effort,
 			PermissionMode: req.PermissionMode,
 			Fallback:       req.Fallback,
+			MCPServers:     req.MCPServers,
 		})
 		writeJSON(w, agent, err)
 	default:
@@ -356,7 +358,8 @@ func (e *profileInUseError) Error() string { return e.message }
 // redacted via the store.Agent json:"-" tag.
 type agentDetail struct {
 	store.Agent
-	Soul string `json:"Soul"`
+	MCPServers []string `json:"MCPServers"`
+	Soul       string   `json:"Soul"`
 }
 
 // agentUpdateRequest is the PUT body for editing an agent. Nil/empty engine
@@ -369,6 +372,7 @@ type agentUpdateRequest struct {
 	Effort         *string               `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
 	Fallback       *[]string             `json:"fallback,omitempty"`
+	MCPServers     *[]string             `json:"mcp_servers,omitempty"`
 	Soul           *string               `json:"soul,omitempty"`
 }
 
@@ -399,7 +403,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, nil, err)
 			return
 		}
-		writeJSON(w, agentDetail{Agent: agent, Soul: soul}, nil)
+		writeJSON(w, agentDetail{Agent: agent, MCPServers: agent.MCPServers, Soul: soul}, nil)
 	case http.MethodPut, http.MethodPatch:
 		if err := s.refreshProfilesFromConfig(); err != nil {
 			writeJSON(w, nil, err)
@@ -433,6 +437,9 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		if req.Fallback != nil {
 			agent.Fallback = *req.Fallback
 		}
+		if req.MCPServers != nil {
+			agent.MCPServers = *req.MCPServers
+		}
 		updated, err := s.core.UpdateAgent(r.Context(), agent)
 		if err != nil {
 			writeJSON(w, nil, err)
@@ -449,7 +456,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, nil, err)
 			return
 		}
-		writeJSON(w, agentDetail{Agent: updated, Soul: soul}, nil)
+		writeJSON(w, agentDetail{Agent: updated, MCPServers: updated.MCPServers, Soul: soul}, nil)
 	case http.MethodDelete:
 		var req agentDeleteRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

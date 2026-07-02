@@ -25,6 +25,7 @@ type CreateAgentRequest struct {
 	Effort         string
 	PermissionMode config.PermissionMode
 	Fallback       []string
+	MCPServers     []string
 	MCPConfig      string
 }
 
@@ -48,6 +49,7 @@ func (c *Core) CreateAgent(ctx context.Context, req CreateAgentRequest) (store.A
 		Effort:         req.Effort,
 		PermissionMode: req.PermissionMode,
 		Fallback:       append([]string(nil), req.Fallback...),
+		MCPServers:     append([]string(nil), req.MCPServers...),
 		MCPConfig:      req.MCPConfig,
 	}
 	c.applyAgentDefaults(&agent)
@@ -124,6 +126,17 @@ func (c *Core) validateAgentTargets(agent store.Agent) error {
 		if _, ok := c.profiles[entry]; !ok {
 			return fmt.Errorf("unknown fallback profile %q", entry)
 		}
+	}
+	seenMCP := map[string]bool{}
+	for _, server := range agent.MCPServers {
+		server = strings.TrimSpace(server)
+		if server == "" {
+			return fmt.Errorf("mcp server name is required")
+		}
+		if seenMCP[server] {
+			return fmt.Errorf("duplicate mcp server %q", server)
+		}
+		seenMCP[server] = true
 	}
 	return nil
 }

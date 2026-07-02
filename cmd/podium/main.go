@@ -57,6 +57,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newProjectsCmd(&addr))
 	root.AddCommand(newTasksCmd(&addr))
 	root.AddCommand(newSkillsCmd())
+	root.AddCommand(newMCPCmd(&addr))
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newDoctorCmd(&addr))
 	root.AddCommand(newOnboardCmd(&addr))

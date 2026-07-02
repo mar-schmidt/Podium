@@ -8,6 +8,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -72,6 +73,10 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 	if err != nil {
 		return store.Session{}, err
 	}
+	mcpServers, mcpAll, err := c.agentMCPServers(agent)
+	if err != nil {
+		return store.Session{}, err
+	}
 	handle, err := c.adapter.Start(ctx, adapter.StartRequest{
 		SessionID:          created.ID,
 		AgentName:          agent.Name,
@@ -84,6 +89,8 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 		WorkspaceDir:       c.AgentPaths(agent.Name).Workspace,
 		ExtraWorkspaceDirs: c.sessionExtraWorkspaceDirs(projectCtx),
 		Instructions:       payload.Bytes,
+		MCPServers:         mcpServers,
+		MCPAllServers:      mcpAll,
 	})
 	if err != nil {
 		return store.Session{}, err
@@ -264,7 +271,13 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 			if strings.TrimSpace(projectCtx.Prompt) != "" {
 				providerMessage = projectCtx.Prompt + "\n\nUser message:\n" + userMessage
 			}
-			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, providerMessage, opts, c.sessionExtraWorkspaceDirs(projectCtx)))
+			mcpServers, mcpAll, err := c.sessionMCPServers(ctx, current)
+			if err != nil {
+				runLog.Warn("turn failed", "stage", "mcp", "error", err)
+				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
+				return
+			}
+			events, err := c.adapter.SendTurn(ctx, c.turnRequest(current, history, providerMessage, opts, c.sessionExtraWorkspaceDirs(projectCtx), mcpServers, mcpAll))
 			if err != nil {
 				runLog.Warn("turn failed", "stage", "dispatch", "provider", string(current.Provider), "error", err)
 				_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
@@ -338,7 +351,7 @@ func (c *Core) sessionExtraWorkspaceDirs(projectCtx projectExecutionContext) []s
 	return nonEmptyStrings(c.paths.ProjectsDir, projectCtx.Root)
 }
 
-func (c *Core) turnRequest(sess store.Session, history []store.Message, userMessage string, opts TurnOptions, extraWorkspaceDirs []string) adapter.TurnRequest {
+func (c *Core) turnRequest(sess store.Session, history []store.Message, userMessage string, opts TurnOptions, extraWorkspaceDirs []string, mcpServers, mcpAll []podiummcp.Server) adapter.TurnRequest {
 	return adapter.TurnRequest{
 		SessionID: sess.ID,
 		Handle: adapter.Handle{
@@ -359,10 +372,32 @@ func (c *Core) turnRequest(sess store.Session, history []store.Message, userMess
 			PermissionTurnID:   firstNonEmpty(opts.PermissionTurnID, fmt.Sprintf("%s-%d", sess.ID, time.Now().UnixNano())),
 			Unattended:         opts.Unattended,
 			AllowedTools:       opts.AllowedTools,
+			MCPServers:         mcpServers,
+			MCPAllServers:      mcpAll,
 		},
 		Relay: opts.PermissionRelay,
 		Input: opts.UserInputRelay,
 	}
+}
+
+func (c *Core) sessionMCPServers(ctx context.Context, sess store.Session) ([]podiummcp.Server, []podiummcp.Server, error) {
+	agent, err := c.store.GetAgent(ctx, sess.AgentName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.agentMCPServers(agent)
+}
+
+func (c *Core) agentMCPServers(agent store.Agent) ([]podiummcp.Server, []podiummcp.Server, error) {
+	cat, err := podiummcp.LoadCatalogue(c.paths.MCPYAML)
+	if err != nil {
+		return nil, nil, err
+	}
+	assigned, err := podiummcp.Assigned(cat, agent.MCPServers)
+	if err != nil {
+		return nil, nil, err
+	}
+	return assigned, cat.Servers, nil
 }
 
 func (c *Core) consumeAdapterEvents(ctx context.Context, streamOut chan<- TurnEvent, sessionID string, events <-chan adapter.Event) (strings.Builder, bool, bool) {

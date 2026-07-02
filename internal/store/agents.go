@@ -18,10 +18,14 @@ func (s *Store) CreateAgent(ctx context.Context, a Agent) (Agent, error) {
 	if err != nil {
 		return Agent{}, fmt.Errorf("encode fallback: %w", err)
 	}
+	mcpServers, err := json.Marshal(a.MCPServers)
+	if err != nil {
+		return Agent{}, fmt.Errorf("encode mcp servers: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO agents
-		(name, provider, profile, model, effort, permission_mode, fallback_json, mcp_config)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.Name, a.Provider, a.Profile, a.Model, a.Effort, a.PermissionMode, string(fallback), a.MCPConfig,
+		(name, provider, profile, model, effort, permission_mode, fallback_json, mcp_servers_json, mcp_config)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.Name, a.Provider, a.Profile, a.Model, a.Effort, a.PermissionMode, string(fallback), string(mcpServers), a.MCPConfig,
 	)
 	if err != nil {
 		return Agent{}, fmt.Errorf("create agent %q: %w", a.Name, err)
@@ -32,7 +36,7 @@ func (s *Store) CreateAgent(ctx context.Context, a Agent) (Agent, error) {
 // GetAgent fetches an agent by name.
 func (s *Store) GetAgent(ctx context.Context, name string) (Agent, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT
-		name, provider, profile, model, effort, permission_mode, fallback_json, mcp_config, created_at, updated_at
+		name, provider, profile, model, effort, permission_mode, fallback_json, mcp_servers_json, mcp_config, created_at, updated_at
 		FROM agents WHERE name = ?`, name)
 	a, err := scanAgent(row)
 	if err != nil {
@@ -47,7 +51,7 @@ func (s *Store) GetAgent(ctx context.Context, name string) (Agent, error) {
 // ListAgents returns every agent ordered by name.
 func (s *Store) ListAgents(ctx context.Context) ([]Agent, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
-		name, provider, profile, model, effort, permission_mode, fallback_json, mcp_config, created_at, updated_at
+		name, provider, profile, model, effort, permission_mode, fallback_json, mcp_servers_json, mcp_config, created_at, updated_at
 		FROM agents ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
@@ -72,11 +76,15 @@ func (s *Store) UpdateAgent(ctx context.Context, a Agent) (Agent, error) {
 	if err != nil {
 		return Agent{}, fmt.Errorf("encode fallback: %w", err)
 	}
+	mcpServers, err := json.Marshal(a.MCPServers)
+	if err != nil {
+		return Agent{}, fmt.Errorf("encode mcp servers: %w", err)
+	}
 	res, err := s.db.ExecContext(ctx, `UPDATE agents SET
 		provider = ?, profile = ?, model = ?, effort = ?, permission_mode = ?,
-		fallback_json = ?, mcp_config = ?, updated_at = datetime('now')
+		fallback_json = ?, mcp_servers_json = ?, mcp_config = ?, updated_at = datetime('now')
 		WHERE name = ?`,
-		a.Provider, a.Profile, a.Model, a.Effort, a.PermissionMode, string(fallback), a.MCPConfig, a.Name,
+		a.Provider, a.Profile, a.Model, a.Effort, a.PermissionMode, string(fallback), string(mcpServers), a.MCPConfig, a.Name,
 	)
 	if err != nil {
 		return Agent{}, fmt.Errorf("update agent %q: %w", a.Name, err)
@@ -116,7 +124,7 @@ type scanner interface {
 
 func scanAgent(row scanner) (Agent, error) {
 	var a Agent
-	var fallback string
+	var fallback, mcpServers string
 	if err := row.Scan(
 		&a.Name,
 		&a.Provider,
@@ -125,6 +133,7 @@ func scanAgent(row scanner) (Agent, error) {
 		&a.Effort,
 		&a.PermissionMode,
 		&fallback,
+		&mcpServers,
 		&a.MCPConfig,
 		&a.CreatedAt,
 		&a.UpdatedAt,
@@ -133,6 +142,11 @@ func scanAgent(row scanner) (Agent, error) {
 	}
 	if err := json.Unmarshal([]byte(fallback), &a.Fallback); err != nil {
 		return Agent{}, fmt.Errorf("decode fallback for agent %q: %w", a.Name, err)
+	}
+	if strings.TrimSpace(mcpServers) != "" {
+		if err := json.Unmarshal([]byte(mcpServers), &a.MCPServers); err != nil {
+			return Agent{}, fmt.Errorf("decode mcp servers for agent %q: %w", a.Name, err)
+		}
 	}
 	return a, nil
 }

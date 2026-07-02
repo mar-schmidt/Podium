@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -34,6 +35,8 @@ type StartRequest struct {
 	WorkspaceDir       string
 	ExtraWorkspaceDirs []string
 	Instructions       []byte
+	MCPServers         []podiummcp.Server
+	MCPAllServers      []podiummcp.Server
 }
 
 // ResumeRequest asks an adapter to bind to an existing provider handle.
@@ -72,7 +75,9 @@ type TurnSettings struct {
 	Unattended bool
 	// AllowedTools is the preapproved allow-list for an unattended run. Tools not
 	// listed are auto-denied. Empty means deny all side-effecting actions.
-	AllowedTools []string
+	AllowedTools  []string
+	MCPServers    []podiummcp.Server
+	MCPAllServers []podiummcp.Server
 }
 
 // RateStatus reports provider-exposed rate-limit utilization when available.

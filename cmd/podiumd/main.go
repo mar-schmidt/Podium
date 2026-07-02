@@ -232,6 +232,7 @@ func syncConfiguredAgents(ctx context.Context, coreSvc *core.Core, cfg *config.C
 					Effort:         a.Effort,
 					PermissionMode: a.PermissionMode,
 					Fallback:       a.Fallback,
+					MCPServers:     a.MCPServers,
 					MCPConfig:      a.MCPConfig,
 				}); err != nil {
 					return err
@@ -246,6 +247,7 @@ func syncConfiguredAgents(ctx context.Context, coreSvc *core.Core, cfg *config.C
 		agent.Effort = a.Effort
 		agent.PermissionMode = a.PermissionMode
 		agent.Fallback = a.Fallback
+		agent.MCPServers = a.MCPServers
 		agent.MCPConfig = a.MCPConfig
 		if _, err := coreSvc.UpdateAgent(ctx, agent); err != nil {
 			return err

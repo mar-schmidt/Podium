@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { createProfile, deleteAgent, getAgent, listProfiles, updateAgent } from "../lib/api";
+  import { createProfile, deleteAgent, getAgent, getMCP, listProfiles, updateAgent } from "../lib/api";
   import ProviderLogo from "../lib/ProviderLogo.svelte";
   import { agentGradient, avatarStyle, initial, modeChip, providerChip } from "../lib/theme";
-  import type { Agent, ProfileInfo } from "../lib/types";
+  import type { Agent, MCPServer, ProfileInfo } from "../lib/types";
 
   // A fallback chain row: a provider plus an optional profile. Encodes to a
   // single token (profile name when set, otherwise the bare provider).
@@ -38,6 +38,8 @@
   let edPermission = $state("approve");
   let edSoul = $state("");
   let edFallback = $state<FbRow[]>([]);
+  let edMCPServers = $state<string[]>([]);
+  let mcpServers = $state<MCPServer[]>([]);
   let profiles = $state<ProfileInfo[]>([]);
   let saving = $state(false);
   let editError = $state<string | null>(null);
@@ -129,6 +131,8 @@
     edPermission = a.PermissionMode;
     edSoul = "";
     edFallback = decodeFallback(a.Fallback, a.Provider);
+    edMCPServers = [...(a.MCPServers ?? [])];
+    mcpServers = [];
     inlineProfileOpen = false;
     inlineProfileName = "";
     inlineProfilePath = "";
@@ -143,8 +147,16 @@
     try {
       const detail = await getAgent(a.Name);
       edSoul = detail.Soul;
+      edMCPServers = [...(detail.MCPServers ?? [])];
     } catch {
       // SOUL is optional; leave blank on error.
+    }
+    try {
+      const mcp = await getMCP();
+      mcpServers = mcp.servers;
+      edMCPServers = [...(mcp.assignments[a.Name] ?? edMCPServers)];
+    } catch {
+      // MCP catalogue is optional; editing core agent settings still works.
     }
   }
 
@@ -159,6 +171,7 @@
         profile: edProfile,
         permission_mode: edPermission,
         fallback: encodeFallback(edFallback),
+        mcp_servers: edMCPServers,
         soul: edSoul,
       });
       // Reflect the saved engine fields in the detail view.
@@ -170,6 +183,7 @@
         Effort: detail.Effort,
         PermissionMode: detail.PermissionMode,
         Fallback: detail.Fallback,
+        MCPServers: detail.MCPServers,
       };
       editOpen = false;
       onChanged();
@@ -242,6 +256,19 @@
         : "border:1px solid #EAE0D4;background:#fff;color:#6F6459")
     );
   }
+
+  function toggleMCP(name: string) {
+    if (edMCPServers.includes(name)) {
+      edMCPServers = edMCPServers.filter((s) => s !== name);
+    } else {
+      edMCPServers = [...edMCPServers, name];
+    }
+  }
+
+  function serverSummary(s: MCPServer): string {
+    if (s.transport === "http") return s.url || "http";
+    return [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "stdio";
+  }
 </script>
 
 {#if !selected}
@@ -311,6 +338,7 @@
         <div class="ad-spec"><span>Effort</span><span class="mono">{a.Effort || "medium"}</span></div>
         <div class="ad-spec"><span>Profile</span><span class="mono">{a.Profile || "default"}</span></div>
         <div class="ad-spec"><span>Fallback</span><span class="mono">{a.Fallback && a.Fallback.length ? a.Fallback.join(" → ") : "none"}</span></div>
+        <div class="ad-spec"><span>MCP</span><span class="mono">{a.MCPServers && a.MCPServers.length ? a.MCPServers.join(", ") : "none"}</span></div>
         <div class="ad-spec"><span>Permission</span><span class="mono">{a.PermissionMode}</span></div>
         <div class="ad-spec"><span>Workspace</span><span class="mono">~/.podium/agents/{a.Name}</span></div>
       </div>
@@ -408,6 +436,20 @@
         {/each}
         <button class="fb-add" onclick={addRow}>+ Add fallback</button>
 
+        <div class="label-mono" style="margin:18px 0 8px">MCP servers</div>
+        {#if mcpServers.length}
+          <div class="mcp-picks">
+            {#each mcpServers as server (server.name)}
+              <button class="mcp-pick" class:on={edMCPServers.includes(server.name)} onclick={() => toggleMCP(server.name)}>
+                <span class="mcp-name">{server.name}</span>
+                <span class="mcp-meta">{server.transport} · {serverSummary(server)}</span>
+              </button>
+            {/each}
+          </div>
+        {:else}
+          <div class="fb-hint">No MCP servers are in the catalogue yet.</div>
+        {/if}
+
         <div class="ed-row">
           <span class="ed-key">permission</span>
           <div class="ed-chips">
@@ -467,6 +509,44 @@
     display: flex;
     gap: 15px;
     text-align: left;
+  }
+
+  .mcp-picks {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .mcp-pick {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid #eae0d4;
+    border-radius: 11px;
+    background: #fff;
+    color: #4a4138;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .mcp-pick.on {
+    border-color: #bfe0d6;
+    background: #e3f1ec;
+  }
+
+  .mcp-name {
+    font: 700 12.5px "JetBrains Mono", monospace;
+    color: #241f1a;
+  }
+
+  .mcp-meta {
+    font: 500 11px "Hanken Grotesk";
+    color: #7a6f62;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .agent-card:hover {

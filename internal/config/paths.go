@@ -21,6 +21,7 @@ const EnvHome = "PODIUM_HOME"
 type Paths struct {
 	Home         string // the storage root itself (e.g. ~/.podium)
 	ConfigYAML   string // config.yaml
+	MCPYAML      string // mcp.yaml
 	BaseAgents   string // AGENTS.md (Podium-owned base instructions)
 	DB           string // podium.db (SQLite)
 	AgentsDir    string // agents/
@@ -60,6 +61,7 @@ func NewPaths(home string) Paths {
 	return Paths{
 		Home:         home,
 		ConfigYAML:   filepath.Join(home, "config.yaml"),
+		MCPYAML:      filepath.Join(home, "mcp.yaml"),
 		BaseAgents:   filepath.Join(home, "AGENTS.md"),
 		DB:           filepath.Join(home, "podium.db"),
 		AgentsDir:    filepath.Join(home, "agents"),

@@ -13,6 +13,8 @@ import type {
   Health,
   LogSnapshot,
   LogStreamEvent,
+  MCPSnapshot,
+  MCPServer,
   ProfileInfo,
   Project,
   ScheduleStatus,
@@ -57,6 +59,34 @@ export async function listAgents(): Promise<Agent[]> {
 
 export async function listSkills(): Promise<Skill[]> {
   return (await asJSON<Skill[] | null>(await fetch("/api/skills"))) ?? [];
+}
+
+export async function getMCP(): Promise<MCPSnapshot> {
+  return asJSON(await fetch("/api/mcp"));
+}
+
+export async function saveMCPServer(server: MCPServer): Promise<MCPSnapshot> {
+  return asJSON(
+    await fetch("/api/mcp/servers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(server),
+    }),
+  );
+}
+
+export async function removeMCPServer(name: string): Promise<MCPSnapshot> {
+  return asJSON(await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" }));
+}
+
+export async function setMCPAssignment(agentName: string, serverName: string, assigned: boolean): Promise<MCPSnapshot> {
+  return asJSON(
+    await fetch("/api/mcp/assignments", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_name: agentName, server_name: serverName, assigned }),
+    }),
+  );
 }
 
 export async function listProfiles(): Promise<ProfileInfo[]> {
@@ -169,6 +199,7 @@ export interface AgentUpdate {
   effort?: string;
   permission_mode?: string;
   fallback?: string[];
+  mcp_servers?: string[];
   soul?: string;
 }
 

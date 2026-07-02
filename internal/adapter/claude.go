@@ -17,6 +17,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/config"
 	podiumexec "github.com/mar-schmidt/Podium/internal/exec"
 	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
+	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -258,6 +259,7 @@ func (c *Claude) args(req TurnRequest) ([]string, func(), error) {
 		args = append(args, "--resume", req.Handle.ID)
 	}
 	cleanup := func() {}
+	needsPermissionMCP := false
 	switch req.Settings.PermissionMode {
 	case config.PermissionYolo:
 		args = append(args, "--permission-mode", "bypassPermissions")
@@ -269,20 +271,21 @@ func (c *Claude) args(req TurnRequest) ([]string, func(), error) {
 			if allowed := nonEmptyTools(req.Settings.AllowedTools); len(allowed) > 0 {
 				args = append(args, "--allowedTools", strings.Join(allowed, ","))
 			}
-			break
+		} else {
+			needsPermissionMCP = true
 		}
-		if c.daemonAddr == "" || c.mcpCommand == "" {
-			return nil, cleanup, errors.New("claude approve mode needs daemon address and MCP command")
-		}
-		configPath, err := c.writeMCPConfig(req)
-		if err != nil {
-			return nil, cleanup, err
-		}
-		cleanup = func() { _ = os.Remove(configPath) }
-		args = append(args,
-			"--mcp-config", configPath,
-			"--permission-prompt-tool", "mcp__podium_permission__prompt",
-		)
+	}
+	if needsPermissionMCP && (c.daemonAddr == "" || c.mcpCommand == "") {
+		return nil, cleanup, errors.New("claude approve mode needs daemon address and MCP command")
+	}
+	configPath, err := c.writeMCPConfig(req)
+	if err != nil {
+		return nil, cleanup, err
+	}
+	cleanup = func() { _ = os.Remove(configPath) }
+	args = append(args, "--mcp-config", configPath, "--strict-mcp-config")
+	if needsPermissionMCP {
+		args = append(args, "--permission-prompt-tool", "mcp__podium_permission__prompt")
 	}
 	return args, cleanup, nil
 }
@@ -295,19 +298,19 @@ func (c *Claude) writeMCPConfig(req TurnRequest) (string, error) {
 	if turnID == "" {
 		turnID = req.SessionID
 	}
-	payload := map[string]any{
-		"mcpServers": map[string]any{
-			"podium_permission": map[string]any{
-				"command": c.mcpCommand,
-				"args": []string{
-					"permission-mcp",
-					"--addr", c.daemonAddr,
-					"--turn", turnID,
-					"--timeout", c.permissionTimeout.String(),
-				},
+	var permission map[string]any
+	if req.Settings.PermissionMode != config.PermissionYolo && !req.Settings.Unattended {
+		permission = map[string]any{
+			"command": c.mcpCommand,
+			"args": []string{
+				"permission-mcp",
+				"--addr", c.daemonAddr,
+				"--turn", turnID,
+				"--timeout", c.permissionTimeout.String(),
 			},
-		},
+		}
 	}
+	payload := podiummcp.ClaudeConfig(req.Settings.MCPServers, permission)
 	raw, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", err

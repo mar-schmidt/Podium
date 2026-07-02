@@ -19,6 +19,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/schedule"
 	"github.com/mar-schmidt/Podium/internal/server"
@@ -79,6 +80,7 @@ type AgentCreateRequest struct {
 	Effort         string                `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
 	Fallback       []string              `json:"fallback,omitempty"`
+	MCPServers     []string              `json:"mcp_servers,omitempty"`
 }
 
 // ProfileRequest is the transport shape for creating/updating auth profiles.
@@ -133,7 +135,8 @@ func (c *Client) CreateAgent(ctx context.Context, req AgentCreateRequest) (store
 // AgentDetail bundles an agent with its editable SOUL.md body.
 type AgentDetail struct {
 	store.Agent
-	Soul string `json:"Soul"`
+	MCPServers []string `json:"MCPServers"`
+	Soul       string   `json:"Soul"`
 }
 
 // GetAgent fetches an agent and its SOUL.md body.
@@ -153,7 +156,58 @@ type AgentUpdateRequest struct {
 	Effort         *string               `json:"effort,omitempty"`
 	PermissionMode config.PermissionMode `json:"permission_mode,omitempty"`
 	Fallback       *[]string             `json:"fallback,omitempty"`
+	MCPServers     *[]string             `json:"mcp_servers,omitempty"`
 	Soul           *string               `json:"soul,omitempty"`
+}
+
+type MCPSnapshot struct {
+	Servers     []podiummcp.Server  `json:"servers"`
+	Agents      []MCPAgent          `json:"agents"`
+	Assignments map[string][]string `json:"assignments"`
+}
+
+type MCPAgent struct {
+	Name       string   `json:"name"`
+	Provider   string   `json:"provider"`
+	MCPServers []string `json:"mcp_servers"`
+}
+
+type MCPAssignmentRequest struct {
+	AgentName  string `json:"agent_name"`
+	ServerName string `json:"server_name"`
+	Assigned   bool   `json:"assigned"`
+}
+
+func (c *Client) MCPSnapshot(ctx context.Context) (MCPSnapshot, error) {
+	var snapshot MCPSnapshot
+	if err := c.getJSON(ctx, "/api/mcp", &snapshot); err != nil {
+		return snapshot, err
+	}
+	return snapshot, nil
+}
+
+func (c *Client) UpsertMCPServer(ctx context.Context, server podiummcp.Server) (MCPSnapshot, error) {
+	var snapshot MCPSnapshot
+	if err := c.postJSON(ctx, "/api/mcp/servers", server, &snapshot); err != nil {
+		return snapshot, err
+	}
+	return snapshot, nil
+}
+
+func (c *Client) RemoveMCPServer(ctx context.Context, name string) (MCPSnapshot, error) {
+	var snapshot MCPSnapshot
+	if err := c.deleteJSON(ctx, "/api/mcp/servers/"+urlPathEscape(name), nil, &snapshot); err != nil {
+		return snapshot, err
+	}
+	return snapshot, nil
+}
+
+func (c *Client) SetMCPAssignment(ctx context.Context, req MCPAssignmentRequest) (MCPSnapshot, error) {
+	var snapshot MCPSnapshot
+	if err := c.putJSON(ctx, "/api/mcp/assignments", req, &snapshot); err != nil {
+		return snapshot, err
+	}
+	return snapshot, nil
 }
 
 // UpdateAgent updates an agent through the daemon.

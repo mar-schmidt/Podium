@@ -197,6 +197,11 @@ var migrations = []migration{
 
 		CREATE INDEX idx_push_subscriptions_kind ON push_subscriptions(kind);`,
 	},
+	{
+		version: 9,
+		name:    "agent_mcp_servers",
+		sql:     `ALTER TABLE agents ADD COLUMN mcp_servers_json TEXT NOT NULL DEFAULT '[]';`,
+	},
 }
 
 // migrate applies every migration whose version has not yet been recorded. Each

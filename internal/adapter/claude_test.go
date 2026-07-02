@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 )
 
 func TestClaudeArgsApproveWritesPermissionMCPConfig(t *testing.T) {
@@ -42,6 +43,7 @@ func TestClaudeArgsApproveWritesPermissionMCPConfig(t *testing.T) {
 		"--model sonnet",
 		"--effort medium",
 		"--mcp-config",
+		"--strict-mcp-config",
 		"--permission-prompt-tool mcp__podium_permission__prompt",
 	} {
 		if !strings.Contains(got, want) {
@@ -58,6 +60,52 @@ func TestClaudeArgsApproveWritesPermissionMCPConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "permission-mcp") || !strings.Contains(string(raw), "turn-1") {
 		t.Fatalf("unexpected mcp config:\n%s", raw)
+	}
+}
+
+func TestClaudeArgsIncludesAssignedMCPServersStrictly(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Claude{}
+	args, cleanup, err := c.args(TurnRequest{
+		SessionID: "session-2",
+		Settings: TurnSettings{
+			PermissionMode: config.PermissionYolo,
+			WorkspaceDir:   workspace,
+			MCPServers: []podiummcp.Server{{
+				Name:      "filesystem",
+				Transport: podiummcp.TransportStdio,
+				Command:   "npx",
+				Args:      []string{"-y", "@modelcontextprotocol/server-filesystem"},
+			}},
+		},
+	})
+	defer cleanup()
+	if err != nil {
+		t.Fatalf("args: %v", err)
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "--strict-mcp-config") {
+		t.Fatalf("expected strict mcp config in args: %q", got)
+	}
+	configIndex := indexOf(args, "--mcp-config")
+	if configIndex == -1 || configIndex+1 >= len(args) {
+		t.Fatalf("missing mcp config path in args: %#v", args)
+	}
+	raw, err := os.ReadFile(args[configIndex+1])
+	if err != nil {
+		t.Fatalf("read mcp config: %v", err)
+	}
+	var parsed struct {
+		MCPServers map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("parse generated config: %v\n%s", err, raw)
+	}
+	if _, ok := parsed.MCPServers["filesystem"]; !ok {
+		t.Fatalf("assigned server missing from config: %s", raw)
+	}
+	if _, ok := parsed.MCPServers["podium_permission"]; ok {
+		t.Fatalf("yolo config should not include permission relay: %s", raw)
 	}
 }
 

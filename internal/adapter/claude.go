@@ -116,7 +116,8 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 		c.providerLog(req).Warn("provider process pipe failed", "stage", "stderr", "error", err)
 		return nil, fmt.Errorf("claude stderr: %w", err)
 	}
-	c.providerLog(req).Debug("provider process starting", "stage", "start", "command", c.bin, "resuming", req.Handle.ID != "")
+	startedAt := time.Now()
+	c.providerLog(req).Info("provider process starting", "event", "provider", "stage", "start", "command", c.bin, "resuming", req.Handle.ID != "", "permission", string(req.Settings.PermissionMode), "mcp_servers", len(req.Settings.MCPServers), "extra_workspaces", len(req.Settings.ExtraWorkspaceDirs))
 	if err := cmd.Start(); err != nil {
 		cleanup()
 		c.providerLog(req).Warn("provider process start failed", "stage", "start", "error", err)
@@ -129,6 +130,7 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 		c.providerLog(req).Warn("provider stdin write failed", "stage", "write_input", "error", err)
 		return nil, err
 	}
+	c.providerLog(req).Info("provider input written", "event", "provider", "stage", "write_input", "history_messages", len(req.History), "resuming", req.Handle.ID != "")
 
 	out := make(chan Event, 32)
 	go func() {
@@ -142,13 +144,14 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 			parsec <- parseClaudeStream(ctx, stdout, parsed)
 			close(parsed)
 		}()
-		go trackClaudeStream(ctx, parsed, out, trackc)
+		go c.trackClaudeStream(ctx, req, parsed, out, trackc)
 		go func() { stderrc <- collectStderr(stderr, claudeStderrTailLimit) }()
 		waitErr := cmd.Wait()
 		parseErr := <-parsec
 		track := <-trackc
 		stderrResult := <-stderrc
 		if ctx.Err() != nil {
+			c.providerLog(req).Info("provider process canceled", "event", "provider", "stage", "wait", podiumlog.DurationMS("duration_ms", time.Since(startedAt)))
 			return
 		}
 		if parseErr != nil {
@@ -167,7 +170,7 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 				sendAdapterEvent(ctx, out, event)
 				return
 			} else if !send {
-				c.providerLog(req).Warn("provider process exited after provider message", "stage", "wait", "exit_error", waitErr, "provider_message", podiumlog.RedactTail(track.lastMessage, 4096), "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
+				c.providerLog(req).Warn("provider process exited after provider message", "event", "provider", "stage", "wait", "exit_error", waitErr, "provider_message", podiumlog.RedactTail(track.lastMessage, 4096), "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit), podiumlog.DurationMS("duration_ms", time.Since(startedAt)))
 				return
 			} else {
 				c.providerLog(req).Warn("provider process exited with error", "stage", "wait", "exit_error", waitErr, "stderr_tail", podiumlog.RedactTail(stderrResult.text, claudeStderrTailLimit))
@@ -175,6 +178,7 @@ func (c *Claude) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, e
 				return
 			}
 		}
+		c.providerLog(req).Info("provider process finished", "event", "provider", "stage", "wait", "status", "success", podiumlog.DurationMS("duration_ms", time.Since(startedAt)))
 		sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
 	}()
 	return out, nil
@@ -184,11 +188,14 @@ type claudeStreamTrack struct {
 	lastMessage string
 }
 
-func trackClaudeStream(ctx context.Context, in <-chan Event, out chan<- Event, done chan<- claudeStreamTrack) {
+func (c *Claude) trackClaudeStream(ctx context.Context, req TurnRequest, in <-chan Event, out chan<- Event, done chan<- claudeStreamTrack) {
 	var track claudeStreamTrack
 	for event := range in {
 		if event.Kind == EventAssistantMessage && strings.TrimSpace(event.Content) != "" {
 			track.lastMessage = event.Content
+		}
+		if event.Kind == EventHandleUpdated && event.Handle != nil {
+			c.providerLog(req).Info("provider handle updated", "event", "provider", "stage", "stream", "provider_handle_set", event.Handle.ID != "")
 		}
 		if !sendAdapterEvent(ctx, out, event) {
 			break

@@ -15,6 +15,7 @@ import (
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
 	"github.com/mar-schmidt/Podium/internal/core"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
 
@@ -181,6 +182,10 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request, currentName
 			req.HomeDir = old.HomeDir
 		}
 	}
+	beforeProfile := config.Profile{}
+	if currentName != "" {
+		beforeProfile, _ = s.profileByName(currentName)
+	}
 	profile, err := s.profileFromRequest(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -224,7 +229,42 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request, currentName
 		writeJSON(w, nil, errors.New("saved profile was not found after config reload"))
 		return
 	}
+	action := "profile created"
+	changed := []string{"name", "provider", "path_set"}
+	if currentName != "" {
+		action = "profile updated"
+		changed = podiumlog.ChangedFields(profileLogFields(beforeProfile), profileLogFields(saved))
+	}
+	s.log.Info(action,
+		"event", "config",
+		"profile", saved.Name,
+		"provider", string(saved.Provider),
+		"path_set", s.profileDir(saved) != "",
+		"changed", changed,
+	)
 	writeJSON(w, saved, nil)
+}
+
+func profileLogFields(p config.Profile) map[string]string {
+	pathSet := ""
+	switch p.Provider {
+	case config.ProviderCodex:
+		pathSet = boolLogString(p.HomeDir != "")
+	default:
+		pathSet = boolLogString(p.ConfigDir != "")
+	}
+	return map[string]string{
+		"name":     p.Name,
+		"provider": string(p.Provider),
+		"path_set": pathSet,
+	}
+}
+
+func boolLogString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }
 
 func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request, name string) {
@@ -248,6 +288,7 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request, name stri
 		writeJSON(w, nil, err)
 		return
 	}
+	s.log.Info("profile deleted", "event", "config", "profile", name)
 	writeJSON(w, s.core.ListProfileDetails(), nil)
 }
 
@@ -504,6 +545,9 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			PermissionMode: req.PermissionMode,
 			ProjectID:      req.ProjectID,
 		})
+		if err == nil {
+			s.log.Info("session create requested", "event", "run", "session", session.ID, "agent", session.AgentName, "provider", string(session.Provider), "origin", string(session.Origin), "project", session.ProjectID)
+		}
 		writeJSON(w, session, err)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -536,6 +580,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, nil, err)
 			return
 		}
+		s.log.Info("session delete requested", "event", "run", "session", id)
 		writeJSON(w, map[string]string{"deleted": id}, nil)
 		return
 	default:

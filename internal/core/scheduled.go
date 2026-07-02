@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -18,25 +19,32 @@ import (
 // `--allowedTools` (§7.7).
 type AllowListRelay struct {
 	allowed map[string]bool
+	log     *slog.Logger
 }
 
 // NewAllowListRelay builds a relay from a list of permitted tool names.
-func NewAllowListRelay(tools []string) *AllowListRelay {
+func NewAllowListRelay(tools []string, loggers ...*slog.Logger) *AllowListRelay {
 	allowed := make(map[string]bool, len(tools))
 	for _, t := range tools {
 		if trimmed := strings.TrimSpace(t); trimmed != "" {
 			allowed[trimmed] = true
 		}
 	}
-	return &AllowListRelay{allowed: allowed}
+	log := slog.Default()
+	if len(loggers) > 0 && loggers[0] != nil {
+		log = loggers[0]
+	}
+	return &AllowListRelay{allowed: allowed, log: log}
 }
 
 // RequestPermission decides immediately from the allow-list; it never blocks on
 // a human and ignores the timeout.
 func (r *AllowListRelay) RequestPermission(_ context.Context, req adapter.PermissionRequest, _ time.Duration) (adapter.PermissionDecision, error) {
 	if r.allowed[req.ToolName] {
+		r.log.Info("permission auto-decided", "event", "permission", "turn", req.TurnID, "request", req.ID, "tool_name", req.ToolName, "decision", "allow", "unattended", true)
 		return adapter.PermissionDecision{Behavior: "allow", UpdatedInput: req.Input}, nil
 	}
+	r.log.Info("permission auto-denied", "event", "permission", "turn", req.TurnID, "request", req.ID, "tool_name", req.ToolName, "decision", "deny", "unattended", true, "reason", "not_in_allow_list")
 	return adapter.PermissionDecision{Behavior: "deny", Message: "not in preapproved allow-list"}, nil
 }
 
@@ -67,7 +75,7 @@ func (c *Core) RunScheduled(ctx context.Context, req ScheduledRunRequest) (store
 		permission = config.PermissionYolo
 		allowed = nil
 	} else {
-		relay = NewAllowListRelay(req.AllowedTools)
+		relay = NewAllowListRelay(req.AllowedTools, c.log)
 	}
 
 	sess, err := c.CreateSession(ctx, CreateSessionRequest{

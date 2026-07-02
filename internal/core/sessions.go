@@ -8,6 +8,7 @@ import (
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	podiummcp "github.com/mar-schmidt/Podium/internal/mcp"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
@@ -95,7 +96,27 @@ func (c *Core) CreateSession(ctx context.Context, req CreateSessionRequest) (sto
 	if err != nil {
 		return store.Session{}, err
 	}
-	return c.store.UpdateSessionProviderHandle(ctx, created.ID, handle.ID)
+	updated, err := c.store.UpdateSessionProviderHandle(ctx, created.ID, handle.ID)
+	if err != nil {
+		return store.Session{}, err
+	}
+	c.log.Info("session created",
+		"event", "run",
+		"session", updated.ID,
+		"agent", updated.AgentName,
+		"provider", string(updated.Provider),
+		"profile", updated.Profile,
+		"origin", string(updated.Origin),
+		"permission", string(updated.PermissionMode),
+		"schedule", updated.ScheduleID,
+		"run", updated.RunID,
+		"task", updated.TaskID,
+		"project", updated.ProjectID,
+		"provider_handle_set", updated.ProviderHandle != "",
+		"mcp_servers", len(mcpServers),
+		"extra_workspaces", len(c.sessionExtraWorkspaceDirs(projectCtx)),
+	)
+	return updated, nil
 }
 
 // ListSessions returns all durable sessions, with a compatibility ProjectID
@@ -143,10 +164,25 @@ func (c *Core) GetSession(ctx context.Context, id string) (store.Session, error)
 // deletion, it does not explicitly stop a running provider adapter — the handle
 // simply becomes unreferenced — so an in-flight turn should be avoided.
 func (c *Core) DeleteSession(ctx context.Context, id string) error {
-	if _, err := c.store.GetSession(ctx, id); err != nil {
+	sess, err := c.store.GetSession(ctx, id)
+	if err != nil {
 		return err
 	}
-	return c.store.DeleteSession(ctx, id)
+	if err := c.store.DeleteSession(ctx, id); err != nil {
+		return err
+	}
+	c.log.Info("session deleted",
+		"event", "run",
+		"session", sess.ID,
+		"agent", sess.AgentName,
+		"provider", string(sess.Provider),
+		"origin", string(sess.Origin),
+		"schedule", sess.ScheduleID,
+		"run", sess.RunID,
+		"task", sess.TaskID,
+		"project", sess.ProjectID,
+	)
+	return nil
 }
 
 // UpdateSessionSettings changes mutable per-session turn settings without
@@ -170,7 +206,22 @@ func (c *Core) UpdateSessionSettings(ctx context.Context, id, model, effort stri
 	} else if permissionMode != config.PermissionApprove && permissionMode != config.PermissionYolo {
 		return store.Session{}, fmt.Errorf("invalid permission mode %q", permissionMode)
 	}
-	return c.store.UpdateSessionSettings(ctx, id, model, effort, permissionMode)
+	updated, err := c.store.UpdateSessionSettings(ctx, id, model, effort, permissionMode)
+	if err != nil {
+		return store.Session{}, err
+	}
+	c.log.Info("session settings updated",
+		"event", "run",
+		"session", updated.ID,
+		"agent", updated.AgentName,
+		"provider", string(updated.Provider),
+		"profile", updated.Profile,
+		"changed", podiumlog.ChangedFields(
+			map[string]string{"model": sess.Model, "effort": sess.Effort, "permission": string(sess.PermissionMode)},
+			map[string]string{"model": updated.Model, "effort": updated.Effort, "permission": string(updated.PermissionMode)},
+		),
+	)
+	return updated, nil
 }
 
 // TurnOptions configures one live adapter turn.
@@ -254,6 +305,8 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 			"profile", current.Profile,
 			"permission", string(current.PermissionMode),
 		)
+		startedAt := time.Now()
+		fallbacks := 0
 		for {
 			tried[targetKey(current.Provider, current.Profile)] = true
 			if err := c.ensureSessionInstructions(ctx, current); err != nil {
@@ -289,6 +342,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				return
 			}
 			if rateLimited {
+				fallbacks++
 				next, err := c.nextFallbackSession(ctx, current, tried)
 				if err != nil {
 					runLog.Warn("turn failed", "stage", "fallback", "from", targetLabel(current.Provider, current.Profile), "error", err)
@@ -305,8 +359,9 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				current = next
 				continue
 			}
+			duration := time.Since(startedAt)
 			if assistant.Len() == 0 {
-				runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", 0)
+				runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", 0, "fallbacks", fallbacks, podiumlog.DurationMS("duration_ms", duration))
 				return
 			}
 			assistantMessages, err := c.appendFinalMessages(ctx, sessionID, []store.Message{{
@@ -322,7 +377,7 @@ func (c *Core) StreamTurn(ctx context.Context, sessionID, userMessage string, op
 				go c.autoNameSessionBackground(sessionID)
 				go c.refreshRollingSummaryBackground(sessionID)
 			}
-			runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", assistant.Len())
+			runLog.Info("turn finished", "provider", string(current.Provider), "reply_bytes", assistant.Len(), "fallbacks", fallbacks, podiumlog.DurationMS("duration_ms", duration))
 			for _, msg := range assistantMessages {
 				msg := msg
 				if !sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "message_stored", Message: &msg}) {
@@ -429,6 +484,12 @@ func (c *Core) consumeAdapterEvents(ctx context.Context, streamOut chan<- TurnEv
 					_ = sendTurnEvent(ctx, streamOut, TurnEvent{Kind: "error", Content: err.Error()})
 					return assistant, false, false
 				}
+				c.log.Info("provider handle stored",
+					"event", "provider",
+					"session", sessionID,
+					"provider", string(event.Handle.Provider),
+					"provider_handle_set", event.Handle.ID != "",
+				)
 			}
 		case adapter.EventRateStatus:
 			if event.RateStatus != nil && event.RateStatus.UsedPercent >= 80 {

@@ -177,6 +177,14 @@ func (s *Server) handleProjectFromGitHub(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "repo owner and name are required", http.StatusBadRequest)
 		return
 	}
+	s.log.Info("github project create requested",
+		"event", "github",
+		"repo", owner+"/"+name,
+		"repo_owner", owner,
+		"repo_name", name,
+		"ref", req.Ref,
+		"force", req.Force,
+	)
 
 	project, err := s.projectForGitHubCreate(r.Context(), name, req.Description, req.Force)
 	if err != nil {
@@ -237,6 +245,15 @@ func (s *Server) handleProjectRepo(w http.ResponseWriter, r *http.Request, id st
 			Force bool `json:"force"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		s.log.Info("github project sync requested",
+			"event", "github",
+			"project", project.ID,
+			"repo", project.Repo.Owner+"/"+project.Repo.Name,
+			"repo_owner", project.Repo.Owner,
+			"repo_name", project.Repo.Name,
+			"ref", project.Repo.Ref,
+			"force", req.Force,
+		)
 		result, err := s.github.SyncProject(r.Context(), podiumgithub.SyncRequest{Project: project, Repo: *project.Repo, Force: req.Force})
 		if writeGitHubProjectError(w, err) {
 			return
@@ -263,6 +280,15 @@ func (s *Server) handleProjectRepo(w http.ResponseWriter, r *http.Request, id st
 			http.Error(w, "repo owner and name are required", http.StatusBadRequest)
 			return
 		}
+		s.log.Info("github project repo connect requested",
+			"event", "github",
+			"project", project.ID,
+			"repo", owner+"/"+name,
+			"repo_owner", owner,
+			"repo_name", name,
+			"ref", req.Ref,
+			"force", req.Force,
+		)
 		repo := projects.SnapshotRepo(owner, name, req.HTMLURL, req.DefaultBranch, req.Ref)
 		result, err := s.github.SyncProject(r.Context(), podiumgithub.SyncRequest{Project: project, Repo: repo, Force: req.Force})
 		if writeGitHubProjectError(w, err) {
@@ -272,6 +298,7 @@ func (s *Server) handleProjectRepo(w http.ResponseWriter, r *http.Request, id st
 		updated, err := s.core.UpdateProject(r.Context(), id, projects.ProjectPatch{Repo: &synced})
 		writeJSON(w, updated, err)
 	case http.MethodDelete:
+		s.log.Info("github project repo cleared", "event", "github", "project", id)
 		updated, err := s.core.UpdateProject(r.Context(), id, projects.ProjectPatch{ClearRepo: true})
 		writeJSON(w, updated, err)
 	default:
@@ -401,6 +428,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		var req taskArchiveDoneRequest
 		// An empty body is valid: archive every done task.
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		s.log.Info("task archive requested", "event", "task", "project", strings.TrimSpace(req.ProjectID))
 		result, err := s.core.ArchiveDoneTasks(r.Context(), strings.TrimSpace(req.ProjectID))
 		writeJSON(w, result, err)
 		return
@@ -412,6 +440,9 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		session, err := s.core.StartTask(r.Context(), core.StartTaskRequest{TaskID: id})
+		if err == nil {
+			s.log.Info("task start requested", "event", "task", "task", id, "session", session.ID, "agent", session.AgentName, "project", session.ProjectID)
+		}
 		writeJSON(w, session, err)
 		return
 	}

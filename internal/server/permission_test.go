@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +40,8 @@ func TestPermissionBrokerDecision(t *testing.T) {
 }
 
 func TestPermissionBrokerTimeoutAutoDenies(t *testing.T) {
-	b := newPermissionBroker()
+	var buf bytes.Buffer
+	b := newPermissionBroker(slog.New(slog.NewTextHandler(&buf, nil)))
 	decision, err := b.RequestPermission(context.Background(), adapter.PermissionRequest{
 		ID:     "req-1",
 		TurnID: "turn-1",
@@ -48,10 +52,17 @@ func TestPermissionBrokerTimeoutAutoDenies(t *testing.T) {
 	if decision.Behavior != "deny" {
 		t.Fatalf("expected auto deny, got %+v", decision)
 	}
+	logs := buf.String()
+	for _, want := range []string{`event=permission`, `msg="permission timed out"`, `decision=deny`} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs)
+		}
+	}
 }
 
 func TestUserInputBrokerDecision(t *testing.T) {
-	b := newUserInputBroker()
+	var buf bytes.Buffer
+	b := newUserInputBroker(slog.New(slog.NewTextHandler(&buf, nil)))
 	requests, unsubscribe := b.subscribe("turn-1")
 	defer unsubscribe()
 
@@ -79,6 +90,12 @@ func TestUserInputBrokerDecision(t *testing.T) {
 	got := <-done
 	if got.Answers["intent"][0] != "Draft" {
 		t.Fatalf("bad decision: %+v", got)
+	}
+	logs := buf.String()
+	for _, want := range []string{`event=user_input`, `msg="user input requested"`, `msg="user input answered"`, `answer_keys=1`} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs)
+		}
 	}
 }
 

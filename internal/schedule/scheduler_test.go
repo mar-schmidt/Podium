@@ -1,8 +1,11 @@
 package schedule
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
@@ -82,6 +85,42 @@ Summarise the calendar.
 	}
 	if len(runs) != 1 {
 		t.Fatalf("expected one recorded run, got %d", len(runs))
+	}
+}
+
+func TestSchedulerLogsSyncAndManualRun(t *testing.T) {
+	ctx := context.Background()
+	var buf bytes.Buffer
+	s, _, paths, cleanup := newTestScheduler(t)
+	defer cleanup()
+	s.log = slog.New(slog.NewTextHandler(&buf, nil))
+
+	writeSchedule(t, paths.SchedulesDir, "morning.md", `---
+agent: jared
+cron: "0 7 * * *"
+run_permission: preapproved
+enabled: true
+---
+Summarise the calendar.
+`)
+
+	s.Sync()
+	if _, err := s.RunNow(ctx, "morning"); err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+	logs := buf.String()
+	for _, want := range []string{
+		`event=schedule`,
+		`msg="schedule scan started"`,
+		`msg="schedule job registered"`,
+		`msg="scheduled run started"`,
+		`msg="scheduled run finished"`,
+		`schedule=morning`,
+		`trigger=manual`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs)
+		}
 	}
 }
 

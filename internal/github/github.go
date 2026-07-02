@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/projects"
 )
 
@@ -28,12 +30,14 @@ type Service struct {
 	cfg    config.GitHub
 	home   string
 	client *http.Client
+	log    *slog.Logger
 }
 
 type Options struct {
 	Config config.GitHub
 	Home   string
 	Client *http.Client
+	Logger *slog.Logger
 }
 
 func New(opts Options) *Service {
@@ -51,7 +55,11 @@ func New(opts Options) *Service {
 	if cfg.LoginBase == "" {
 		cfg.LoginBase = "https://github.com/login"
 	}
-	return &Service{cfg: cfg, home: opts.Home, client: client}
+	log := opts.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Service{cfg: cfg, home: opts.Home, client: client, log: log}
 }
 
 type Status struct {
@@ -64,6 +72,7 @@ type Status struct {
 }
 
 func (s *Service) Status(ctx context.Context) Status {
+	started := time.Now()
 	st := Status{
 		Configured: s.cfg.AppSlug != "" && s.cfg.ClientID != "",
 		AppSlug:    s.cfg.AppSlug,
@@ -72,19 +81,23 @@ func (s *Service) Status(ctx context.Context) Status {
 	}
 	if !st.Configured {
 		st.Message = "GitHub is not configured. Add github.app_slug and github.client_id to config.yaml."
+		s.log.Info("github status checked", "event", "github", "configured", false, "authed", false, podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return st
 	}
 	token, err := s.loadToken()
 	if err != nil || token.AccessToken == "" {
 		st.Message = "GitHub is not connected."
+		s.log.Info("github status checked", "event", "github", "configured", true, "authed", false, "reason", "missing_token", podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return st
 	}
 	if err := s.checkToken(ctx, token.AccessToken); err != nil {
 		st.Message = "GitHub token is unavailable or expired. Reconnect GitHub."
+		s.log.Warn("github status checked", "event", "github", "configured", true, "authed", false, "reason", "token_check_failed", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return st
 	}
 	st.Authed = true
 	st.Message = "GitHub is connected."
+	s.log.Info("github status checked", "event", "github", "configured", true, "authed", true, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return st
 }
 
@@ -97,14 +110,18 @@ type DeviceStart struct {
 }
 
 func (s *Service) StartDevice(ctx context.Context) (DeviceStart, error) {
+	started := time.Now()
 	if s.cfg.ClientID == "" {
+		s.log.Warn("github device flow failed", "event", "github", "stage", "start_device", "configured", false)
 		return DeviceStart{}, errors.New("github.client_id is not configured")
 	}
 	form := url.Values{"client_id": {s.cfg.ClientID}}
 	var out DeviceStart
 	if err := s.postForm(ctx, s.cfg.LoginBase+"/device/code", form, "", &out); err != nil {
+		s.log.Warn("github device flow failed", "event", "github", "stage", "start_device", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return DeviceStart{}, err
 	}
+	s.log.Info("github device flow started", "event", "github", "expires_in", out.ExpiresIn, "interval", out.Interval, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return out, nil
 }
 
@@ -115,7 +132,9 @@ type DevicePollResult struct {
 }
 
 func (s *Service) PollDevice(ctx context.Context, deviceCode string) (DevicePollResult, error) {
+	started := time.Now()
 	if s.cfg.ClientID == "" {
+		s.log.Warn("github device poll failed", "event", "github", "configured", false)
 		return DevicePollResult{}, errors.New("github.client_id is not configured")
 	}
 	form := url.Values{
@@ -133,12 +152,15 @@ func (s *Service) PollDevice(ctx context.Context, deviceCode string) (DevicePoll
 		ExpiresIn    int    `json:"expires_in"`
 	}
 	if err := s.postForm(ctx, s.cfg.LoginBase+"/oauth/access_token", form, "", &raw); err != nil {
+		s.log.Warn("github device poll failed", "event", "github", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return DevicePollResult{}, err
 	}
 	if raw.Error != "" {
+		s.log.Info("github device poll result", "event", "github", "status", raw.Error, podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return DevicePollResult{Status: raw.Error, Error: raw.ErrorDesc}, nil
 	}
 	if raw.AccessToken == "" {
+		s.log.Info("github device poll result", "event", "github", "status", "authorization_pending", podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return DevicePollResult{Status: "authorization_pending"}, nil
 	}
 	if err := s.saveToken(tokenFile{
@@ -149,8 +171,10 @@ func (s *Service) PollDevice(ctx context.Context, deviceCode string) (DevicePoll
 		ExpiresAt:    expiresAt(raw.ExpiresIn),
 		UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
+		s.log.Warn("github device poll failed", "event", "github", "stage", "save_token", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return DevicePollResult{}, err
 	}
+	s.log.Info("github device poll result", "event", "github", "status", "authorized", podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return DevicePollResult{Status: "authorized", AccessToken: raw.AccessToken}, nil
 }
 
@@ -166,8 +190,11 @@ type Repo struct {
 }
 
 func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
+	started := time.Now()
+	s.log.Info("github repos listing started", "event", "github")
 	token, err := s.requireToken()
 	if err != nil {
+		s.log.Warn("github repos listing failed", "event", "github", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return nil, err
 	}
 	var installations struct {
@@ -176,6 +203,7 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 		} `json:"installations"`
 	}
 	if err := s.getJSON(ctx, s.cfg.APIBase+"/user/installations", token.AccessToken, &installations); err != nil {
+		s.log.Warn("github repos listing failed", "event", "github", "stage", "installations", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return nil, err
 	}
 	var repos []Repo
@@ -196,6 +224,7 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 		}
 		u := fmt.Sprintf("%s/user/installations/%d/repositories?per_page=100", s.cfg.APIBase, inst.ID)
 		if err := s.getJSON(ctx, u, token.AccessToken, &page); err != nil {
+			s.log.Warn("github repos listing failed", "event", "github", "stage", "installation_repos", "installation", inst.ID, podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 			return nil, err
 		}
 		for _, r := range page.Repositories {
@@ -211,6 +240,7 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 			})
 		}
 	}
+	s.log.Info("github repos listing finished", "event", "github", "installations", len(installations.Installations), "repos", len(repos), podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return repos, nil
 }
 
@@ -226,8 +256,20 @@ type SyncResult struct {
 }
 
 func (s *Service) SyncProject(ctx context.Context, req SyncRequest) (SyncResult, error) {
+	started := time.Now()
+	log := s.log.With(
+		"event", "github",
+		"project", req.Project.ID,
+		"repo", req.Repo.Owner+"/"+req.Repo.Name,
+		"repo_owner", req.Repo.Owner,
+		"repo_name", req.Repo.Name,
+		"ref", firstNonEmpty(req.Repo.Ref, req.Repo.DefaultBranch, "HEAD"),
+		"force", req.Force,
+	)
+	log.Info("github project sync requested")
 	token, err := s.requireToken()
 	if err != nil {
+		log.Warn("github project sync failed", "stage", "require_token", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, err
 	}
 	repo := req.Repo
@@ -235,37 +277,56 @@ func (s *Service) SyncProject(ctx context.Context, req SyncRequest) (SyncResult,
 	projectRoot := filepath.Join(s.home, "projects", req.Project.Path)
 	repoRoot := projectRepoRoot(projectRoot)
 	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		log.Warn("github project sync failed", "stage", "create_project_dir", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, fmt.Errorf("create project dir: %w", err)
 	}
 	if err := migrateLegacyRootSnapshot(projectRoot); err != nil {
+		log.Warn("github project sync failed", "stage", "migrate_legacy_snapshot", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, err
 	}
 	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		log.Warn("github project sync failed", "stage", "create_repo_dir", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, fmt.Errorf("create repo dir: %w", err)
 	}
 	if !req.Force && needsConfirmation(projectRoot, repoRoot) {
+		log.Info("github project sync confirmation required", podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, ErrConfirmationRequired
 	}
-	sha, _ := s.commitSHA(ctx, token.AccessToken, repo.Owner, repo.Name, ref)
+	sha, err := s.commitSHA(ctx, token.AccessToken, repo.Owner, repo.Name, ref)
+	if err != nil {
+		log.Warn("github commit sha lookup failed", "stage", "commit_sha", podiumlog.ErrorAttr(err))
+	} else {
+		log.Info("github commit sha lookup finished", "stage", "commit_sha", "sha_set", sha != "")
+	}
+	log.Info("github archive download started", "stage", "download_archive")
 	archive, err := s.downloadArchive(ctx, token.AccessToken, repo.Owner, repo.Name, ref)
 	if err != nil {
+		log.Warn("github project sync failed", "stage", "download_archive", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, err
 	}
+	log.Info("github archive download finished", "stage", "download_archive", "bytes", len(archive))
 	tmp, err := os.MkdirTemp(projectRoot, ".podium-snapshot-*")
 	if err != nil {
+		log.Warn("github project sync failed", "stage", "create_staging", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, fmt.Errorf("create snapshot staging: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 	stage := filepath.Join(tmp, "contents")
 	if err := os.MkdirAll(stage, 0o755); err != nil {
+		log.Warn("github project sync failed", "stage", "create_stage_contents", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, err
 	}
+	log.Info("github archive extraction started", "stage", "extract_archive")
 	if err := extractZipSnapshot(bytes.NewReader(archive), int64(len(archive)), stage); err != nil {
+		log.Warn("github project sync failed", "stage", "extract_archive", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, err
 	}
+	log.Info("github archive extraction finished", "stage", "extract_archive")
 	if err := replaceProjectContents(repoRoot, stage, filepath.Join(projectRoot, ".podium-backups")); err != nil {
+		log.Warn("github project sync failed", "stage", "replace_project_contents", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, err
 	}
+	log.Info("github project contents replaced", "stage", "replace_project_contents")
 	repo.SyncedAt = time.Now().UTC().Format(time.RFC3339)
 	repo.Mode = "snapshot"
 	repo.Provider = "github"
@@ -274,8 +335,11 @@ func (s *Service) SyncProject(ctx context.Context, req SyncRequest) (SyncResult,
 		repo.Ref = ref
 	}
 	if err := writeManifest(projectRoot, repo, sha); err != nil {
+		log.Warn("github project sync failed", "stage", "write_manifest", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return SyncResult{}, err
 	}
+	log.Info("github project manifest written", "stage", "write_manifest", "sha_set", sha != "")
+	log.Info("github project sync finished", "status", "success", podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return SyncResult{Repo: repo, Path: repoRoot}, nil
 }
 

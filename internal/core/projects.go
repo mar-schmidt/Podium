@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/projects"
 	"github.com/mar-schmidt/Podium/internal/store"
 	"gopkg.in/yaml.v3"
@@ -42,7 +43,18 @@ func (c *Core) CreateProject(ctx context.Context, p projects.Project) (projects.
 	if err := c.syncProjectRoadmaps(ctx); err != nil {
 		return projects.Project{}, err
 	}
-	return c.ledger.Get(created.ID)
+	project, err := c.ledger.Get(created.ID)
+	if err != nil {
+		return projects.Project{}, err
+	}
+	c.log.Info("project created",
+		"event", "project",
+		"project", project.ID,
+		"name_set", strings.TrimSpace(project.Name) != "",
+		"repo_set", project.Repo != nil,
+		"stack_count", len(project.Stack),
+	)
+	return project, nil
 }
 
 // UniqueProjectID returns a safe, URL-friendly project id derived from name,
@@ -76,6 +88,7 @@ func (c *Core) UniqueProjectID(name string) string {
 // UpdateProject applies a partial patch (name/description/colour/etc) to a
 // project in the shared ledger.
 func (c *Core) UpdateProject(ctx context.Context, id string, patch projects.ProjectPatch) (projects.Project, error) {
+	before, _ := c.ledger.Get(id)
 	updated, err := c.ledger.Update(id, patch)
 	if err != nil {
 		return projects.Project{}, err
@@ -83,7 +96,18 @@ func (c *Core) UpdateProject(ctx context.Context, id string, patch projects.Proj
 	if err := c.syncProjectRoadmaps(ctx); err != nil {
 		return projects.Project{}, err
 	}
-	return c.ledger.Get(updated.ID)
+	project, err := c.ledger.Get(updated.ID)
+	if err != nil {
+		return projects.Project{}, err
+	}
+	c.log.Info("project updated",
+		"event", "project",
+		"project", project.ID,
+		"changed", podiumlog.ChangedFields(projectLogFields(before), projectLogFields(project)),
+		"repo_set", project.Repo != nil,
+		"stack_count", len(project.Stack),
+	)
+	return project, nil
 }
 
 // DescribeProject asks an agent's engine to draft a one-sentence project
@@ -219,6 +243,14 @@ func (c *Core) CreateTask(ctx context.Context, task store.Task) (store.Task, err
 	if err := c.syncProjectRoadmaps(ctx); err != nil {
 		return store.Task{}, err
 	}
+	c.log.Info("task created",
+		"event", "task",
+		"task", created.ID,
+		"project", created.ProjectID,
+		"agent", created.AssignedAgent,
+		"status", string(created.Status),
+		"pickup_set", strings.TrimSpace(created.PickupAt) != "",
+	)
 	return created, nil
 }
 
@@ -245,6 +277,14 @@ func (c *Core) UpdateTask(ctx context.Context, task store.Task) (store.Task, err
 	if err := c.syncProjectRoadmaps(ctx); err != nil {
 		return store.Task{}, err
 	}
+	c.log.Info("task updated",
+		"event", "task",
+		"task", updated.ID,
+		"project", updated.ProjectID,
+		"agent", updated.AssignedAgent,
+		"status", string(updated.Status),
+		"changed", podiumlog.ChangedFields(taskLogFields(existing), taskLogFields(updated)),
+	)
 	return updated, nil
 }
 
@@ -263,7 +303,17 @@ func (c *Core) DeleteTask(ctx context.Context, id string) error {
 	if err := c.store.DeleteTask(ctx, id); err != nil {
 		return err
 	}
-	return c.syncProjectRoadmaps(ctx)
+	if err := c.syncProjectRoadmaps(ctx); err != nil {
+		return err
+	}
+	c.log.Info("task deleted",
+		"event", "task",
+		"task", task.ID,
+		"project", task.ProjectID,
+		"agent", task.AssignedAgent,
+		"status", string(task.Status),
+	)
+	return nil
 }
 
 // ArchiveDoneTasksResult reports what an archive-done operation wrote and removed.
@@ -310,6 +360,13 @@ func (c *Core) ArchiveDoneTasks(ctx context.Context, projectID string) (ArchiveD
 	if err := c.syncProjectRoadmaps(ctx); err != nil {
 		return ArchiveDoneTasksResult{}, err
 	}
+	c.log.Info("tasks archived",
+		"event", "task",
+		"project", projectID,
+		"archived_tasks", len(done),
+		"archived_sessions", sessionCount,
+		"archive_path_set", archivePath != "",
+	)
 	return ArchiveDoneTasksResult{
 		ArchivePath:      archivePath,
 		ArchivedTasks:    len(done),
@@ -496,6 +553,14 @@ func (c *Core) StartTask(ctx context.Context, req StartTaskRequest) (store.Sessi
 	if err != nil {
 		return store.Session{}, err
 	}
+	c.log.Info("task session started",
+		"event", "task",
+		"task", task.ID,
+		"project", task.ProjectID,
+		"agent", task.AssignedAgent,
+		"session", sess.ID,
+		"unattended", req.Unattended,
+	)
 
 	task.Status = store.TaskInProgress
 	if _, err := c.UpdateTask(ctx, task); err != nil {
@@ -505,7 +570,7 @@ func (c *Core) StartTask(ctx context.Context, req StartTaskRequest) (store.Sessi
 	if req.Unattended {
 		events, err := c.StreamTurn(ctx, sess.ID, TaskPrompt(task), TurnOptions{
 			PermissionTurnID: sess.ID,
-			PermissionRelay:  NewAllowListRelay(nil),
+			PermissionRelay:  NewAllowListRelay(nil, c.log),
 			Unattended:       true,
 		})
 		if err != nil {
@@ -515,6 +580,40 @@ func (c *Core) StartTask(ctx context.Context, req StartTaskRequest) (store.Sessi
 		}
 	}
 	return sess, nil
+}
+
+func projectLogFields(p projects.Project) map[string]string {
+	repo := ""
+	if p.Repo != nil {
+		repo = p.Repo.Owner + "/" + p.Repo.Name + "@" + p.Repo.Ref
+	}
+	return map[string]string{
+		"name":        p.Name,
+		"description": boolString(strings.TrimSpace(p.Description) != ""),
+		"color":       p.Color,
+		"status":      p.Status,
+		"stack_count": fmt.Sprintf("%d", len(p.Stack)),
+		"notes":       boolString(strings.TrimSpace(p.Notes) != ""),
+		"repo":        repo,
+	}
+}
+
+func taskLogFields(t store.Task) map[string]string {
+	return map[string]string{
+		"project": t.ProjectID,
+		"title":   boolString(strings.TrimSpace(t.Title) != ""),
+		"body":    boolString(strings.TrimSpace(t.Body) != ""),
+		"agent":   t.AssignedAgent,
+		"status":  string(t.Status),
+		"pickup":  boolString(strings.TrimSpace(t.PickupAt) != ""),
+	}
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }
 
 // TaskPrompt renders a task into the prompt used to seed its session.

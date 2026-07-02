@@ -2,9 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 )
 
 // globalConfigDTO mirrors config.Global for the Settings page. Field names are
@@ -79,7 +81,8 @@ func (s *Server) patchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g := s.core.GetGlobal()
+	before := s.core.GetGlobal()
+	g := before
 	if patch.Provider != nil {
 		g.Provider = *patch.Provider
 	}
@@ -113,5 +116,24 @@ func (s *Server) patchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.core.SetGlobal(g)
+	s.log.Info("global config updated",
+		"event", "config",
+		"changed", podiumlog.ChangedFields(globalLogFields(before), globalLogFields(g)),
+		"provider", string(g.Provider),
+		"profile", g.Profile,
+		"permission", string(g.PermissionMode),
+		"fallback_count", len(g.Fallback),
+	)
 	writeJSON(w, globalToDTO(s.core.GetGlobal()), nil)
+}
+
+func globalLogFields(g config.Global) map[string]string {
+	return map[string]string{
+		"provider":       string(g.Provider),
+		"profile":        g.Profile,
+		"model":          g.Model,
+		"effort":         g.Effort,
+		"permission":     string(g.PermissionMode),
+		"fallback_count": fmt.Sprintf("%d", len(g.Fallback)),
+	}
 }

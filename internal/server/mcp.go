@@ -56,6 +56,12 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nil, err)
 		return
 	}
+	s.log.Info("mcp server upserted",
+		"event", "mcp",
+		"server", req.Name,
+		"transport", string(req.Transport),
+		"command_set", strings.TrimSpace(req.Command) != "",
+	)
 	snapshot, err := s.mcpSnapshot(r.Context())
 	writeJSON(w, snapshot, err)
 }
@@ -79,6 +85,7 @@ func (s *Server) handleMCPServer(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, nil, err)
 			return
 		}
+		s.log.Info("mcp server deleted", "event", "mcp", "server", name)
 		snapshot, err := s.mcpSnapshot(r.Context())
 		writeJSON(w, snapshot, err)
 	default:
@@ -123,6 +130,13 @@ func (s *Server) handleMCPAssignments(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nil, err)
 		return
 	}
+	s.log.Info("mcp assignment updated",
+		"event", "mcp",
+		"agent", req.AgentName,
+		"server", req.ServerName,
+		"assigned", req.Assigned,
+		"mcp_servers", len(agent.MCPServers),
+	)
 	snapshot, err := s.mcpSnapshot(r.Context())
 	writeJSON(w, snapshot, err)
 }

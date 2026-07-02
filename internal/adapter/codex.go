@@ -64,9 +64,11 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 
 // Start creates a new Codex thread and returns its threadId.
 func (c *Codex) Start(ctx context.Context, req StartRequest) (Handle, error) {
+	started := time.Now()
 	if req.WorkspaceDir == "" {
 		return Handle{}, errors.New("codex workspace dir is required")
 	}
+	c.providerLog(req.SessionID, req.AgentName, req.Profile).Info("provider thread start requested", "event", "provider", "stage", "thread_start", "permission", string(req.PermissionMode), "mcp_servers", len(req.MCPServers), "extra_workspaces", len(req.ExtraWorkspaceDirs))
 	profileName, profileHash, err := c.ensureMCPProfile(req.ProfileDir, req.AgentName, req.MCPServers, req.MCPAllServers)
 	if err != nil {
 		return Handle{}, err
@@ -87,6 +89,7 @@ func (c *Codex) Start(ctx context.Context, req StartRequest) (Handle, error) {
 		return Handle{}, err
 	}
 	client.markLoaded(threadID)
+	c.providerLog(req.SessionID, req.AgentName, req.Profile).Info("provider thread started", "event", "provider", "stage", "thread_start", "thread", threadID, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return Handle{Provider: config.ProviderCodex, ID: threadID}, nil
 }
 
@@ -106,9 +109,11 @@ func (c *Codex) Resume(ctx context.Context, req ResumeRequest) (Handle, error) {
 // SendTurn starts a Codex turn and streams agent message deltas until the turn
 // completes. Existing handles are lazily resumed if the app-server was restarted.
 func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, error) {
+	started := time.Now()
 	if req.Settings.WorkspaceDir == "" {
 		return nil, errors.New("codex workspace dir is required")
 	}
+	c.turnLog(req).Info("provider turn start requested", "event", "provider", "stage", "turn_start", "thread", req.Handle.ID, "permission", string(req.Settings.PermissionMode), "mcp_servers", len(req.Settings.MCPServers), "extra_workspaces", len(req.Settings.ExtraWorkspaceDirs))
 	profileName, profileHash, err := c.ensureMCPProfile(req.Settings.ProfileDir, req.Settings.AgentName, req.Settings.MCPServers, req.Settings.MCPAllServers)
 	if err != nil {
 		return nil, err
@@ -141,6 +146,8 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 	} else if err := client.ensureThread(ctx, threadID, req.Settings); err != nil {
 		c.turnLog(req).Warn("provider thread resume failed", "stage", "thread_resume", "method", "thread/resume", "error", podiumlog.Redact(err.Error()))
 		return nil, err
+	} else {
+		c.turnLog(req).Info("provider thread resumed", "event", "provider", "stage", "thread_resume", "thread", threadID)
 	}
 
 	message := req.Message
@@ -169,6 +176,7 @@ func (c *Codex) SendTurn(ctx context.Context, req TurnRequest) (<-chan Event, er
 	}
 
 	key := codexTurnKey{threadID: threadID, turnID: turnID}
+	c.turnLog(req).Info("provider turn started", "event", "provider", "stage", "turn_start", "thread", threadID, "turn", turnID, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	turnEvents := client.registerTurn(key, codexActiveTurn{
 		ctx:          ctx,
 		podiumTurnID: firstNonEmptyString(req.Settings.PermissionTurnID, req.SessionID),
@@ -327,12 +335,14 @@ func newCodexClient(bin, profileDir, profileName, profileHash string, log *slog.
 func (c *codexClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	var last error
 	for attempt := 0; attempt < 2; attempt++ {
+		started := time.Now()
 		if err := c.ensureProcess(ctx); err != nil {
 			c.log.Warn("provider app-server unavailable", "stage", "ensure_process", "method", method, "error", podiumlog.Redact(err.Error()))
 			return nil, err
 		}
 		result, err := c.callStarted(ctx, method, params)
 		if err == nil {
+			c.log.Debug("provider rpc succeeded", "event", "provider", "stage", "rpc", "method", method, podiumlog.DurationMS("duration_ms", time.Since(started)))
 			return result, nil
 		}
 		last = err
@@ -390,6 +400,7 @@ func (c *codexClient) ensureProcess(ctx context.Context) error {
 		return fmt.Errorf("%w: write initialized: %v", errCodexTransport, err)
 	}
 	c.initialized = true
+	c.log.Info("provider initialized", "event", "provider", "stage", "initialize", "mcp_profile", c.profileName, "mcp_profile_hash", c.profileHash)
 	return nil
 }
 
@@ -416,7 +427,7 @@ func (c *codexClient) startLocked() error {
 		c.log.Warn("provider app-server start failed", "stage", "start", "error", err)
 		return fmt.Errorf("start codex app-server: %w", err)
 	}
-	c.log.Debug("provider app-server started", "stage", "start", "command", c.bin)
+	c.log.Info("provider app-server started", "event", "provider", "stage", "start", "command", c.bin, "mcp_profile", c.profileName, "profile_dir_set", c.profileDir != "")
 
 	proc := &osProcess{
 		cmdWait: cmd.Wait,
@@ -497,7 +508,7 @@ func (c *codexClient) readLoop(proc *osProcess, stdout io.Reader) {
 	if err == nil {
 		err = io.EOF
 	}
-	c.log.Warn("provider app-server stream ended", "stage", "read_stdout", "error", podiumlog.Redact(err.Error()))
+	c.log.Warn("provider app-server stream ended", "event", "provider", "stage", "read_stdout", "error", podiumlog.Redact(err.Error()))
 	c.mu.Lock()
 	if c.cmd == proc {
 		c.failLocked(fmt.Errorf("%w: %v", errCodexTransport, err))
@@ -569,6 +580,7 @@ func (c *codexClient) dispatchNotification(msg codexRPCMessage) {
 		}
 		c.buffered[key] = buffered
 		c.mu.Unlock()
+		c.log.Debug("provider notification buffered", "event", "provider", "stage", "stream_buffer", "method", msg.Method, "thread", key.threadID, "turn", key.turnID, "buffered", len(buffered))
 		return
 	}
 	c.mu.Unlock()
@@ -578,6 +590,7 @@ func (c *codexClient) dispatchNotification(msg codexRPCMessage) {
 func (c *codexClient) reset() {
 	c.mu.Lock()
 	proc := c.cmd
+	c.log.Info("provider app-server reset", "event", "provider", "stage", "transport")
 	c.failLocked(fmt.Errorf("%w: connection reset", errCodexTransport))
 	c.mu.Unlock()
 	if proc != nil && proc.kill != nil {
@@ -662,6 +675,7 @@ func (c *codexClient) unregisterTurn(key codexTurnKey) {
 }
 
 func (c *codexClient) streamTurn(ctx context.Context, key codexTurnKey, events <-chan codexStreamEvent, first []Event, out chan<- Event) {
+	started := time.Now()
 	defer close(out)
 	defer c.unregisterTurn(key)
 	for _, event := range first {
@@ -692,6 +706,7 @@ func (c *codexClient) streamTurn(ctx context.Context, key codexTurnKey, events <
 						return
 					}
 				}
+				c.log.Info("provider turn stream completed", "event", "provider", "stage", "stream_turn", "thread", key.threadID, "turn", key.turnID, podiumlog.DurationMS("duration_ms", time.Since(started)))
 				sendAdapterEvent(ctx, out, Event{Kind: EventTurnDone})
 				return
 			case "error":

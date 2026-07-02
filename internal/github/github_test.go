@@ -4,10 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,12 +77,14 @@ func TestSyncProjectStoresSourceInRepoDirAndManifestInProjectDir(t *testing.T) {
 	defer api.Close()
 
 	home := t.TempDir()
+	var logs bytes.Buffer
 	svc := New(Options{
 		Config: config.GitHub{APIBase: api.URL, WebBase: "https://github.example", LoginBase: "https://github.example/login"},
 		Home:   home,
 		Client: api.Client(),
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
 	})
-	if err := svc.saveToken(tokenFile{AccessToken: "token", UpdatedAt: time.Now().UTC().Format(time.RFC3339)}); err != nil {
+	if err := svc.saveToken(tokenFile{AccessToken: "SUPERSECRET", UpdatedAt: time.Now().UTC().Format(time.RFC3339)}); err != nil {
 		t.Fatalf("save token: %v", err)
 	}
 
@@ -106,6 +110,23 @@ func TestSyncProjectStoresSourceInRepoDirAndManifestInProjectDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, ".podium-source.json")); !os.IsNotExist(err) {
 		t.Fatalf("repo manifest should not exist, stat err = %v", err)
+	}
+	gotLogs := logs.String()
+	for _, want := range []string{
+		`event=github`,
+		`msg="github project sync requested"`,
+		`msg="github archive download started"`,
+		`msg="github archive extraction finished"`,
+		`msg="github project sync finished"`,
+		`repo=acme/widget`,
+		`project=mission-control`,
+	} {
+		if !strings.Contains(gotLogs, want) {
+			t.Fatalf("logs missing %q:\n%s", want, gotLogs)
+		}
+	}
+	if strings.Contains(gotLogs, "SUPERSECRET") || strings.Contains(gotLogs, "/zipball/main?") {
+		t.Fatalf("github logs leaked token or archive URL:\n%s", gotLogs)
 	}
 }
 

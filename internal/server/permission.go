@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/adapter"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 )
 
 var errPermissionTimeout = errors.New("permission request timed out")
@@ -16,6 +18,7 @@ type permissionBroker struct {
 	turns   map[string]chan adapter.PermissionRequest
 	pending map[string]chan adapter.PermissionDecision
 	meta    map[string]permissionMeta
+	log     *slog.Logger
 }
 
 type permissionMeta struct {
@@ -23,11 +26,16 @@ type permissionMeta struct {
 	restoreRoadmap bool
 }
 
-func newPermissionBroker() *permissionBroker {
+func newPermissionBroker(loggers ...*slog.Logger) *permissionBroker {
+	log := slog.Default()
+	if len(loggers) > 0 && loggers[0] != nil {
+		log = loggers[0]
+	}
 	return &permissionBroker{
 		turns:   map[string]chan adapter.PermissionRequest{},
 		pending: map[string]chan adapter.PermissionDecision{},
 		meta:    map[string]permissionMeta{},
+		log:     log,
 	}
 }
 
@@ -50,6 +58,15 @@ func (b *permissionBroker) RequestPermission(ctx context.Context, req adapter.Pe
 	b.pending[req.ID] = decisionCh
 	turnCh := b.turns[req.TurnID]
 	b.mu.Unlock()
+	delivered := turnCh != nil
+	b.log.Info("permission requested",
+		"event", "permission",
+		"turn", req.TurnID,
+		"request", req.ID,
+		"tool_name", req.ToolName,
+		"tool_use", req.ToolUseID,
+		"delivered", delivered,
+	)
 	defer func() {
 		b.mu.Lock()
 		delete(b.pending, req.ID)
@@ -60,9 +77,30 @@ func (b *permissionBroker) RequestPermission(ctx context.Context, req adapter.Pe
 		req.ExpiresAt = time.Now().Add(timeout).UTC()
 		select {
 		case <-ctx.Done():
+			b.log.Info("permission auto-denied",
+				"event", "permission",
+				"turn", req.TurnID,
+				"request", req.ID,
+				"tool_name", req.ToolName,
+				"reason", "context_canceled",
+				podiumlog.ErrorAttr(ctx.Err()),
+			)
 			return adapter.PermissionDecision{Behavior: "deny"}, ctx.Err()
 		case turnCh <- req:
+			b.log.Info("permission delivered",
+				"event", "permission",
+				"turn", req.TurnID,
+				"request", req.ID,
+				"tool_name", req.ToolName,
+			)
 		default:
+			b.log.Warn("permission delivery skipped",
+				"event", "permission",
+				"turn", req.TurnID,
+				"request", req.ID,
+				"tool_name", req.ToolName,
+				"reason", "subscriber_queue_full",
+			)
 		}
 	}
 
@@ -70,13 +108,36 @@ func (b *permissionBroker) RequestPermission(ctx context.Context, req adapter.Pe
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
+		b.log.Info("permission auto-denied",
+			"event", "permission",
+			"turn", req.TurnID,
+			"request", req.ID,
+			"tool_name", req.ToolName,
+			"reason", "context_canceled",
+			podiumlog.ErrorAttr(ctx.Err()),
+		)
 		return adapter.PermissionDecision{Behavior: "deny"}, ctx.Err()
 	case decision := <-decisionCh:
 		if decision.Behavior == "" {
 			decision.Behavior = "deny"
 		}
+		b.log.Info("permission decided",
+			"event", "permission",
+			"turn", req.TurnID,
+			"request", req.ID,
+			"tool_name", req.ToolName,
+			"decision", decision.Behavior,
+		)
 		return decision, nil
 	case <-timer.C:
+		b.log.Info("permission timed out",
+			"event", "permission",
+			"turn", req.TurnID,
+			"request", req.ID,
+			"tool_name", req.ToolName,
+			"decision", "deny",
+			"timeout_ms", timeout.Milliseconds(),
+		)
 		return adapter.PermissionDecision{Behavior: "deny"}, errPermissionTimeout
 	}
 }
@@ -86,6 +147,11 @@ func (b *permissionBroker) decide(id string, decision adapter.PermissionDecision
 	ch := b.pending[id]
 	b.mu.Unlock()
 	if ch == nil {
+		b.log.Warn("permission decision missing",
+			"event", "permission",
+			"request", id,
+			"decision", decision.Behavior,
+		)
 		return false
 	}
 	select {

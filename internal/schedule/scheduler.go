@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mar-schmidt/Podium/internal/core"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/store"
 	cron "github.com/robfig/cron/v3"
 )
@@ -76,6 +77,7 @@ func New(opts Options) *Scheduler {
 // Start performs an initial scan, starts the cron loop, and begins periodic
 // resyncing of the schedules directory.
 func (s *Scheduler) Start() {
+	s.log.Info("scheduler started", "event", "schedule", "dir", s.dir)
 	s.Sync()
 	s.cron.Start()
 	go s.resyncLoop()
@@ -83,6 +85,7 @@ func (s *Scheduler) Start() {
 
 // Stop cancels in-flight runs and stops the cron loop.
 func (s *Scheduler) Stop() {
+	s.log.Info("scheduler stopped", "event", "schedule", "dir", s.dir)
 	s.cancel()
 	s.cron.Stop()
 }
@@ -105,29 +108,36 @@ func (s *Scheduler) resyncLoop() {
 // running it unattended under the preapproved policy. Starting a task moves it to
 // in_progress, so it is not picked up twice.
 func (s *Scheduler) pickupDueTasks(ctx context.Context) {
+	started := time.Now()
+	s.log.Info("due task check started", "event", "schedule")
 	now := time.Now().UTC().Format(time.RFC3339)
 	due, err := s.store.ListDueTasks(ctx, now)
 	if err != nil {
-		s.log.Warn("list due tasks", "error", err)
+		s.log.Warn("due task check failed", "event", "schedule", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return
 	}
 	for _, task := range due {
+		s.log.Info("due task found", "event", "schedule", "task", task.ID, "project", task.ProjectID, "agent", task.AssignedAgent, "pickup_at", task.PickupAt)
+		s.log.Info("task pickup started", "event", "schedule", "task", task.ID, "project", task.ProjectID, "agent", task.AssignedAgent, "unattended", true)
 		sess, err := s.core.StartTask(ctx, core.StartTaskRequest{TaskID: task.ID, Unattended: true})
 		if err != nil {
-			s.log.Warn("task pickup failed", "task", task.ID, "error", err)
+			s.log.Warn("task pickup failed", "event", "schedule", "task", task.ID, "project", task.ProjectID, "agent", task.AssignedAgent, podiumlog.ErrorAttr(err))
 			continue
 		}
-		s.log.Info("task picked up", "task", task.ID, "session", sess.ID)
+		s.log.Info("task picked up", "event", "schedule", "task", task.ID, "project", task.ProjectID, "agent", task.AssignedAgent, "session", sess.ID, "unattended", true)
 	}
+	s.log.Info("due task check finished", "event", "schedule", "due_tasks", len(due), podiumlog.DurationMS("duration_ms", time.Since(started)))
 }
 
 // Sync reconciles registered cron jobs with the current contents of the
 // schedules directory: new or changed enabled files are (re)registered, and
 // disabled or removed files are unregistered so they no longer fire (R7.2a).
 func (s *Scheduler) Sync() {
+	started := time.Now()
+	s.log.Info("schedule scan started", "event", "schedule", "dir", s.dir)
 	schedules, parseErrs, err := ScanDir(s.dir)
 	if err != nil {
-		s.log.Warn("scan schedules directory", "dir", s.dir, "error", err)
+		s.log.Warn("schedule scan failed", "event", "schedule", "dir", s.dir, podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return
 	}
 
@@ -139,6 +149,7 @@ func (s *Scheduler) Sync() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.parseErrs = parseErrs
+	registered, removed, unchanged := 0, 0, 0
 
 	// Drop jobs that are gone, now disabled, or whose timing changed.
 	for name, j := range s.jobs {
@@ -146,6 +157,8 @@ func (s *Scheduler) Sync() {
 		if !ok || !sc.Enabled || sc.CronSpec() != j.spec {
 			s.cron.Remove(j.entryID)
 			delete(s.jobs, name)
+			removed++
+			s.log.Info("schedule job removed", "event", "schedule", "schedule", name)
 		}
 	}
 
@@ -155,6 +168,7 @@ func (s *Scheduler) Sync() {
 			continue
 		}
 		if _, ok := s.jobs[name]; ok {
+			unchanged++
 			continue
 		}
 		spec := sc.CronSpec()
@@ -162,10 +176,27 @@ func (s *Scheduler) Sync() {
 		entryID, err := s.cron.AddFunc(spec, func() { s.fire(jobName) })
 		if err != nil {
 			s.parseErrs[name] = fmt.Errorf("invalid schedule timing %q: %w", spec, err)
+			s.log.Warn("schedule job registration failed", "event", "schedule", "schedule", name, "spec", spec, podiumlog.ErrorAttr(err))
 			continue
 		}
 		s.jobs[name] = &job{spec: spec, entryID: entryID}
+		registered++
+		s.log.Info("schedule job registered", "event", "schedule", "schedule", name, "spec", spec, "agent", sc.Agent)
 	}
+	for name, perr := range parseErrs {
+		s.log.Warn("schedule parse failed", "event", "schedule", "schedule", name, podiumlog.ErrorAttr(perr))
+	}
+	s.log.Info("schedule scan finished",
+		"event", "schedule",
+		"files", len(schedules)+len(parseErrs),
+		"enabled", enabledScheduleCount(schedules),
+		"parse_errors", len(parseErrs),
+		"registered", registered,
+		"removed", removed,
+		"unchanged", unchanged,
+		"jobs", len(s.jobs),
+		podiumlog.DurationMS("duration_ms", time.Since(started)),
+	)
 }
 
 // Status is a schedule's current state for the CLI/API: its frontmatter, whether
@@ -244,8 +275,10 @@ func (s *Scheduler) nextRun(name string) *time.Time {
 // RunNow triggers a manual run of a schedule immediately. A disabled schedule
 // can still be run manually; only automatic firing is suppressed when disabled.
 func (s *Scheduler) RunNow(ctx context.Context, name string) (store.ScheduleRun, error) {
+	s.log.Info("schedule manual run requested", "event", "schedule", "schedule", name, "trigger", store.TriggerManual)
 	s.Sync()
 	if _, err := os.Stat(s.pathFor(name)); err != nil {
+		s.log.Warn("schedule manual run failed", "event", "schedule", "schedule", name, "trigger", store.TriggerManual, podiumlog.ErrorAttr(err))
 		return store.ScheduleRun{}, fmt.Errorf("schedule %q not found", name)
 	}
 	return s.run(ctx, name, store.TriggerManual)
@@ -254,8 +287,9 @@ func (s *Scheduler) RunNow(ctx context.Context, name string) (store.ScheduleRun,
 // fire is the cron callback. It runs the job in the scheduler's lifetime context
 // so a daemon shutdown cancels it.
 func (s *Scheduler) fire(name string) {
+	s.log.Info("schedule cron triggered", "event", "schedule", "schedule", name, "trigger", store.TriggerCron)
 	if _, err := s.run(s.ctx, name, store.TriggerCron); err != nil {
-		s.log.Warn("scheduled run failed", "schedule", name, "error", err)
+		s.log.Warn("scheduled run failed", "event", "schedule", "schedule", name, "trigger", store.TriggerCron, podiumlog.ErrorAttr(err))
 	}
 }
 
@@ -263,13 +297,16 @@ func (s *Scheduler) fire(name string) {
 // latest edits and the enabled switch), record a run, execute it as a normal
 // Podium session, and persist the terminal status.
 func (s *Scheduler) run(ctx context.Context, name string, trigger store.RunTrigger) (store.ScheduleRun, error) {
+	started := time.Now()
 	sched, err := Parse(s.pathFor(name))
 	if err != nil {
+		s.log.Warn("scheduled run failed", "event", "schedule", "schedule", name, "trigger", trigger, "stage", "parse", podiumlog.ErrorAttr(err))
 		return store.ScheduleRun{}, err
 	}
 	// Defensive: a disabled file must never fire automatically even if a cron
 	// entry briefly outlives a resync (R7.2a).
 	if trigger == store.TriggerCron && !sched.Enabled {
+		s.log.Info("schedule cron skipped disabled", "event", "schedule", "schedule", name, "trigger", trigger)
 		return store.ScheduleRun{}, nil
 	}
 
@@ -279,9 +316,22 @@ func (s *Scheduler) run(ctx context.Context, name string, trigger store.RunTrigg
 		Status:       store.RunRunning,
 	})
 	if err != nil {
+		s.log.Warn("scheduled run failed", "event", "schedule", "schedule", name, "trigger", trigger, "stage", "create_run", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return store.ScheduleRun{}, err
 	}
-	s.log.Info("scheduled run started", "schedule", name, "run", run.ID, "trigger", trigger)
+	permission := "preapproved"
+	if sched.RunPermission == PermissionYolo {
+		permission = "yolo"
+	}
+	s.log.Info("scheduled run started",
+		"event", "schedule",
+		"schedule", name,
+		"run", run.ID,
+		"trigger", trigger,
+		"agent", sched.Agent,
+		"permission", permission,
+		"allowed_tools", len(sched.AllowedTools),
+	)
 
 	sess, runErr := s.core.RunScheduled(ctx, core.ScheduledRunRequest{
 		ScheduleName: name,
@@ -302,10 +352,11 @@ func (s *Scheduler) run(ctx context.Context, name string, trigger store.RunTrigg
 	}
 	finished, ferr := s.store.FinishScheduleRun(ctx, run.ID, sess.ID, status, errMsg)
 	if ferr != nil {
+		s.log.Warn("scheduled run failed", "event", "schedule", "schedule", name, "run", run.ID, "trigger", trigger, "stage", "finish_run", "session", sess.ID, podiumlog.ErrorAttr(ferr), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		return run, ferr
 	}
 	s.log.Info("scheduled run finished",
-		"schedule", name, "run", run.ID, "status", status, "session", sess.ID)
+		"event", "schedule", "schedule", name, "run", run.ID, "trigger", trigger, "status", status, "session", sess.ID, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return finished, runErr
 }
 
@@ -313,20 +364,27 @@ func (s *Scheduler) run(ctx context.Context, name string, trigger store.RunTrigg
 // entry is unregistered (Sync drops jobs whose file is gone, R7.2a), and clears
 // the schedule's run history. The sessions those runs produced are preserved.
 func (s *Scheduler) Delete(ctx context.Context, name string) error {
+	started := time.Now()
+	s.log.Info("schedule delete requested", "event", "schedule", "schedule", name)
 	path := s.pathFor(name)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
+			s.log.Warn("schedule delete failed", "event", "schedule", "schedule", name, podiumlog.ErrorAttr(err))
 			return fmt.Errorf("schedule %q not found", name)
 		}
+		s.log.Warn("schedule delete failed", "event", "schedule", "schedule", name, podiumlog.ErrorAttr(err))
 		return err
 	}
 	if err := os.Remove(path); err != nil {
+		s.log.Warn("schedule delete failed", "event", "schedule", "schedule", name, podiumlog.ErrorAttr(err))
 		return fmt.Errorf("delete schedule %q: %w", name, err)
 	}
 	s.Sync()
 	if err := s.store.DeleteScheduleRuns(ctx, name); err != nil {
+		s.log.Warn("schedule delete failed", "event", "schedule", "schedule", name, "stage", "delete_runs", podiumlog.ErrorAttr(err))
 		return err
 	}
+	s.log.Info("schedule deleted", "event", "schedule", "schedule", name, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return nil
 }
 
@@ -351,15 +409,19 @@ type CreateParams struct {
 // validates it by parsing it back, registers it, and returns its status. It
 // errors if a schedule with the same name already exists.
 func (s *Scheduler) Create(ctx context.Context, p CreateParams) (Status, error) {
+	started := time.Now()
 	name := Slug(p.Name)
 	if name == "" {
 		return Status{}, fmt.Errorf("schedule name is required")
 	}
+	s.log.Info("schedule create requested", "event", "schedule", "schedule", name, "agent", p.Agent, "permission", p.RunPermission, "allowed_tools", len(p.AllowedTools))
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		s.log.Warn("schedule create failed", "event", "schedule", "schedule", name, "stage", "create_dir", podiumlog.ErrorAttr(err))
 		return Status{}, fmt.Errorf("create schedules dir: %w", err)
 	}
 	path := s.pathFor(name)
 	if _, err := os.Stat(path); err == nil {
+		s.log.Warn("schedule create failed", "event", "schedule", "schedule", name, "stage", "exists")
 		return Status{}, fmt.Errorf("schedule %q already exists", name)
 	}
 
@@ -370,9 +432,11 @@ func (s *Scheduler) Create(ctx context.Context, p CreateParams) (Status, error) 
 	// Validate before committing the file to disk so we never leave an invalid
 	// schedule lying around.
 	if _, err := parseBytes(path, []byte(content)); err != nil {
+		s.log.Warn("schedule create failed", "event", "schedule", "schedule", name, "stage", "parse", podiumlog.ErrorAttr(err))
 		return Status{}, err
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		s.log.Warn("schedule create failed", "event", "schedule", "schedule", name, "stage", "write", podiumlog.ErrorAttr(err))
 		return Status{}, fmt.Errorf("write schedule %q: %w", name, err)
 	}
 
@@ -383,8 +447,20 @@ func (s *Scheduler) Create(ctx context.Context, p CreateParams) (Status, error) 
 	}
 	for _, st := range statuses {
 		if st.Name == name {
+			s.log.Info("schedule created", "event", "schedule", "schedule", name, "agent", st.Agent, "enabled", st.Enabled, "permission", st.RunPermission, "allowed_tools", len(st.AllowedTools), podiumlog.DurationMS("duration_ms", time.Since(started)))
 			return st, nil
 		}
 	}
+	s.log.Info("schedule created", "event", "schedule", "schedule", name, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	return Status{Name: name, Path: path}, nil
+}
+
+func enabledScheduleCount(schedules []Schedule) int {
+	count := 0
+	for _, sc := range schedules {
+		if sc.Enabled {
+			count++
+		}
+	}
+	return count
 }

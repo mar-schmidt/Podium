@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"time"
 
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/updater"
 )
 
@@ -25,11 +26,18 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "update checks are only available from loopback clients", http.StatusForbidden)
 		return
 	}
+	started := time.Now()
+	s.log.Info("update check started", "event", "config", "current_version", s.build.Version, "current_commit", s.build.Commit)
 	status, err := updater.Check(r.Context(), updater.Options{
 		CurrentVersion: s.build.Version,
 		CurrentCommit:  s.build.Commit,
 		Home:           s.paths.Home,
 	})
+	if err != nil {
+		s.log.Warn("update check failed", "event", "config", podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
+	} else {
+		s.log.Info("update check finished", "event", "config", "update_available", status.UpdateAvailable, "latest_version", status.LatestVersion, podiumlog.DurationMS("duration_ms", time.Since(started)))
+	}
 	writeJSON(w, status, err)
 }
 
@@ -47,6 +55,8 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	started := time.Now()
+	s.log.Info("update apply started", "event", "config", "requested_version", req.Version, "force", req.Force, "current_version", s.build.Version)
 	result, err := updater.Apply(r.Context(), updater.Options{
 		CurrentVersion: s.build.Version,
 		CurrentCommit:  s.build.Commit,
@@ -56,9 +66,11 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		RestartDaemon:  true,
 	})
 	if err != nil {
+		s.log.Warn("update apply failed", "event", "config", "requested_version", req.Version, "force", req.Force, podiumlog.ErrorAttr(err), podiumlog.DurationMS("duration_ms", time.Since(started)))
 		writeJSON(w, result, err)
 		return
 	}
+	s.log.Info("update apply finished", "event", "config", "requested_version", req.Version, "force", req.Force, "restart_required", result.RestartRequired, "helper_started", result.HelperStarted, podiumlog.DurationMS("duration_ms", time.Since(started)))
 	writeJSON(w, result, nil)
 	if result.RestartRequired || result.HelperStarted {
 		go s.exitAfterUpdate()

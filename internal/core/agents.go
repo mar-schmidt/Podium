@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/mar-schmidt/Podium/internal/config"
+	podiumlog "github.com/mar-schmidt/Podium/internal/logging"
 	"github.com/mar-schmidt/Podium/internal/skills"
 	"github.com/mar-schmidt/Podium/internal/store"
 )
@@ -66,7 +67,22 @@ func (c *Core) CreateAgent(ctx context.Context, req CreateAgentRequest) (store.A
 	if err := skills.EnsureClaudeWorkspaceLink(paths.Workspace); err != nil {
 		c.log.Warn("could not link skills into agent workspace", "agent", agent.Name, "error", err)
 	}
-	return c.store.CreateAgent(ctx, agent)
+	created, err := c.store.CreateAgent(ctx, agent)
+	if err != nil {
+		return store.Agent{}, err
+	}
+	c.log.Info("agent created",
+		"event", "agent",
+		"agent", created.Name,
+		"provider", string(created.Provider),
+		"profile", created.Profile,
+		"model_set", created.Model != "",
+		"effort", created.Effort,
+		"permission", string(created.PermissionMode),
+		"fallback_count", len(created.Fallback),
+		"mcp_servers", len(created.MCPServers),
+	)
+	return created, nil
 }
 
 // GetAgent fetches one agent.
@@ -85,6 +101,7 @@ func (c *Core) UpdateAgent(ctx context.Context, agent store.Agent) (store.Agent,
 	if err := validateAgentName(agent.Name); err != nil {
 		return store.Agent{}, err
 	}
+	before, _ := c.store.GetAgent(ctx, agent.Name)
 	c.applyAgentDefaults(&agent)
 	if err := c.validateAgentTargets(agent); err != nil {
 		return store.Agent{}, err
@@ -92,7 +109,20 @@ func (c *Core) UpdateAgent(ctx context.Context, agent store.Agent) (store.Agent,
 	if err := scaffoldAgent(c.AgentPaths(agent.Name), agent.Name); err != nil {
 		return store.Agent{}, err
 	}
-	return c.store.UpdateAgent(ctx, agent)
+	updated, err := c.store.UpdateAgent(ctx, agent)
+	if err != nil {
+		return store.Agent{}, err
+	}
+	c.log.Info("agent updated",
+		"event", "agent",
+		"agent", updated.Name,
+		"provider", string(updated.Provider),
+		"profile", updated.Profile,
+		"changed", podiumlog.ChangedFields(agentLogFields(before), agentLogFields(updated)),
+		"fallback_count", len(updated.Fallback),
+		"mcp_servers", len(updated.MCPServers),
+	)
+	return updated, nil
 }
 
 // validateAgentTargets checks an agent's provider, profile, and fallback chain
@@ -171,7 +201,27 @@ func (c *Core) DeleteAgent(ctx context.Context, name string) (DeleteAgentResult,
 	if err := config.RemoveAgent(c.paths.ConfigYAML, name); err != nil {
 		return DeleteAgentResult{}, err
 	}
+	c.log.Info("agent deleted",
+		"event", "agent",
+		"agent", name,
+		"provider", string(agent.Provider),
+		"profile", agent.Profile,
+		"archived_sessions", len(sessions),
+		"archive_path_set", archivePath != "",
+	)
 	return DeleteAgentResult{ArchivePath: archivePath, ArchivedSessions: len(sessions)}, nil
+}
+
+func agentLogFields(a store.Agent) map[string]string {
+	return map[string]string{
+		"provider":       string(a.Provider),
+		"profile":        a.Profile,
+		"model":          a.Model,
+		"effort":         a.Effort,
+		"permission":     string(a.PermissionMode),
+		"fallback_count": fmt.Sprintf("%d", len(a.Fallback)),
+		"mcp_count":      fmt.Sprintf("%d", len(a.MCPServers)),
+	}
 }
 
 type sessionArchive struct {

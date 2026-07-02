@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -382,9 +383,12 @@ type redactionPattern struct {
 
 var sensitivePatterns = []redactionPattern{
 	{regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*[^,\s"}]+`), "$1=[REDACTED]"},
+	{regexp.MustCompile(`(?i)(access_token|refresh_token)"\s*:\s*"[^"]+"`), `$1":"[REDACTED]"`},
 	{regexp.MustCompile(`(?i)(authorization)\s*:\s*bearer\s+[^,\s"}]+`), "$1: Bearer [REDACTED]"},
 	{regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._-]+`), "Bearer [REDACTED]"},
-	{regexp.MustCompile(`(?i)sk-[A-Za-z0-9_-]{8,}`), "[REDACTED]"},
+	{regexp.MustCompile(`(?i)(sk-proj-|sk-ant-|sk-)[A-Za-z0-9_-]{8,}`), "[REDACTED]"},
+	{regexp.MustCompile(`(?i)https://[^,\s"}]*github[^,\s"}]*(?:token|access_token)=[^,\s"}&]+`), "[REDACTED_URL]"},
+	{regexp.MustCompile(`(?i)(https://[^,\s"}]*/repos/[^,\s"}]*/zipball/[^,\s"}?]+)\?[^,\s"}]+`), "$1?[REDACTED]"},
 }
 
 // Redact removes common token/secret shapes before provider diagnostics are
@@ -404,4 +408,42 @@ func RedactTail(text string, limit int) string {
 		redacted = redacted[len(redacted)-limit:]
 	}
 	return redacted
+}
+
+// ErrorAttr returns a redacted slog error attribute. Nil errors are represented
+// as an empty string so callers can append the attr unconditionally.
+func ErrorAttr(err error) slog.Attr {
+	if err == nil {
+		return slog.String("error", "")
+	}
+	return slog.String("error", Redact(err.Error()))
+}
+
+// DurationMS returns a duration rounded to whole milliseconds for compact logs.
+func DurationMS(key string, d time.Duration) slog.Attr {
+	return slog.Int64(key, d.Milliseconds())
+}
+
+// ChangedFields returns sorted field names whose before/after values differ.
+func ChangedFields(before, after map[string]string) []string {
+	seen := map[string]bool{}
+	for key := range before {
+		seen[key] = true
+	}
+	for key := range after {
+		seen[key] = true
+	}
+	var changed []string
+	for key := range seen {
+		if before[key] != after[key] {
+			changed = append(changed, key)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// Count returns len(values) while treating nil as zero.
+func Count[T any](values []T) int {
+	return len(values)
 }

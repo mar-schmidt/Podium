@@ -97,8 +97,8 @@ func TestTailAndFollowReopensAfterRotation(t *testing.T) {
 }
 
 func TestRedactTail(t *testing.T) {
-	got := RedactTail(`Authorization: Bearer abc123 token=secret sk-testSECRET`, 200)
-	for _, leaked := range []string{"abc123", "secret", "sk-testSECRET"} {
+	got := RedactTail(`Authorization: Bearer abc123 token=secret api_key=OPENAIKEY sk-proj-1234567890 sk-ant-1234567890 https://api.github.com/repos/a/b/zipball/main?token=SUPERSECRET`, 500)
+	for _, leaked := range []string{"abc123", "secret", "OPENAIKEY", "sk-proj-1234567890", "sk-ant-1234567890", "SUPERSECRET"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("redacted text leaked %q: %s", leaked, got)
 		}
